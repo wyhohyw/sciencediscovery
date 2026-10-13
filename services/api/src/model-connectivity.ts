@@ -27,6 +27,7 @@ const CONNECTIVITY_MAX_TOKENS = 8;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 
 interface ModelConnectivityTestOptions {
+  allowMissingToken?: boolean;
   apiToken?: string;
   profile: ModelProfile;
   resolveProxy: () => ResolvedProxy;
@@ -108,7 +109,7 @@ function connectivityRequest(profile: ModelProfile, apiToken: string): Connectiv
       headers: {
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
-        "x-api-key": apiToken,
+        ...(apiToken ? { "x-api-key": apiToken } : {}),
       },
       url: `${baseUrl}/v1/messages`,
       validate: validAnthropicMessage,
@@ -125,7 +126,7 @@ function connectivityRequest(profile: ModelProfile, apiToken: string): Connectiv
       stream: false,
     }),
     headers: {
-      authorization: `Bearer ${apiToken}`,
+      ...(apiToken ? { authorization: `Bearer ${apiToken}` } : {}),
       "content-type": "application/json",
     },
     url: `${baseUrl}/chat/completions`,
@@ -153,7 +154,7 @@ export async function testModelConnectivity(
 ): Promise<ModelConnectivityTestResult> {
   const startedAt = Date.now();
   const apiToken = options.apiToken?.trim();
-  if (!apiToken) {
+  if (!apiToken && !options.allowMissingToken) {
     return result("missing_token", startedAt, "Save an API key before testing");
   }
 
@@ -164,7 +165,7 @@ export async function testModelConnectivity(
     return result("network", startedAt, "Could not resolve the configured model proxy");
   }
 
-  const probe = connectivityRequest(options.profile, apiToken);
+  const probe = connectivityRequest(options.profile, apiToken ?? "");
   const controller = new AbortController();
   const dispatcher = proxyDispatcher(proxy);
   let timedOut = false;

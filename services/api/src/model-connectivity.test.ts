@@ -98,6 +98,22 @@ test("missing model token fails locally without resolving a proxy or calling a p
   assert.equal(proxyResolved, false);
 });
 
+test("token-optional provider can be probed without an authorization header", async () => {
+  await withProvider(async (request, response) => {
+    assert.equal(request.headers.authorization, undefined);
+    await readRequest(request);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+  }, async (origin) => {
+    const tested = await testModelConnectivity({
+      allowMissingToken: true,
+      profile: profile(`${origin}/v1`),
+      resolveProxy: directProxy,
+    });
+    assert.equal(tested.category, "ok");
+  });
+});
+
 test("provider HTTP failures have stable connectivity categories", async () => {
   const categories = new Map<number, ModelConnectivityTestResult["category"]>([
     [401, "authorization"],

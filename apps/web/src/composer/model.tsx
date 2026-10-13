@@ -76,10 +76,10 @@ export function resolveComposerRunAction(input: ComposerRunActionInput): Compose
 }
 
 export function ComposerNoModelNotice({
-  onOpenModelSettings,
+  onOpenConfiguration,
   reason,
 }: {
-  onOpenModelSettings: () => void;
+  onOpenConfiguration: () => void;
   reason: ComposerNoModelReason;
 }) {
   const { t } = useLocale();
@@ -88,10 +88,10 @@ export function ComposerNoModelNotice({
       {reason === "no-system-models" ? (
         <>
           <span>{t("composer.noModels")}</span>
-          <button onClick={onOpenModelSettings} type="button">{t("composer.openModels")}</button>
+          <button onClick={onOpenConfiguration} type="button">{t("configuration.card.open")}</button>
         </>
       ) : (
-        <span>{t("composer.noTaskModel")}</span>
+        <><span>{t("composer.noTaskModel")}</span><button onClick={onOpenConfiguration} type="button">{t("configuration.card.open")}</button></>
       )}
     </div>
   );

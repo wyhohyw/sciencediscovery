@@ -97,19 +97,20 @@ test("distinguishes missing system models from a missing Session model", () => {
 
 test("renders visible and actionable notices for both missing-model states", () => {
   const noSystemModels = renderToStaticMarkup(createElement(ComposerNoModelNotice, {
-    onOpenModelSettings: () => undefined,
+    onOpenConfiguration: () => undefined,
     reason: "no-system-models",
   }));
   assert.match(noSystemModels, /id="composer-no-model-notice"/);
   assert.match(noSystemModels, /No models are configured\./);
-  assert.match(noSystemModels, /Open Model registry/);
+  assert.match(noSystemModels, /Configure in conversation/);
 
   const noSessionModel = renderToStaticMarkup(createElement(ComposerNoModelNotice, {
-    onOpenModelSettings: () => undefined,
+    onOpenConfiguration: () => undefined,
     reason: "no-session-model",
   }));
   assert.match(noSessionModel, /No Task model is selected\./);
   assert.match(noSessionModel, /Choose one below before running\./);
+  assert.match(noSessionModel, /Configure in conversation/);
 });
 
 test("renders Stop as a non-submit control and Add to queue as the submit control", () => {

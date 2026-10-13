@@ -59,6 +59,8 @@ export interface ModelConnectWizardProps {
   onSuccess?: (model: ModelProfile, provider: ModelProvider) => void;
   presets: readonly ModelProviderPreset[];
   proxySettings?: ProxySettingsDetails;
+  /** Inline configuration binds a Session without changing the global default. */
+  setFirstModelAsGlobalDefault?: boolean;
 }
 
 const CUSTOM_PROTOCOL: ModelApiProtocol = "openai-chat-completions";
@@ -79,6 +81,7 @@ export function ModelConnectWizard({
   onSuccess,
   presets,
   proxySettings,
+  setFirstModelAsGlobalDefault = true,
 }: ModelConnectWizardProps) {
   const { t } = useLocale();
 
@@ -330,15 +333,13 @@ export function ModelConnectWizard({
 
     let createdProviderId: string | undefined;
     const createdModelIds: string[] = [];
-    let initialOverrides: RuntimeSettingsOverrides = {};
+    let initialOverrides: RuntimeSettingsOverrides | undefined;
 
     try {
-      try {
-        if (typeof client.getGlobalSettings === "function") {
-          const currentDetails = await client.getGlobalSettings();
-          initialOverrides = currentDetails.overrides ?? {};
-        }
-      } catch { /* ignore */ }
+      if (setFirstModelAsGlobalDefault && typeof client.getGlobalSettings === "function") {
+        const currentDetails = await client.getGlobalSettings();
+        initialOverrides = currentDetails.overrides ?? {};
+      }
 
       // Whether the system already has models BEFORE this connect decides the
       // default: only the first model ever becomes the global default. When
@@ -356,7 +357,10 @@ export function ModelConnectWizard({
 
       // Register the first model and prove the wire before registering more.
       const requests = await resolveModelPlan(provider.id);
-      const firstProfile = await client.addProviderModel(provider.id, requests[0]!);
+      const firstProfile = await client.addProviderModel(provider.id, {
+        ...requests[0]!,
+        ...(setFirstModelAsGlobalDefault ? {} : { setGlobalDefault: false }),
+      });
       createdModelIds.push(firstProfile.id);
 
       const testOutcome = await client.testModel(firstProfile.id);
@@ -365,7 +369,7 @@ export function ModelConnectWizard({
         // Failed: roll back everything this attempt created.
         // Restore settings first so deleteModel is not blocked by runtime settings.
         try {
-          if (typeof client.replaceGlobalSettings === "function") {
+          if (initialOverrides && typeof client.replaceGlobalSettings === "function") {
             await client.replaceGlobalSettings(initialOverrides);
           }
         } catch { /* ignore */ }
@@ -383,12 +387,15 @@ export function ModelConnectWizard({
 
       // Wire proven: register the rest of the plan.
       for (const request of requests.slice(1)) {
-        const profile = await client.addProviderModel(provider.id, request);
+        const profile = await client.addProviderModel(provider.id, {
+          ...request,
+          ...(setFirstModelAsGlobalDefault ? {} : { setGlobalDefault: false }),
+        });
         createdModelIds.push(profile.id);
       }
 
       // Only the first model ever in the system becomes the global default.
-      if (!hadModels) {
+      if (!hadModels && setFirstModelAsGlobalDefault) {
         if (onDefaultModelSet) {
           await onDefaultModelSet(firstProfile.id);
         } else {
@@ -407,10 +414,10 @@ export function ModelConnectWizard({
       } catch { /* ignore */ }
 
       const count = createdModelIds.length;
-      const defaultChanged = !hadModels;
+      const defaultChanged = !hadModels && setFirstModelAsGlobalDefault;
       const successDesc = defaultChanged
         ? t("wizard.successDesc", { count, model: firstProfile.name })
-        : t("wizard.successDescKeepDefault", { count });
+        : t(setFirstModelAsGlobalDefault ? "wizard.successDescKeepDefault" : "wizard.successDescSession", { count });
 
       setSuccessInfo({
         count,
@@ -426,7 +433,7 @@ export function ModelConnectWizard({
       onSuccess?.(firstProfile, provider);
     } catch (reason) {
       try {
-        if (typeof client.replaceGlobalSettings === "function") {
+        if (initialOverrides && typeof client.replaceGlobalSettings === "function") {
           await client.replaceGlobalSettings(initialOverrides);
         }
       } catch { /* ignore */ }
@@ -473,7 +480,7 @@ export function ModelConnectWizard({
           <SparkleIcon size={18} />
           <h4>{t("wizard.title")}</h4>
         </div>
-        <p className="wizard-header-desc">{t("wizard.desc")}</p>
+        <p className="wizard-header-desc">{t(setFirstModelAsGlobalDefault ? "wizard.desc" : "wizard.descSession")}</p>
       </div>
 
       <div className="wizard-body">
@@ -762,7 +769,7 @@ export function ModelConnectWizard({
               <span>
                 {successInfo.defaultChanged
                   ? t("wizard.successDesc", { count: successInfo.count, model: successInfo.modelName })
-                  : t("wizard.successDescKeepDefault", { count: successInfo.count })}
+                  : t(setFirstModelAsGlobalDefault ? "wizard.successDescKeepDefault" : "wizard.successDescSession", { count: successInfo.count })}
                 {" "}({successInfo.latencyMs} ms)
               </span>
             </div>

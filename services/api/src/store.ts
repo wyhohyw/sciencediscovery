@@ -2522,6 +2522,7 @@ export class SessionStore {
     options: {
       facts?: ModelFactOverrides;
       label?: string;
+      setGlobalDefault?: boolean;
       vision?: boolean;
     } = {},
   ): Promise<ModelProfile> {
@@ -2600,7 +2601,7 @@ export class SessionStore {
       vision: options.vision === true,
     };
     this.catalog.models.push(profile);
-    this.defaultGlobalTaskModel(profile);
+    if (options.setGlobalDefault !== false) this.defaultGlobalTaskModel(profile);
     await this.saveCatalog();
     return profile;
   }

@@ -1937,6 +1937,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const profile = store.getModel(modelId);
         if (!profile) return sendError(response, 404, "Model not found");
         const tested = await modelConnectivityTests.run(modelId, () => testModelConnectivity({
+          allowMissingToken: store.modelAllowsMissingToken(profile),
           apiToken: store.getModelApiToken(modelId),
           profile,
           resolveProxy: () => resolveProxyForUrl(store.resolveProxy(profile.proxyPolicy), profile.baseUrl),
@@ -2077,6 +2078,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         sendJson(response, 201, await store.materializeProviderModel(providerId, modelId, {
           ...(body.facts !== undefined ? { facts: body.facts } : {}),
           ...(label !== undefined ? { label } : {}),
+          ...(body.setGlobalDefault === false ? { setGlobalDefault: false } : {}),
           ...(vision !== undefined ? { vision } : {}),
         }));
         return;

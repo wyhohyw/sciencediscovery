@@ -225,6 +225,7 @@ import { createWebSettingsDraft, WebSettingsEditor, webSettingsRequest, type Web
 import { ProxyPolicySelect, ProxySettingsEditor } from "./ProxySettingsEditor.js";
 import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
+import { ConversationalModelCard } from "./configuration/ConversationalModelCard.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, ideaTreeWeightsValid, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
@@ -1128,6 +1129,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [timelineMessageIds, setTimelineMessageIds] = useState<Readonly<Record<string, string>>>({});
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
+  const [configurationDismissedSessionId, setConfigurationDismissedSessionId] = useState<string>();
+  const [configurationReceipt, setConfigurationReceipt] = useState<{
+    sessionId: string;
+    modelName: string;
+    continuation: "not_requested" | "submitting" | "submitted" | "failed";
+  }>();
+  const pendingConfigurationContinuation = useRef<{ sessionId: string; modelId: string; content: string } | undefined>(undefined);
   const [evolvePickerDismissed, setEvolvePickerDismissed] = useState(false);
   const showEvolveAlgorithmPicker =
     /^\/evolve-design(?:\s|$)/.test(message) && !message.includes("--algorithm") && !evolvePickerDismissed;
@@ -2712,6 +2720,30 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     await updateSessionSettings(changes);
   }
 
+  async function applyConversationalModel(model: ModelProfile): Promise<void> {
+    if (!session || session.archivedAt || !activeSessionId || isRunning) throw new Error(t("error.updateSession"));
+    const sessionId = session.id;
+    const previousModelId = session.modelId;
+    const provider = modelProviders.find((item) => item.id === model.providerId)
+      ?? (await client.listProviders()).providers.find((item) => item.id === model.providerId);
+    if (!model.hasApiToken && !provider?.tokenOptional && (provider?.hasApiToken ?? true)) {
+      throw new Error(t("error.modelTokenRequired", { model: model.name }));
+    }
+    // A second tab may have changed the model while this card was open. Do not
+    // knowingly overwrite its choice or apply to a Session that is no longer
+    // on screen. This slice does not yet provide a server-side revision CAS.
+    const latest = await client.getSession(sessionId);
+    if (activeSessionIdRef.current !== sessionId || latest.archivedAt || latest.modelId !== previousModelId) {
+      throw new Error(t("configuration.card.stale"));
+    }
+    const updated = await client.updateSession(sessionId, { modelId: model.id });
+    const draft = message.trim();
+    if (draft) pendingConfigurationContinuation.current = { sessionId, modelId: model.id, content: draft };
+    setConfigurationReceipt({ sessionId, modelName: model.name, continuation: draft ? "submitting" : "not_requested" });
+    syncSessionSummary(updated);
+    setError(undefined);
+  }
+
   function reconcilePermissionSnapshots(
     sessionId: string | undefined,
     snapshots: readonly PermissionRequest[],
@@ -3385,7 +3417,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       setError(t("error.noTaskModelAssigned"));
       return;
     }
-    if (!selectedModel.hasApiToken) {
+    const selectedProvider = modelProviders.find((provider) => provider.id === selectedModel.providerId);
+    if (!selectedModel.hasApiToken && !selectedProvider?.tokenOptional && (selectedProvider?.hasApiToken ?? true)) {
       setError(t("error.modelTokenRequired", { model: selectedModel.name }));
       return;
     }
@@ -3451,10 +3484,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       }, (streamEvent: RunStreamEvent, sequence?: number) => {
         if (streamEvent.type === "run.queued" || streamEvent.type === "run.status") {
           streamRunId = streamEvent.run.id;
+          setConfigurationReceipt((current) => current?.sessionId === submittedSessionId && current.continuation === "submitting"
+            ? { ...current, continuation: "submitted" } : current);
         }
         if (streamEvent.type === "run.started") {
           runAbortControllers.current.set(submittedSessionId, controller);
           streamRunId = streamEvent.runId;
+          setConfigurationReceipt((current) => current?.sessionId === submittedSessionId && current.continuation === "submitting"
+            ? { ...current, continuation: "submitted" } : current);
         }
         applySessionRunEvent(submittedSessionId, runSessionTitle, streamRunId, streamEvent, sequence);
       }, controller.signal);
@@ -3469,6 +3506,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       }
     } catch (reason) {
       if (!isAbortError(reason) && shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
+        setConfigurationReceipt((current) => current?.sessionId === submittedSessionId && current.continuation === "submitting"
+          ? { ...current, continuation: "failed" } : current);
         setError(reason instanceof Error ? reason : t("error.runFailed"));
         setMessage(savedContent);
         setComposerReferences(savedReferences);
@@ -3858,6 +3897,26 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     ? projects.find((project) => project.id === scopedSettingsSession.projectId)
     : undefined;
   const activeModel = models.find((item) => item.id === session?.modelId);
+  useEffect(() => {
+    const pending = pendingConfigurationContinuation.current;
+    if (!pending) return;
+    if (session?.id !== pending.sessionId) {
+      pendingConfigurationContinuation.current = undefined;
+      setConfigurationReceipt((current) => current?.sessionId === pending.sessionId
+        ? { ...current, continuation: "failed" } : current);
+      return;
+    }
+    if (session.modelId !== pending.modelId || !models.some((model) => model.id === pending.modelId)) return;
+    pendingConfigurationContinuation.current = undefined;
+    if (message.trim() !== pending.content) {
+      setConfigurationReceipt((current) => current?.sessionId === pending.sessionId
+        ? { ...current, continuation: "failed" } : current);
+      return;
+    }
+    // Wait until React has committed the model-bound composer before using its
+    // normal submit path. The draft never becomes a synthetic chat message.
+    requestAnimationFrame(() => composerTextarea.current?.form?.requestSubmit());
+  }, [message, models, session?.id, session?.modelId]);
   const activeThinkingControls = modelThinkingControls(activeModel, modelProviders);
   const requestedThinkingMode = session?.thinkingMode ?? activeModel?.thinkingMode ?? "auto";
   const requestedThinkingEffort = session?.thinkingEffort ?? activeModel?.thinkingEffort ?? "high";
@@ -4444,8 +4503,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                 <h2>{t("empty.title")}</h2>
                 <p>{t("empty.description")}</p>
                 <ol className="empty-steps">
-                  <li><span className="empty-step-icon"><SettingsIcon size={16} /></span><div><strong>{t("empty.configureModel")}</strong><small>{t("empty.configureModelHelp")}</small></div></li>
                   <li><span className="empty-step-icon"><ProjectIcon size={16} /></span><div><strong>{t("empty.createProject")}</strong><small>{t("empty.createProjectHelp")}</small></div></li>
+                  <li><span className="empty-step-icon"><SettingsIcon size={16} /></span><div><strong>{t("empty.configureModel")}</strong><small>{t("empty.configureModelHelp")}</small></div></li>
                   <li><span className="empty-step-icon"><UploadIcon size={16} /></span><div><strong>{t("empty.dropCsv")}</strong><small>{t("empty.dropCsvHelp")}</small></div></li>
                 </ol>
               </div>
@@ -4591,6 +4650,26 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {renderConversationOutputs()}
                   {renderSkillEvolutionCard(latestSkillSourceRun(sessionRuns, session.id))}
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
+                  {composerRunAction.noModelReason && !sessionArchived && !isRunning && configurationDismissedSessionId !== session.id
+                    ? <ConversationalModelCard
+                        key={session.id}
+                        client={client}
+                        models={models}
+                        onApply={applyConversationalModel}
+                        onDismiss={() => setConfigurationDismissedSessionId(session.id)}
+                        onModelsChange={setModels}
+                        onProvidersChange={setModelProviders}
+                        pendingTask={Boolean(message.trim())}
+                        presets={modelProviderPresets}
+                        providers={modelProviders}
+                        proxySettings={proxySettings}
+                      /> : null}
+                  {configurationReceipt?.sessionId === session.id ? <div className="conversation-configuration-receipt" role="status">
+                    <strong>{t("configuration.card.saved")}: {configurationReceipt.modelName}</strong>
+                    <span> · {t(configurationReceipt.continuation === "not_requested" ? "configuration.card.notSubmitted"
+                      : configurationReceipt.continuation === "submitting" ? "configuration.card.submitting"
+                        : configurationReceipt.continuation === "submitted" ? "configuration.card.submitted" : "configuration.card.continuationFailed")}</span>
+                  </div> : null}
                   {!isFollowingOutput ? <div className="follow-output-dock"><button className="follow-output-button" type="button" onClick={scrollToLatest}>{t("app.latestActivity")} <ChevronDownIcon size={15} /></button></div> : null}
                 </div>
                 <form className={isRunning ? "composer composer-compact" : "composer"} onSubmit={(event) => void submitMessage(event)}>
@@ -4611,7 +4690,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     event.currentTarget.form?.requestSubmit();
                   }} placeholder={sessionArchived ? t("composer.restorePlaceholder") : artifacts.length ? t("composer.askPlaceholder") : t("composer.uploadPlaceholder")} rows={1} />
                   {composerRunAction.noModelReason ? <ComposerNoModelNotice
-                    onOpenModelSettings={() => openSystemSettings("models", { wizard: true })}
+                    onOpenConfiguration={() => {
+                      setConfigurationDismissedSessionId(undefined);
+                      requestAnimationFrame(() => document.getElementById("conversation-configuration-card")?.scrollIntoView({ block: "nearest" }));
+                    }}
                     reason={composerRunAction.noModelReason}
                   /> : null}
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">

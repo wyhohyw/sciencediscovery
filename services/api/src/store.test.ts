@@ -3438,6 +3438,19 @@ test("model providers: preset creation, token fallback, sync, and lifecycle", as
   assert.equal(store.getProviderApiToken(provider.id), undefined);
 });
 
+test("conversation-scoped model registration leaves the global task model unset", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `conversation-model-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => rm(tempRoot, { force: true, recursive: true }));
+  const store = new SessionStore(tempRoot);
+  await store.load();
+
+  const provider = await store.createProvider({ apiToken: "local-test-key", presetId: "deepseek" });
+  const model = await store.materializeProviderModel(provider.id, "test-model", { setGlobalDefault: false });
+  assert.equal(store.getGlobalSettings().effective.modelId, undefined);
+  assert.equal(store.getModel(model.id)?.id, model.id);
+});
+
 test("provider models materialize exact Kimi, Responses, and Anthropic capabilities", async (context) => {
   installApiTestModelCatalog();
   const tempRoot = resolve(process.cwd(), ".tmp", `provider-capabilities-${Date.now()}-${process.pid}`);
