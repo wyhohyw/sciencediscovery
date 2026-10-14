@@ -14,7 +14,7 @@ import { useLocale } from "../i18n/index.js";
 export interface ConversationalModelCardProps {
   client: SettingsApiClient;
   models: ModelProfile[];
-  onApply: (model: ModelProfile) => Promise<void>;
+  onApply: (model: ModelProfile, firstModelSetup: boolean) => Promise<void>;
   onDismiss: () => void;
   onModelsChange: (models: ModelProfile[]) => void;
   onProvidersChange: (providers: ModelProvider[]) => void;
@@ -37,6 +37,9 @@ export function ConversationalModelCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [connectedModel, setConnectedModel] = useState<ModelProfile>();
+  // Keep the approved scope stable while the wizard registers the first model.
+  // Its model-list callback can update `models` before the session binding ends.
+  const [firstModelSetup] = useState(() => models.length === 0);
   const selected = models.find((model) => model.id === selectedId) ?? models[0];
 
   async function apply(model: ModelProfile): Promise<void> {
@@ -44,7 +47,7 @@ export function ConversationalModelCard({
     setBusy(true);
     setError(undefined);
     try {
-      await onApply(model);
+      await onApply(model, firstModelSetup);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -52,20 +55,20 @@ export function ConversationalModelCard({
     }
   }
 
-  return <section aria-label={t("configuration.card.title")} className="conversation-configuration-card" id="conversation-configuration-card">
+  return <section aria-label={t(firstModelSetup ? "configuration.card.firstTitle" : "configuration.card.title")} className="conversation-configuration-card" id="conversation-configuration-card">
     <div className="conversation-configuration-heading">
       <div>
         <span className="eyebrow">{t("configuration.card.eyebrow")}</span>
-        <h3>{t("configuration.card.title")}</h3>
+        <h3>{t(firstModelSetup ? "configuration.card.firstTitle" : "configuration.card.title")}</h3>
       </div>
       <span className="conversation-configuration-status">{t("configuration.card.awaiting")}</span>
     </div>
-    <p>{t("configuration.card.reason")}</p>
+    <p>{t(firstModelSetup ? "configuration.card.firstReason" : "configuration.card.reason")}</p>
     <div className="conversation-configuration-impact">
       <span>{t("configuration.card.saveLocation")}</span>
       <strong>{models.length && !showConnectWizard ? t("configuration.card.existingResource") : t("configuration.card.deploymentResource")}</strong>
       <span>{t("configuration.card.useScope")}</span>
-      <strong>{t("configuration.card.sessionScope")}</strong>
+      <strong>{t(firstModelSetup ? "configuration.card.firstScope" : "configuration.card.sessionScope")}</strong>
       <span>{t("configuration.card.continuation")}</span>
       <strong>{pendingTask ? t("configuration.card.continueTask") : t("configuration.card.waitTask")}</strong>
     </div>
@@ -86,12 +89,16 @@ export function ConversationalModelCard({
       <p className="conversation-configuration-guidance">{t("configuration.card.connectGuidance")}</p>
       <ModelConnectWizard
         client={client}
+        onDefaultModelSet={async (modelId) => {
+          const current = await client.getGlobalSettings();
+          await client.replaceGlobalSettings({ ...current.overrides, modelId });
+        }}
         onModelsChange={onModelsChange}
         onProvidersChange={onProvidersChange}
         onSuccess={(model) => { setConnectedModel(model); void apply(model); }}
         presets={presets}
         proxySettings={proxySettings}
-        setFirstModelAsGlobalDefault={false}
+        setFirstModelAsGlobalDefault={firstModelSetup}
       />
       {connectedModel && error ? <button className="secondary-button" disabled={busy} onClick={() => void apply(connectedModel)} type="button">{t("configuration.card.retryBinding")}</button> : null}
       {!models.length ? <button className="conversation-configuration-dismiss" disabled={busy} onClick={onDismiss} type="button">{t("configuration.card.dismiss")}</button> : null}

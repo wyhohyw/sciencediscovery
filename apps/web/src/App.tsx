@@ -1134,6 +1134,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [configurationReceipt, setConfigurationReceipt] = useState<{
     sessionId: string;
     modelName: string;
+    globalDefault: boolean;
     continuation: "not_requested" | "submitting" | "submitted" | "failed";
   }>();
   const pendingConfigurationContinuation = useRef<{ sessionId: string; modelId: string; content: string } | undefined>(undefined);
@@ -2725,7 +2726,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     await updateSessionSettings(changes);
   }
 
-  async function applyConversationalModel(model: ModelProfile): Promise<void> {
+  async function applyConversationalModel(model: ModelProfile, firstModelSetup: boolean): Promise<void> {
     if (!session || session.archivedAt || !activeSessionId || isRunning) throw new Error(t("error.updateSession"));
     const sessionId = session.id;
     const previousModelId = session.modelId;
@@ -2738,14 +2739,18 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     // knowingly overwrite its choice or apply to a Session that is no longer
     // on screen. This slice does not yet provide a server-side revision CAS.
     const latest = await client.getSession(sessionId);
-    if (activeSessionIdRef.current !== sessionId || latest.archivedAt || latest.modelId !== previousModelId) {
+    if (activeSessionIdRef.current !== sessionId || latest.archivedAt
+      || (latest.modelId !== previousModelId && latest.modelId !== model.id)) {
       throw new Error(t("configuration.card.stale"));
     }
-    const updated = await client.updateSession(sessionId, { modelId: model.id });
+    // Connecting the first model can already bind every inheriting session
+    // through the global default. Avoid writing an unnecessary session override.
+    const updated = latest.modelId === model.id ? latest : await client.updateSession(sessionId, { modelId: model.id });
     const draft = message.trim();
     if (draft) pendingConfigurationContinuation.current = { sessionId, modelId: model.id, content: draft };
-    setConfigurationReceipt({ sessionId, modelName: model.name, continuation: draft ? "submitting" : "not_requested" });
+    setConfigurationReceipt({ sessionId, modelName: model.name, globalDefault: firstModelSetup, continuation: draft ? "submitting" : "not_requested" });
     syncSessionSummary(updated);
+    if (firstModelSetup) void client.getGlobalSettings().then(setGlobalSettings).catch(() => undefined);
     setError(undefined);
   }
 
@@ -4675,7 +4680,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         proxySettings={proxySettings}
                       /> : null}
                   {configurationReceipt?.sessionId === session.id ? <div className="conversation-configuration-receipt" role="status">
-                    <strong>{t("configuration.card.saved")}: {configurationReceipt.modelName}</strong>
+                    <strong>{t(configurationReceipt.globalDefault ? "configuration.card.savedGlobal" : "configuration.card.saved")}: {configurationReceipt.modelName}</strong>
                     <span> · {t(configurationReceipt.continuation === "not_requested" ? "configuration.card.notSubmitted"
                       : configurationReceipt.continuation === "submitting" ? "configuration.card.submitting"
                         : configurationReceipt.continuation === "submitted" ? "configuration.card.submitted" : "configuration.card.continuationFailed")}</span>

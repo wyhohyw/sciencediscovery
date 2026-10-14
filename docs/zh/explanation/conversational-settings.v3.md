@@ -1,5 +1,7 @@
 # 对话内按需配置 · 设计 v3
 
+> 首次连接模型的默认值修订见 [设计 v4](conversational-settings.v4.md)。
+
 - 日期：2026-10-14。
 - 基础设计：[v1](conversational-settings.v1.md)；自动触发时机：[v2](conversational-settings.v2.md)。
 - 本版明确区分“自动弹出配置卡”和“用户主动打开配置卡”。

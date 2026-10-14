@@ -1,5 +1,7 @@
 # 对话内配置：首个真实接入切片 v3
 
+> 首个模型默认继承的修正见 [接入切片 v4](conversational-settings-integration.v4.md)。
+
 本版基于 [接入切片 v2](conversational-settings-integration.v2.md) 和 [交互设计 v3](conversational-settings.v3.md)，恢复输入框下方的手动配置入口。实现范围仍仅限缺少任务模型。
 
 ## 当前交互
