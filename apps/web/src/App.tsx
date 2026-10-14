@@ -276,9 +276,9 @@ import {
 
 import {
   buildCreateSessionRequest,
-  ComposerNoModelNotice,
   ComposerRunButton,
   resolveComposerRunAction,
+  shouldShowModelConfigurationCard,
   type ComposerRunAction,
 } from "./composer/model.js";
 import { ModelPicker } from "./composer/ModelPicker.js";
@@ -1129,7 +1129,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [timelineMessageIds, setTimelineMessageIds] = useState<Readonly<Record<string, string>>>({});
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
-  const [configurationDismissedSessionId, setConfigurationDismissedSessionId] = useState<string>();
+  const [configurationRequestedSessionId, setConfigurationRequestedSessionId] = useState<string>();
   const [configurationReceipt, setConfigurationReceipt] = useState<{
     sessionId: string;
     modelName: string;
@@ -1415,6 +1415,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    setConfigurationRequestedSessionId(undefined);
   }, [activeSessionId]);
 
   useEffect(() => {
@@ -3414,7 +3418,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     const submittedSessionId = activeSessionId;
     const selectedModel = models.find((item) => item.id === session.modelId);
     if (!selectedModel) {
-      setError(t("error.noTaskModelAssigned"));
+      setConfigurationRequestedSessionId(submittedSessionId);
+      setError(undefined);
+      requestAnimationFrame(() => document.getElementById("conversation-configuration-card")?.scrollIntoView({ block: "nearest" }));
       return;
     }
     const selectedProvider = modelProviders.find((provider) => provider.id === selectedModel.providerId);
@@ -4650,13 +4656,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {renderConversationOutputs()}
                   {renderSkillEvolutionCard(latestSkillSourceRun(sessionRuns, session.id))}
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
-                  {composerRunAction.noModelReason && !sessionArchived && !isRunning && configurationDismissedSessionId !== session.id
+                  {shouldShowModelConfigurationCard(session.id, configurationRequestedSessionId, composerRunAction.noModelReason, sessionArchived, isRunning)
                     ? <ConversationalModelCard
                         key={session.id}
                         client={client}
                         models={models}
                         onApply={applyConversationalModel}
-                        onDismiss={() => setConfigurationDismissedSessionId(session.id)}
+                        onDismiss={() => setConfigurationRequestedSessionId(undefined)}
                         onModelsChange={setModels}
                         onProvidersChange={setModelProviders}
                         pendingTask={Boolean(message.trim())}
@@ -4686,16 +4692,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
                     if (composerTrigger) return;
                     event.preventDefault();
-                    if (!message.trim() || sessionArchived || !activeModel) return;
+                    if (!message.trim() || sessionArchived) return;
                     event.currentTarget.form?.requestSubmit();
                   }} placeholder={sessionArchived ? t("composer.restorePlaceholder") : artifacts.length ? t("composer.askPlaceholder") : t("composer.uploadPlaceholder")} rows={1} />
-                  {composerRunAction.noModelReason ? <ComposerNoModelNotice
-                    onOpenConfiguration={() => {
-                      setConfigurationDismissedSessionId(undefined);
-                      requestAnimationFrame(() => document.getElementById("conversation-configuration-card")?.scrollIntoView({ block: "nearest" }));
-                    }}
-                    reason={composerRunAction.noModelReason}
-                  /> : null}
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
@@ -5307,7 +5306,6 @@ export {
   buildConversationBlocks,
   clearSessionTimeline,
   collectTimelinePermissionRequestIds,
-  ComposerNoModelNotice,
   ComposerRunButton,
   followSessionTitleRefinement,
   forgetSession,
@@ -5324,6 +5322,7 @@ export {
   recordSessionTimelineEvent,
   requestRunStop,
   resolveComposerRunAction,
+  shouldShowModelConfigurationCard,
   routeRunStreamEvent,
   runsRequiringEventReplay,
   selectSessionReplayRun,
