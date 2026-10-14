@@ -276,6 +276,7 @@ import {
 
 import {
   buildCreateSessionRequest,
+  ComposerNoModelNotice,
   ComposerRunButton,
   resolveComposerRunAction,
   shouldShowModelConfigurationCard,
@@ -4113,6 +4114,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     sessionArchived,
     stoppingSessionIds,
   });
+  const showModelConfigurationCard = shouldShowModelConfigurationCard(
+    session?.id, configurationRequestedSessionId, composerRunAction.noModelReason, sessionArchived, isRunning,
+  );
   const composerTrigger = getComposerTrigger(message, composerTextarea.current?.selectionStart ?? message.length);
   const selectedComposerCommands = selectedSkillAuthoringCommands(message);
   const composerSuggestions: ComposerSuggestion[] = !composerTrigger ? [] : composerTrigger.symbol === "@"
@@ -4656,7 +4660,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {renderConversationOutputs()}
                   {renderSkillEvolutionCard(latestSkillSourceRun(sessionRuns, session.id))}
                   <QueuedRunsPanel cancellingRunIds={cancellingQueuedRunIds} onCancel={(run) => void cancelQueuedRun(run)} runs={queuedRuns} />
-                  {shouldShowModelConfigurationCard(session.id, configurationRequestedSessionId, composerRunAction.noModelReason, sessionArchived, isRunning)
+                  {showModelConfigurationCard
                     ? <ConversationalModelCard
                         key={session.id}
                         client={client}
@@ -4695,6 +4699,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     if (!message.trim() || sessionArchived) return;
                     event.currentTarget.form?.requestSubmit();
                   }} placeholder={sessionArchived ? t("composer.restorePlaceholder") : artifacts.length ? t("composer.askPlaceholder") : t("composer.uploadPlaceholder")} rows={1} />
+                  {composerRunAction.noModelReason && !showModelConfigurationCard ? <ComposerNoModelNotice
+                    onOpenConfiguration={() => {
+                      setConfigurationRequestedSessionId(session.id);
+                      requestAnimationFrame(() => document.getElementById("conversation-configuration-card")?.scrollIntoView({ block: "nearest" }));
+                    }}
+                    reason={composerRunAction.noModelReason}
+                  /> : null}
                   {activeThinkingControls.legacyBudget ? <div className="composer-thinking-notice" role="note">
                     {t("composer.thinkingLegacyNotice")}
                   </div> : null}
@@ -5306,6 +5317,7 @@ export {
   buildConversationBlocks,
   clearSessionTimeline,
   collectTimelinePermissionRequestIds,
+  ComposerNoModelNotice,
   ComposerRunButton,
   followSessionTitleRefinement,
   forgetSession,

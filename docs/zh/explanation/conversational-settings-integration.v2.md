@@ -1,5 +1,7 @@
 # 对话内配置：首个真实接入切片 v2
 
+> 手动入口恢复后的当前实现见 [接入切片 v3](conversational-settings-integration.v3.md)。
+
 本版基于 [接入切片 v1](conversational-settings-integration.v1.md) 和 [交互设计 v2](conversational-settings.v2.md)，修正无模型时配置卡过早出现的问题。接入范围仍限于缺少当前会话任务模型的情形。
 
 ## 已接入的流程

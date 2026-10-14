@@ -21,7 +21,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { SessionRun } from "@sciencediscovery/schema";
 
-import { ComposerRunButton, QueuedRunsPanel, queuedCancelToast, resolveComposerRunAction, shouldShowModelConfigurationCard } from "../src/App.js";
+import { ComposerNoModelNotice, ComposerRunButton, QueuedRunsPanel, queuedCancelToast, resolveComposerRunAction, shouldShowModelConfigurationCard } from "../src/App.js";
 
 const baseInput = {
   activeSessionId: "session-b",
@@ -104,6 +104,17 @@ test("the configuration card appears only after a draft is submitted for this Se
   assert.equal(shouldShowModelConfigurationCard("session-b", "session-b", null, false, false), false);
   assert.equal(shouldShowModelConfigurationCard("session-b", "session-b", "no-session-model", true, false), false);
   assert.equal(shouldShowModelConfigurationCard("session-b", "session-b", "no-session-model", false, true), false);
+});
+
+test("a missing-model notice keeps the manual configuration entry available", () => {
+  for (const reason of ["no-session-model", "no-system-models"] as const) {
+    const notice = renderToStaticMarkup(createElement(ComposerNoModelNotice, {
+      onOpenConfiguration: () => undefined,
+      reason,
+    }));
+    assert.match(notice, /Configure in conversation<\/button>/);
+    assert.match(notice, /Ask a question or configure one here\./);
+  }
 });
 
 test("renders Stop as a non-submit control and Add to queue as the submit control", () => {

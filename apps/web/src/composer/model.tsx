@@ -50,6 +50,20 @@ export interface ComposerRunAction {
   stopVisible: boolean;
 }
 
+export function ComposerNoModelNotice({
+  onOpenConfiguration,
+  reason,
+}: {
+  onOpenConfiguration: () => void;
+  reason: ComposerNoModelReason;
+}) {
+  const { t } = useLocale();
+  return <div className="composer-model-notice" role="status">
+    <span>{t(reason === "no-system-models" ? "composer.noModels" : "composer.noTaskModel")}</span>
+    <button onClick={onOpenConfiguration} type="button">{t("configuration.card.open")}</button>
+  </div>;
+}
+
 export function shouldShowModelConfigurationCard(
   sessionId: string | undefined,
   requestedSessionId: string | undefined,

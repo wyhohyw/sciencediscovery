@@ -1,5 +1,7 @@
 # 对话内按需配置 · 设计 v2
 
+> 手动配置入口的交互修订见 [设计 v3](conversational-settings.v3.md)。
+
 - 日期：2026-10-14。
 - 基础设计：[v1](conversational-settings.v1.md)。本版仅修订无模型首次启动时的触发时机；其他安全、作用范围与接续约束沿用 v1。
 - 对应实现：[首个接入切片 v2](conversational-settings-integration.v2.md)。
