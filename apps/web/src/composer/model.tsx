@@ -77,7 +77,7 @@ export function resolveComposerRunAction(input: ComposerRunActionInput): Compose
   return {
     noModelReason,
     runDisabled: !sessionId || !input.message.trim() || input.sessionArchived,
-    runLabel: agentRunActive ? "Add to queue" : noModelReason ? "Configure and continue" : "Run analysis",
+    runLabel: agentRunActive ? "Add to queue" : noModelReason && input.message.trim() ? "Configure and continue" : "Run analysis",
     stopDisabled: Boolean(sessionId && input.stoppingSessionIds.has(sessionId)),
     stopVisible,
   };

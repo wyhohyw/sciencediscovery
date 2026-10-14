@@ -79,6 +79,7 @@ test("a Stop already in flight disables only the Stop action", () => {
 
 test("a draft can request configuration when its Session has no model", () => {
   assert.equal(resolveComposerRunAction({ ...baseInput, message: "  " }).runDisabled, true);
+  assert.equal(resolveComposerRunAction({ ...baseInput, hasModel: false, message: "  " }).runLabel, "Run analysis");
   assert.equal(resolveComposerRunAction({ ...baseInput, hasModel: false }).runDisabled, false);
   assert.equal(resolveComposerRunAction({ ...baseInput, hasModel: false }).runLabel, "Configure and continue");
   assert.equal(resolveComposerRunAction({ ...baseInput, sessionArchived: true }).runDisabled, true);
