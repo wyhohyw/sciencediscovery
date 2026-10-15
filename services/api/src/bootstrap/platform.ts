@@ -526,7 +526,8 @@ export async function initializePlatformServices(
     for (const session of store.listSessions(project.id, "all")) {
       if (session.archivedAt) continue;
       for (const request of store.listConnectorConfigurationRequests(session.id)) {
-        if (request.state !== "applied" || request.runId.startsWith("user-request:")) continue;
+        if ((request.state !== "applied" && request.state !== "dismissed")
+          || request.runId.startsWith("user-request:")) continue;
         await ensureConnectorContinuation(store, session.id, request.id).catch((error) => {
           apiLog.warn("configuration_continuation_recovery_failed", {
             requestId: request.id, sessionId: session.id, errorMessage: shortErrorMessage(error),

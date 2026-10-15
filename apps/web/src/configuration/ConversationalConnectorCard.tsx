@@ -58,7 +58,7 @@ export function ConversationalConnectorCard({ request, runActive, onDecision }: 
         : t("configuration.connector.autoDue")}</p> : null}
     {request.state === "awaiting_confirmation" ? <div className="conversation-configuration-actions">
       <button className="primary-button" disabled={busy || runActive} onClick={() => void decide("apply")} type="button">{busy ? t("configuration.card.applying") : t("configuration.connector.confirm")}</button>
-      <button className="secondary-button" disabled={busy} onClick={() => void decide("dismiss")} type="button">{t("configuration.card.dismiss")}</button>
+      <button className="secondary-button" disabled={busy || runActive} onClick={() => void decide("dismiss")} type="button">{t("configuration.card.dismiss")}</button>
     </div> : null}
     {runActive && request.state === "awaiting_confirmation" ? <p>{t("configuration.connector.waitRun")}</p> : null}
     {error ? <p className="conversation-configuration-error" role="alert">{error}</p> : null}

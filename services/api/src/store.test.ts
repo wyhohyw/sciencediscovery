@@ -120,6 +120,55 @@ test("CFG connector confirmation creates one durable continuation of the source 
   assert.equal((await reopened.listSessionRuns(session.id)).length, 2);
 });
 
+test("CFG checkpoint resumes the same run after approval, including after restart", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `connector-pause-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Configuration pause");
+  const session = await store.createSession(project.id, "Task", {}, {}, { allowUnconfiguredModel: true });
+  const run = await store.createSessionRun({ sessionId: session.id, prompt: "Search PubMed", settingsSnapshot: store.resolveRuntimeSettings(session.id).effective });
+  const request = store.proposeConnectorConfiguration({ sessionId: session.id, runId: run.id,
+    connectorId: "pubmed", connectorName: "PubMed", reason: "CONNECTOR_REQUIRED_FOR_TASK" });
+  await store.updateSessionRun(session.id, run.id, { status: "blocked", configurationWait: true, configurationCheckpoint: {
+    requestId: request.id, history: [{ role: "user", content: "Search PubMed" },
+      { role: "tool", name: "propose_connector_enable", content: "pending" }],
+    stopGeneration: store.notifications.generation(session.id), committedAt: new Date().toISOString(),
+  } });
+  await store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply" });
+  const reopened = new SessionStore(root); await reopened.load();
+  const first = await reopened.ensureConnectorContinuationRun({ sessionId: session.id, requestId: request.id });
+  const repeated = await reopened.ensureConnectorContinuationRun({ sessionId: session.id, requestId: request.id });
+  assert.equal(first?.id, run.id);
+  assert.equal(repeated?.id, run.id);
+  assert.equal(first?.status, "queued");
+  assert.equal(first?.configurationWait, false);
+  assert.equal(first?.configurationResume?.decision, "apply");
+  assert.equal(first?.settingsSnapshot.enabledConnectorIds.includes("pubmed"), true);
+  assert.equal((await reopened.listSessionRuns(session.id)).length, 1);
+  assert.equal((await reopened.readMessages(session.id)).filter((message) => message.kind === "configuration_notice").length, 1);
+});
+
+test("CFG refusal resumes the paused run without enabling its connector", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `connector-refusal-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Configuration refusal");
+  const session = await store.createSession(project.id, "Task", {}, {}, { allowUnconfiguredModel: true });
+  const run = await store.createSessionRun({ sessionId: session.id, prompt: "Search PubMed", settingsSnapshot: store.resolveRuntimeSettings(session.id).effective });
+  const request = store.proposeConnectorConfiguration({ sessionId: session.id, runId: run.id,
+    connectorId: "pubmed", connectorName: "PubMed", reason: "CONNECTOR_REQUIRED_FOR_TASK" });
+  await store.updateSessionRun(session.id, run.id, { status: "blocked", configurationWait: true, configurationCheckpoint: {
+    requestId: request.id, history: [{ role: "user", content: "Search PubMed" }],
+    stopGeneration: store.notifications.generation(session.id), committedAt: new Date().toISOString(),
+  } });
+  await store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "dismiss" });
+  const resumed = await store.ensureConnectorContinuationRun({ sessionId: session.id, requestId: request.id });
+  assert.equal(resumed?.id, run.id);
+  assert.equal(resumed?.configurationResume?.decision, "dismiss");
+  assert.equal(resumed?.settingsSnapshot.enabledConnectorIds.includes("pubmed"), false);
+  assert.equal((await store.listSessionRuns(session.id)).length, 1);
+});
+
 test("CFG automatic application needs separate opt-in and a reviewed connector", async (context) => {
   const root = resolve(process.cwd(), ".tmp", `connector-auto-policy-${randomUUID()}`);
   context.after(() => rm(root, { recursive: true, force: true }));

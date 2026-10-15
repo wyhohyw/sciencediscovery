@@ -34,6 +34,22 @@ test("CFG applied connector leaves one receipt after the continuation notice is 
   assert.equal(after.continuationByNoticeId.get(notice.id)?.connectorName, "PubMed");
 });
 
+test("CFG same-run resume anchors one receipt to its deterministic notice", () => {
+  const resumed: SessionRun = {
+    ...continuation,
+    id: "run-1",
+    queueOrder: 1,
+    createdAt: "2026-10-15T00:00:00.000Z",
+    userMessageId: "original-question",
+    configurationContinuation: undefined,
+    configurationResume: { requestId: "request-1", decision: "apply", connectorName: "PubMed" },
+    configurationNoticeMessageId: notice.id,
+  };
+  const presentation = connectorConfigurationPresentation([request], [resumed], [notice], "session-1");
+  assert.deepEqual(presentation.visibleRequests, []);
+  assert.equal(presentation.continuationByNoticeId.get(notice.id)?.sourceRunId, resumed.id);
+});
+
 test("CFG standalone connector setup keeps a compact receipt without a continuation", () => {
   const standalone = { ...request, runId: "user-request:1", continuationRunId: undefined };
   assert.deepEqual(connectorConfigurationPresentation([standalone], [], [], "session-1").visibleRequests, [standalone]);

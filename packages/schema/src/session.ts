@@ -373,6 +373,19 @@ export interface SessionRun {
   automaticWake?: boolean;
   /** Server-created continuation after a conversational configuration request. */
   configurationContinuation?: { requestId: string; sourceRunId: string; connectorName: string };
+  /** Durable model/tool boundary for resuming this same run after a configuration decision. */
+  configurationCheckpoint?: {
+    requestId: string;
+    /** Legacy inline checkpoint. New checkpoints use the immutable CAS record. */
+    history?: Array<Record<string, unknown>>;
+    historyRef?: { pool: "agent-state"; digest: `sha256:${string}`; size: number; mediaType: string };
+    stopGeneration: number;
+    committedAt: string;
+  };
+  /** True only while this run is durably parked for its configuration decision. */
+  configurationWait?: boolean;
+  configurationResume?: { requestId: string; decision: "apply" | "dismiss"; connectorName: string };
+  configurationNoticeMessageId?: string;
   annotationIds: string[];
   assistantMessageId?: string;
   createdAt: string;

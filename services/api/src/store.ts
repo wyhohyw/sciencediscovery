@@ -2255,10 +2255,11 @@ export class SessionStore {
       .run(JSON.stringify(request), request.id);
   }
 
-  invalidateConnectorConfigurationRequestsForStop(sessionId: string): void {
+  invalidateConnectorConfigurationRequestsForStop(sessionId: string, runId?: string): void {
     if (!this.database || !this.getSession(sessionId)) return;
     for (const request of this.listConnectorConfigurationRequests(sessionId)) {
       if (request.state !== "awaiting_confirmation" || request.runId.startsWith("user-request:")) continue;
+      if (runId && request.runId !== runId) continue;
       request.state = "stale";
       delete request.autoApplyAt;
       request.updatedAt = new Date().toISOString();
@@ -2318,9 +2319,11 @@ export class SessionStore {
       if (!row) throw new Error("Connector configuration request not found");
       const proposal = JSON.parse(row.record_json) as ConnectorConfigurationRequest;
       if (proposal.state !== "awaiting_confirmation") return proposal;
-      if (input.decision === "apply" && !proposal.runId.startsWith("user-request:")) {
+      if (!proposal.runId.startsWith("user-request:")) {
         const source = await this.getSessionRun(session.id, proposal.runId);
-        if (!source || !["completed", "interrupted"].includes(source.status) || !this.notifications.canWake(session.id)
+        if (!source || (!(["completed", "interrupted"].includes(source.status))
+          && !(source.status === "blocked" && source.configurationWait && source.configurationCheckpoint?.requestId === proposal.id))
+          || !this.notifications.canWake(session.id)
           || (proposal.stopGeneration !== undefined && proposal.stopGeneration !== this.notifications.generation(session.id))) {
           throw new SessionStoreHttpError("The source task was stopped or is not ready for configuration", 409);
         }
@@ -2377,14 +2380,53 @@ export class SessionStore {
   }): Promise<SessionRun | undefined> {
     this.assertSessionWritable(input.sessionId);
     const proposal = this.getConnectorConfigurationRequest(input.sessionId, input.requestId);
-    if (!proposal || proposal.state !== "applied" || proposal.runId.startsWith("user-request:")) return undefined;
+    if (!proposal || (proposal.state !== "applied" && proposal.state !== "dismissed")
+      || proposal.runId.startsWith("user-request:")) return undefined;
     if (!this.notifications.canWake(input.sessionId)
       || (proposal.stopGeneration !== undefined && proposal.stopGeneration !== this.notifications.generation(input.sessionId))) {
       throw new Error("Session was stopped before task continuation");
     }
-    if (!this.getSessionSettings(input.sessionId).effective.enabledConnectorIds.includes(proposal.connectorId)) {
+    if (proposal.state === "applied" && !this.getSessionSettings(input.sessionId).effective.enabledConnectorIds.includes(proposal.connectorId)) {
       throw new Error("Approved connector is no longer enabled");
     }
+    const paused = await this.getSessionRun(input.sessionId, proposal.runId);
+    if (paused?.configurationCheckpoint?.requestId === proposal.id) {
+      const resumed = await this.mutateArray<SessionRun, SessionRun>(this.sessionRunsPath(input.sessionId), (runs) => {
+        const source = runs.find((candidate) => candidate.id === proposal.runId);
+        if (!source || source.configurationCheckpoint?.requestId !== proposal.id) throw new Error("Configuration checkpoint is unavailable");
+        if (source.status !== "blocked" || !source.configurationWait) return structuredClone(source);
+        if (source.configurationCheckpoint.stopGeneration !== this.notifications.generation(input.sessionId)) {
+          throw new Error("Session was stopped before task continuation");
+        }
+        source.status = "queued";
+        source.configurationWait = false;
+        source.configurationResume = { requestId: proposal.id,
+          decision: proposal.state === "applied" ? "apply" : "dismiss", connectorName: proposal.connectorName };
+        if (proposal.state === "applied") source.settingsSnapshot.enabledConnectorIds =
+          [...new Set([...source.settingsSnapshot.enabledConnectorIds, proposal.connectorId])];
+        return structuredClone(source);
+      });
+      if (proposal.continuationRunId !== resumed.id && this.database) {
+        proposal.continuationRunId = resumed.id;
+        proposal.updatedAt = new Date().toISOString();
+        this.database.prepare("UPDATE connector_configuration_requests SET record_json = ? WHERE id = ?")
+          .run(JSON.stringify(proposal), proposal.id);
+      }
+      const noticeId = `configuration:${proposal.id}`;
+      await this.mutateArray<ChatMessage, ChatMessage>(this.messagesPath(input.sessionId), (messages) => {
+        const existing = messages.find((message) => message.id === noticeId);
+        if (existing) return structuredClone(existing);
+        const notice: ChatMessage = {
+          id: noticeId, role: "user", kind: "configuration_notice", content: "",
+          createdAt: proposal.updatedAt,
+        };
+        messages.push(notice);
+        return structuredClone(notice);
+      });
+      return resumed.configurationNoticeMessageId === noticeId ? resumed
+        : this.updateSessionRun(input.sessionId, resumed.id, { configurationNoticeMessageId: noticeId });
+    }
+    if (proposal.state !== "applied") return undefined;
     const continuationId = `configuration-${proposal.id}`;
     const run = await this.mutateArray<SessionRun, SessionRun>(this.sessionRunsPath(input.sessionId), (runs) => {
       const existing = runs.find((candidate) => candidate.id === continuationId);

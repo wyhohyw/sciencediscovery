@@ -1,6 +1,6 @@
 # 对话内按需配置 · 持久暂停恢复开发规格 v3
 
-本版实现[产品设计 v10](conversational-settings.v10.md)，替代[开发规格 v2](conversational-settings-development.v2.md)中“源 run 进入 `interrupted`，再创建关联 run”的接续方式。v1 的配置安全边界、v2 的独立自动应用授权与 30 秒服务端倒计时仍有效。**当前代码仍采用 v2 的关联 run；本文件是待实现规格，不代表已经交付。**
+本版实现[产品设计 v10](conversational-settings.v10.md)，替代[开发规格 v2](conversational-settings-development.v2.md)中“源 run 进入 `interrupted`，再创建关联 run”的接续方式。v1 的配置安全边界、v2 的独立自动应用授权与 30 秒服务端倒计时仍有效。原生 Agent 执行器已采用同一 run 的持久暂停恢复；实现范围与未完成的通用保障见[集成切片 v8](conversational-settings-integration.v8.md)。
 
 ## 状态与持久记录
 

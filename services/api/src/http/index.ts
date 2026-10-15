@@ -275,6 +275,7 @@ import {
   publishApprovalModeChange,
   scheduleSessionRuns,
   sessionHasActiveRun,
+  sessionHasActiveRunExceptConfigurationWait,
   streamAgentRun,
   streamStoredRunEvents,
 } from "../runs/index.js";
@@ -1283,7 +1284,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const legacyCancelRunMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/run\/cancel$/);
       if (legacyCancelRunMatch && request.method === "POST") {
-        await cancelCurrentSessionRun(response, store, decodeURIComponent(legacyCancelRunMatch[1]!), true);
+        const sessionId = decodeURIComponent(legacyCancelRunMatch[1]!);
+        await cancelCurrentSessionRun(response, store, sessionId, true);
+        scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+          artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+          ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+          config, memoryGraphClient, evolveRuntimeFactory);
         return;
       }
       const teardownKernelMatch = url.pathname.match(/^\/api\/runtime-status\/kernels\/([^/]+)\/teardown$/);
@@ -2391,7 +2397,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       const connectorConfigurationListMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration-requests$/);
       if (connectorConfigurationListMatch && request.method === "GET") {
-        sendJson(response, 200, { items: store.listConnectorConfigurationRequests(connectorConfigurationListMatch[1]!) });
+        const sessionId = connectorConfigurationListMatch[1]!;
+        const proposals = store.listConnectorConfigurationRequests(sessionId);
+        const items = (await Promise.all(proposals.map(async (proposal) => {
+          if (proposal.state !== "awaiting_confirmation" || proposal.runId.startsWith("user-request:")) return proposal;
+          const source = await store.getSessionRun(sessionId, proposal.runId);
+          const ready = (source?.status === "blocked" && source.configurationWait && source.configurationCheckpoint?.requestId === proposal.id)
+            || source?.status === "interrupted" || source?.status === "completed";
+          return ready ? proposal : undefined;
+        }))).filter((proposal): proposal is (typeof proposals)[number] => Boolean(proposal));
+        sendJson(response, 200, { items });
         return;
       }
       const connectorConfigurationDecisionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration-requests\/([^/]+)\/decision$/);
@@ -2400,8 +2415,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (body.decision !== "apply" && body.decision !== "dismiss") return sendError(response, 400, "Invalid configuration decision");
         const sessionId = connectorConfigurationDecisionMatch[1]!;
         const existingRequest = store.getConnectorConfigurationRequest(sessionId, connectorConfigurationDecisionMatch[2]!);
-        if (body.decision === "apply" && existingRequest?.state === "awaiting_confirmation"
-          && await sessionHasActiveRun(store, sessionId)) {
+        if (existingRequest?.state === "awaiting_confirmation"
+          && await sessionHasActiveRunExceptConfigurationWait(store, sessionId, existingRequest.id)) {
           return sendError(response, 409, "Wait for the current run to finish before applying configuration");
         }
         const decided = await store.decideConnectorConfiguration({
@@ -2417,7 +2432,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             }
           },
         });
-        if (decided.state === "applied" && !decided.runId.startsWith("user-request:")) {
+        if ((decided.state === "applied" || decided.state === "dismissed") && !decided.runId.startsWith("user-request:")) {
           const continuation = await ensureConnectorContinuation(store, sessionId, decided.id);
           if (continuation?.status === "queued") scheduleSessionRuns(
             store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
@@ -3045,9 +3060,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const runId = sessionRunCancelMatch[2]!;
         if (runId === "current") {
           await cancelCurrentSessionRun(response, store, sessionId);
+          scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+            artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+            ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+            config, memoryGraphClient, evolveRuntimeFactory);
           return;
         }
         await cancelSessionRun(response, store, sessionId, runId);
+        scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+          artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+          ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+          config, memoryGraphClient, evolveRuntimeFactory);
         return;
       }
 
@@ -3593,7 +3616,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
 
       const cancelRunMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/current\/cancel$/);
       if (cancelRunMatch && request.method === "POST") {
-        await cancelCurrentSessionRun(response, store, cancelRunMatch[1]!);
+        const sessionId = cancelRunMatch[1]!;
+        await cancelCurrentSessionRun(response, store, sessionId);
+        scheduleSessionRuns(store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+          artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+          ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+          config, memoryGraphClient, evolveRuntimeFactory);
         return;
       }
 
@@ -3736,7 +3764,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           for (const pending of store.listConnectorConfigurationRequests(session.id)) {
             if (pending.state !== "awaiting_confirmation" || !pending.autoApplyAt
               || Date.parse(pending.autoApplyAt) > Date.now() || !session.autoApplyLowRiskConfiguration) continue;
-            if (await sessionHasActiveRun(store, session.id)) continue;
+            if (await sessionHasActiveRunExceptConfigurationWait(store, session.id, pending.id)) continue;
             try {
               const decided = await store.decideConnectorConfiguration({
                 sessionId: session.id, requestId: pending.id, decision: "apply", source: "auto",

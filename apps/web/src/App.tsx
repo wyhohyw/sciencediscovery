@@ -3289,7 +3289,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     if (streamEvent.type === "session.updated") {
       syncSessionSummary(streamEvent.session);
     }
-    if (streamEvent.type === "tool.completed" && streamEvent.trace.name === "propose_connector_enable") {
+    if ((streamEvent.type === "tool.completed" && streamEvent.trace.name === "propose_connector_enable")
+      || (streamEvent.type === "run.status" && (streamEvent.status === "blocked" || streamEvent.status === "interrupted"))) {
       void client.listConnectorConfigurationRequests(sessionId).then(({ items }) => {
         if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) setConnectorConfigurationRequests(items);
       }).catch(() => undefined);
@@ -4772,7 +4773,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {visibleConnectorConfigurationRequests.map((connectorConfigurationRequest) => <ConversationalConnectorCard
                     key={connectorConfigurationRequest.id}
                     request={connectorConfigurationRequest}
-                    runActive={isRunning || sessionRuns.some((run) => run.id === connectorConfigurationRequest.runId && isActiveRunStatus(run.status))}
+                    runActive={sessionRuns.some((run) => run.id === connectorConfigurationRequest.runId
+                      && run.status !== "blocked" && isActiveRunStatus(run.status))}
                     onDecision={(decision) => decideConversationalConnector(connectorConfigurationRequest, decision)} />)}
                   {configurationReceipt?.sessionId === session.id ? <div className="conversation-configuration-receipt" role="status">
                     <strong>{t(configurationReceipt.globalDefault ? "configuration.card.savedGlobal" : "configuration.card.saved")}: {configurationReceipt.modelName}</strong>

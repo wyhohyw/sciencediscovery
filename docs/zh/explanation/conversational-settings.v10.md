@@ -1,6 +1,6 @@
 # 对话内按需配置 · 原任务暂停与恢复 v10
 
-本版修订[无人值守接续设计 v7](conversational-settings.v7.md)的“关联后续运行”要求，并延续[可展开回执 v9](conversational-settings.v9.md)的展示规则。v7 的实现能自动继续目标，但会先结束原 run、写出一条助手回复，再启动另一个 run；用户看到的是对话被打断。以下是新的目标行为，**尚未由现有实现满足**。
+本版修订[无人值守接续设计 v7](conversational-settings.v7.md)的“关联后续运行”要求，并延续[可展开回执 v9](conversational-settings.v9.md)的展示规则。v7 的实现能自动继续目标，但会先结束原 run、写出一条助手回复，再启动另一个 run；用户看到的是对话被打断。原 run 暂停恢复已在原生 Agent 执行器中实现，交付范围与剩余限制见[集成切片 v8](conversational-settings-integration.v8.md)。
 
 ## 用户可见行为
 

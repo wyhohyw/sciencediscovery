@@ -10,9 +10,16 @@ export function connectorConfigurationPresentation(
   messages: readonly ChatMessage[],
   sessionId: string | undefined,
 ) {
-  const continuationByNoticeId = new Map(runs
-    .filter((run) => run.userMessageId && run.configurationContinuation)
-    .map((run) => [run.userMessageId!, run.configurationContinuation!]));
+  const continuationByNoticeId = new Map([
+    ...runs.filter((run) => run.userMessageId && run.configurationContinuation)
+      .map((run) => [run.userMessageId!, run.configurationContinuation!] as const),
+    ...runs.filter((run) => run.configurationNoticeMessageId && run.configurationResume)
+      .map((run) => [run.configurationNoticeMessageId!, {
+        requestId: run.configurationResume!.requestId,
+        sourceRunId: run.id,
+        connectorName: run.configurationResume!.connectorName,
+      }] as const),
+  ]);
   const acknowledgedRequestIds = new Set(messages
     .filter((message) => message.kind === "configuration_notice")
     .map((message) => continuationByNoticeId.get(message.id)?.requestId)

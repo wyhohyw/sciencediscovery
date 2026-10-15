@@ -12,13 +12,15 @@ export function ConversationalConnectorReceipt({ request, connectorName }: {
 }) {
   const { t } = useLocale();
   const name = request?.connectorName ?? connectorName;
-  const stale = request?.state === "stale";
+  const stale = request?.state === "stale" || request?.state === "dismissed";
+  const summaryKey = request?.state === "dismissed" ? "configuration.connector.dismissedSummary"
+    : stale ? "configuration.connector.staleSummary" : "configuration.connector.appliedSummary";
   const label = name
-    ? t(stale ? "configuration.connector.staleSummary" : "configuration.connector.appliedSummary", { name })
+    ? t(summaryKey, { name })
     : t("configuration.connector.resuming");
   return <ProcessRecord className="conversation-configuration-record" label={label}>
     <section aria-label={t("configuration.connector.title")} className="conversation-configuration-record-details">
-      {stale ? <p>{t("configuration.connector.staleDetail")}</p> : <>
+      {stale ? <p>{t(request?.state === "dismissed" ? "configuration.connector.dismissedDetail" : "configuration.connector.staleDetail")}</p> : <>
         <div className="conversation-configuration-impact">
           <span>{t("configuration.connector.change")}</span>
           <strong>{name ? t("configuration.connector.enable", { name }) : t("configuration.connector.resuming")}</strong>

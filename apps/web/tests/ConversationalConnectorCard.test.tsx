@@ -68,7 +68,7 @@ test("CFG low-risk connector card shows the cancel window and automatic task con
   const disclosure = renderer!.root.findByType("details");
   assert.equal(disclosure.props.open, false);
   assert.equal(renderer!.root.findAllByType("button").length, 0);
-  assert.match(applied, /A linked run was created; follow its progress below/);
+  assert.match(applied, /The paused task is resuming/);
   await act(async () => {
     const target = { open: true };
     disclosure.props.onToggle({ target, currentTarget: target });
@@ -79,5 +79,20 @@ test("CFG low-risk connector card shows the cancel window and automatic task con
     renderer!.root.findByType("details").props.onToggle({ target, currentTarget: target });
   });
   assert.equal(renderer!.root.findByType("details").props.open, false);
+  await act(async () => { renderer!.unmount(); });
+});
+
+test("CFG actions stay disabled until the source tool batch reaches its checkpoint", async () => {
+  const request: ConnectorConfigurationRequest = {
+    id: "request-running", sessionId: "session-1", projectId: "project-1", runId: "run-1",
+    connectorId: "pubmed", connectorName: "PubMed", reason: "CONNECTOR_REQUIRED_FOR_TASK",
+    baselineConnectorIds: [], state: "awaiting_confirmation",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: "en" },
+    createElement(ConversationalConnectorCard, { request, runActive: true, onDecision: async () => undefined }))); });
+  assert.equal(renderer!.root.findByProps({ className: "primary-button" }).props.disabled, true);
+  assert.equal(renderer!.root.findByProps({ className: "secondary-button" }).props.disabled, true);
   await act(async () => { renderer!.unmount(); });
 });
