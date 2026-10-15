@@ -14,6 +14,8 @@
 
 import { materializeArtifact } from "../artifacts/materialize.js";
 import { randomUUID } from "node:crypto";
+import { Type } from "typebox";
+import type { AgentTool } from "@sciencediscovery/tools";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
@@ -720,7 +722,33 @@ async function executeAgentRun(
         sessionId,
       }, ideaTreeExecutor)
     : [];
-  const leadExtraTools = [...ideaTreeTools, ...authorityTools];
+  const configurableConnectors = mcpRegistry.listManifests()
+    .filter((manifest) => mcpCatalog.getStatus(manifest.id).status === "ready"
+      && !settingsSnapshot.enabledConnectorIds.includes(manifest.id)
+      && filterEnabledMcpSources([manifest.id], settingsSnapshot.plugins).includes(manifest.id))
+    .map((manifest) => ({ id: manifest.id, name: mcpConnectorManifest(manifest).displayName ?? manifest.id }));
+  const connectorProposalParameters = Type.Object({
+    connectorId: Type.String({ minLength: 1, maxLength: 100 }),
+  });
+  const proposeConnectorTool: AgentTool<typeof connectorProposalParameters> = {
+    name: "propose_connector_enable",
+    label: "Request connector configuration",
+    description: `If the user task needs an installed connector that is not enabled, request user confirmation before using it. Available connectors: ${configurableConnectors.map((item) => `${item.id} (${item.name})`).join(", ")}. Call this before taking actions that depend on the connector. This tool only proposes a change; it cannot approve it. After calling, stop and tell the user to confirm in the configuration card.`,
+    parameters: connectorProposalParameters,
+    execute: async (_toolCallId, params) => {
+      const connector = configurableConnectors.find((item) => item.id === params.connectorId);
+      if (!connector || mcpCatalog.getStatus(connector.id).status !== "ready") {
+        throw new Error("Connector is not available for configuration");
+      }
+      const proposal = store.proposeConnectorConfiguration({
+        sessionId, runId, connectorId: connector.id, connectorName: connector.name,
+        reason: "CONNECTOR_REQUIRED_FOR_TASK",
+      });
+      return { content: [{ type: "text", text: JSON.stringify({ requestId: proposal.id, state: proposal.state,
+        instruction: "Wait for the user to confirm in the configuration card." }) }] };
+    },
+  };
+  const leadExtraTools = [...ideaTreeTools, ...authorityTools, ...(configurableConnectors.length ? [proposeConnectorTool] : [])];
   let leaseHeartbeatQueue = Promise.resolve();
   let leaseHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
   const sessionSpecialist = store.getSpecialist(session.specialistId);

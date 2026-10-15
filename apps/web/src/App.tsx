@@ -34,6 +34,7 @@ import type {
   ComposerReference,
   ConnectorId,
   ConnectorManifest,
+  ConnectorConfigurationRequest,
   CreateProxyServerRequest,
   DeletionImpact,
   ExecutionRun,
@@ -226,6 +227,7 @@ import { ProxyPolicySelect, ProxySettingsEditor } from "./ProxySettingsEditor.js
 import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
 import { ConversationalModelCard } from "./configuration/ConversationalModelCard.js";
+import { ConversationalConnectorCard } from "./configuration/ConversationalConnectorCard.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, ideaTreeWeightsValid, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
@@ -1131,6 +1133,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
   const [configurationRequestedSessionId, setConfigurationRequestedSessionId] = useState<string>();
+  const [connectorConfigurationRequests, setConnectorConfigurationRequests] = useState<ConnectorConfigurationRequest[]>([]);
   const [configurationReceipt, setConfigurationReceipt] = useState<{
     sessionId: string;
     modelName: string;
@@ -1976,6 +1979,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       setFiles([]);
       setPermissionEpoch(undefined);
       setPermissionRequests([]);
+      setConnectorConfigurationRequests([]);
       setSessionUsage(undefined);
       setSessionRuns([]);
       setArtifactOutputs([]);
@@ -1995,7 +1999,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       return;
     }
     const refreshSummaryRevision = latestSessionSummaries.current.get(sessionId)?.revision ?? 0;
-    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, subagentItems, remoteJobItems, artifactOutputItems] = await Promise.all([
+    const [detail, workspaceFiles, epoch, permissionRequestItems, permissionGrantItems, usageSummary, sessionRunItems, executionRunItems, artifactDerivations, manifests, artifactReviewRuns, reviewerTasks, invocations, claimItems, linkItems, subagentItems, remoteJobItems, artifactOutputItems, connectorConfigurationResult] = await Promise.all([
       client.getSession(sessionId),
       client.listFiles(sessionId),
       client.getPermissionEpoch(sessionId),
@@ -2014,6 +2018,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       client.listSubagents(sessionId),
       client.listRemoteJobs(sessionId),
       client.listArtifactOutputs(sessionId),
+      client.listConnectorConfigurationRequests(sessionId),
     ]);
     const activeRun = selectSessionReplayRun(sessionRunItems.filter((run) => isActiveRunStatus(run.status)));
     const replayEvents = activeRun ? await client.listRunEvents(sessionId, activeRun.id) : [];
@@ -2062,6 +2067,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setArtifacts(projectArtifacts);
     setPermissionEpoch(epoch);
     setPermissionRequests(permissionRequestItems);
+    setConnectorConfigurationRequests(connectorConfigurationResult.items);
     setPermissionGrants(permissionGrantItems);
     setSessionUsage(usageSummary);
     setExecutionRuns(executionRunItems);
@@ -2754,6 +2760,14 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setError(undefined);
   }
 
+  async function decideConversationalConnector(request: ConnectorConfigurationRequest, decision: "apply" | "dismiss"): Promise<void> {
+    if (!activeSessionId || activeSessionId !== request.sessionId || session?.archivedAt) {
+      throw new Error(t("configuration.card.stale"));
+    }
+    await client.decideConnectorConfiguration(request.sessionId, request.id, decision);
+    await refreshSession(request.sessionId);
+  }
+
   function reconcilePermissionSnapshots(
     sessionId: string | undefined,
     snapshots: readonly PermissionRequest[],
@@ -3244,6 +3258,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     }
     if (streamEvent.type === "session.updated") {
       syncSessionSummary(streamEvent.session);
+    }
+    if (streamEvent.type === "tool.completed" && streamEvent.trace.name === "propose_connector_enable") {
+      void client.listConnectorConfigurationRequests(sessionId).then(({ items }) => {
+        if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) setConnectorConfigurationRequests(items);
+      }).catch(() => undefined);
     }
     const routing = routeRunStreamEvent(streamEvent, {
       isDisplayed: shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current),
@@ -4122,6 +4141,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const showModelConfigurationCard = shouldShowModelConfigurationCard(
     session?.id, configurationRequestedSessionId, composerRunAction.noModelReason, sessionArchived, isRunning,
   );
+  const visibleConnectorConfigurationRequests = connectorConfigurationRequests.filter((item) => item.sessionId === session?.id
+    && (item.state === "awaiting_confirmation"
+      || ((item.state === "stale" || item.state === "applied")
+        && !sessionRuns.some((run) => run.createdAt > item.updatedAt))));
   const composerTrigger = getComposerTrigger(message, composerTextarea.current?.selectionStart ?? message.length);
   const selectedComposerCommands = selectedSkillAuthoringCommands(message);
   const composerSuggestions: ComposerSuggestion[] = !composerTrigger ? [] : composerTrigger.symbol === "@"
@@ -4679,6 +4702,11 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                         providers={modelProviders}
                         proxySettings={proxySettings}
                       /> : null}
+                  {visibleConnectorConfigurationRequests.map((connectorConfigurationRequest) => <ConversationalConnectorCard
+                    key={connectorConfigurationRequest.id}
+                    request={connectorConfigurationRequest}
+                    runActive={sessionRuns.some((run) => run.id === connectorConfigurationRequest.runId && isActiveRunStatus(run.status))}
+                    onDecision={(decision) => decideConversationalConnector(connectorConfigurationRequest, decision)} />)}
                   {configurationReceipt?.sessionId === session.id ? <div className="conversation-configuration-receipt" role="status">
                     <strong>{t(configurationReceipt.globalDefault ? "configuration.card.savedGlobal" : "configuration.card.saved")}: {configurationReceipt.modelName}</strong>
                     <span> · {t(configurationReceipt.continuation === "not_requested" ? "configuration.card.notSubmitted"

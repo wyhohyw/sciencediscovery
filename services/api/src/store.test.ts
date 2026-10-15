@@ -44,6 +44,50 @@ import { generateSshKeyPair } from "@sciencediscovery/executor";
 import { encryptModelApiToken } from "./store/secrets.js";
 import { normalizeMemoryGraphSettings } from "./store/settings.js";
 
+test("CFG connector proposals require a user decision and preserve inherited connectors", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `connector-configuration-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  await store.replaceGlobalSettings({ enabledConnectorIds: ["pubmed"] });
+  const project = await store.createProject("Configuration test");
+  const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
+  const other = await store.createSession(project.id, "Two", {}, {}, { allowUnconfiguredModel: true });
+  const input = { sessionId: session.id, runId: "run-1", connectorId: "uniprot", connectorName: "UniProt", reason: "Needed for this task" };
+  const request = store.proposeConnectorConfiguration(input);
+  assert.equal(store.proposeConnectorConfiguration(input).id, request.id, "repeated tool calls share one pending proposal");
+  assert.deepEqual(store.getSessionSettings(session.id).effective.enabledConnectorIds, ["pubmed"], "proposing does not write settings");
+  await assert.rejects(store.decideConnectorConfiguration({ sessionId: other.id, requestId: request.id, decision: "apply" }), /not found/);
+  await assert.rejects(store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply", assertReady: () => { throw new Error("not ready"); } }), /not ready/);
+  assert.equal(store.listConnectorConfigurationRequests(session.id)[0]?.state, "awaiting_confirmation");
+  const applied = await store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply" });
+  assert.equal(applied.state, "applied");
+  assert.deepEqual(store.getSessionSettings(session.id).effective.enabledConnectorIds, ["pubmed", "uniprot"]);
+  assert.deepEqual(store.getSessionSettings(other.id).effective.enabledConnectorIds, ["pubmed"]);
+  assert.deepEqual(store.getSessionSettings(session.id).overrides.enabledConnectorIds, ["pubmed", "uniprot"]);
+  assert.equal((await store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply" })).state, "applied", "repeated decisions are idempotent");
+  const reopened = new SessionStore(root); await reopened.load();
+  assert.equal(reopened.listConnectorConfigurationRequests(session.id)[0]?.state, "applied", "proposal survives restart");
+  assert.deepEqual(reopened.getSessionSettings(session.id).effective.enabledConnectorIds, ["pubmed", "uniprot"]);
+  await reopened.deleteProject(project.id, project.id);
+  const db = new DatabaseSync(resolve(root, "catalog.sqlite"));
+  try {
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM connector_configuration_requests WHERE session_id = ?").get(session.id) as { count: number }).count, 0);
+  } finally { db.close(); }
+});
+
+test("CFG connector proposal becomes stale after an independent settings change", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `connector-configuration-stale-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Configuration stale test");
+  const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
+  const request = store.proposeConnectorConfiguration({ sessionId: session.id, runId: "run-1", connectorId: "uniprot", connectorName: "UniProt", reason: "Needed" });
+  await store.updateSession(session.id, { enabledConnectorIds: ["pubmed"] });
+  const decision = await store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply" });
+  assert.equal(decision.state, "stale");
+  assert.deepEqual(store.getSessionSettings(session.id).effective.enabledConnectorIds, ["pubmed"]);
+});
+
 interface PersistedCatalog {
   environmentSourceSettings?: { condaSource: string; pipSource: string };
   globalSettings: Record<string, unknown>;

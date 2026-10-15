@@ -26,6 +26,7 @@ import { DatabaseSync } from "node:sqlite";
 import { AgentNotifications } from "./agent-notifications.js";
 import { ShellExecutions } from "./shell-executions.js";
 import { WorkspaceTransfers } from "./workspace-transfers.js";
+import type { ConnectorConfigurationRequest } from "@sciencediscovery/schema";
 
 import type {
   ChatMessage,
@@ -276,6 +277,7 @@ const SESSION_DATA_CATEGORIES = [
   "execution records",
   "provenance and reviews",
   "connector and evidence records",
+  "configuration proposals",
   "paper records",
   "workspace files",
 ] as const;
@@ -591,6 +593,16 @@ export class SessionStore {
         ON permission_authorizations(session_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS permission_authorizations_execution
         ON permission_authorizations(execution_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS connector_configuration_requests (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        connector_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        record_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS connector_configuration_requests_session
+        ON connector_configuration_requests(session_id);
     `);
     this.pluginControl = new PluginControl(this.database, this, (value) => this.normalizeSettings(value));
     this.notificationStore = new AgentNotifications(this.database, (sessionId) => {
@@ -2210,6 +2222,89 @@ export class SessionStore {
     // A rejected CAS or validation must not prevent subsequent settings writes.
     this.settingsMutationQueue = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  listConnectorConfigurationRequests(sessionId: string): ConnectorConfigurationRequest[] {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    if (!this.database) throw new Error("Catalog database is not initialized");
+    const rows = this.database.prepare("SELECT record_json FROM connector_configuration_requests WHERE session_id = ? ORDER BY rowid DESC")
+      .all(sessionId) as Array<{ record_json: string }>;
+    return rows.map((row) => JSON.parse(row.record_json) as ConnectorConfigurationRequest);
+  }
+
+  proposeConnectorConfiguration(input: {
+    sessionId: string; runId: string; connectorId: string; connectorName: string; reason: string;
+  }): ConnectorConfigurationRequest {
+    const session = this.assertSessionWritable(input.sessionId);
+    if (!this.database) throw new Error("Catalog database is not initialized");
+    if (!this.connectorIds.has(input.connectorId)) throw new Error("Connector is not installed");
+    const currentIds = this.getSessionSettings(session.id).effective.enabledConnectorIds;
+    if (currentIds.includes(input.connectorId)) throw new Error("Connector is already enabled in this Session");
+    const existing = this.database.prepare("SELECT record_json FROM connector_configuration_requests WHERE session_id = ? AND run_id = ? AND connector_id = ? LIMIT 1")
+      .get(session.id, input.runId, input.connectorId) as { record_json: string } | undefined;
+    if (existing) return JSON.parse(existing.record_json) as ConnectorConfigurationRequest;
+    const now = new Date().toISOString();
+    const proposal: ConnectorConfigurationRequest = {
+      id: randomUUID(), sessionId: session.id, projectId: session.projectId, runId: input.runId,
+      connectorId: input.connectorId, connectorName: input.connectorName.slice(0, 100),
+      reason: input.reason.trim().slice(0, 500), baselineConnectorIds: [...currentIds],
+      state: "awaiting_confirmation", createdAt: now, updatedAt: now,
+    };
+    this.database.prepare("INSERT INTO connector_configuration_requests(id,session_id,run_id,connector_id,state,record_json) VALUES(?,?,?,?,?,?)")
+      .run(proposal.id, proposal.sessionId, proposal.runId, proposal.connectorId, proposal.state, JSON.stringify(proposal));
+    return proposal;
+  }
+
+  async decideConnectorConfiguration(input: {
+    sessionId: string; requestId: string; decision: "apply" | "dismiss"; assertReady?: (connectorId: string) => void;
+  }): Promise<ConnectorConfigurationRequest> {
+    return this.withSettingsMutation(async () => {
+      await this.saveQueue;
+      const session = this.assertSessionWritable(input.sessionId);
+      if (!this.database) throw new Error("Catalog database is not initialized");
+      const row = this.database.prepare("SELECT record_json FROM connector_configuration_requests WHERE id = ? AND session_id = ?")
+        .get(input.requestId, session.id) as { record_json: string } | undefined;
+      if (!row) throw new Error("Connector configuration request not found");
+      const proposal = JSON.parse(row.record_json) as ConnectorConfigurationRequest;
+      if (proposal.state !== "awaiting_confirmation") return proposal;
+      const previousCatalog = structuredClone(this.catalog);
+      const effective = this.getSessionSettings(session.id).effective.enabledConnectorIds;
+      if (input.decision === "apply") {
+        if (!this.connectorIds.has(proposal.connectorId)) throw new SessionStoreHttpError("Connector is no longer installed", 409);
+        input.assertReady?.(proposal.connectorId);
+        if (JSON.stringify(effective) !== JSON.stringify(proposal.baselineConnectorIds)) {
+          proposal.state = "stale";
+        } else {
+          // Add to the latest effective set so inherited entries are preserved.
+          session.settingsOverrides = this.normalizeSettings({
+            ...session.settingsOverrides,
+            enabledConnectorIds: [...effective, proposal.connectorId],
+          });
+          this.syncSessionCompatibility(session);
+          proposal.state = "applied";
+        }
+      } else {
+        proposal.state = "dismissed";
+      }
+      proposal.updatedAt = new Date().toISOString();
+      if (proposal.state === "applied") session.updatedAt = proposal.updatedAt;
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        if (proposal.state === "applied") {
+          this.database.prepare("INSERT INTO catalog_state(id,json) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET json=excluded.json")
+            .run(JSON.stringify(this.catalog));
+        }
+        this.database.prepare("UPDATE connector_configuration_requests SET state = ?, record_json = ? WHERE id = ?")
+          .run(proposal.state, JSON.stringify(proposal), proposal.id);
+        this.database.exec("COMMIT");
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        this.catalog = previousCatalog;
+        throw error;
+      }
+      if (proposal.state === "applied") this.pluginControl?.changed(session.projectId, session.id);
+      return proposal;
+    });
   }
 
   async replaceGlobalSettings(value: unknown): Promise<RuntimeSettingsDetails> {
@@ -4226,6 +4321,7 @@ export class SessionStore {
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE session_id = ?").run(session.id);
+    this.database?.prepare("DELETE FROM connector_configuration_requests WHERE session_id = ?").run(session.id);
     this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
     });
@@ -4298,6 +4394,7 @@ export class SessionStore {
       throw error;
     }
     this.database?.prepare("DELETE FROM permission_authorizations WHERE project_id = ?").run(projectId);
+    for (const session of sessions) this.database?.prepare("DELETE FROM connector_configuration_requests WHERE session_id = ?").run(session.id);
     for (const session of sessions) this.notifications.deleteSession(session.id);
     await this.finishStagedDeletion(operation);
     }, projectId);

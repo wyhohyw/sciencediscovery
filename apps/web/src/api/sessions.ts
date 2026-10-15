@@ -14,6 +14,7 @@
 
 import type {
   CreatePermissionRequest,
+  ConnectorConfigurationRequest,
   CreateRemoteJobRequest,
   CreateSessionRequest,
   DeletionImpact,
@@ -40,6 +41,16 @@ import type {
 import { ProjectsApiClient } from "./projects.js";
 
 export class SessionsApiClient extends ProjectsApiClient {
+  listConnectorConfigurationRequests(sessionId: string): Promise<{ items: ConnectorConfigurationRequest[] }> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests`);
+  }
+
+  decideConnectorConfiguration(sessionId: string, requestId: string, decision: "apply" | "dismiss"): Promise<ConnectorConfigurationRequest> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests/${encodeURIComponent(requestId)}/decision`, {
+      body: JSON.stringify({ decision }), method: "POST",
+    });
+  }
+
   listSessions(projectId: string, state: SessionListState = "active"): Promise<Session[]> {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}/sessions?state=${state}`);
   }

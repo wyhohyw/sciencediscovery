@@ -2360,6 +2360,35 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
 
       const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+      const connectorConfigurationListMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration-requests$/);
+      if (connectorConfigurationListMatch && request.method === "GET") {
+        sendJson(response, 200, { items: store.listConnectorConfigurationRequests(connectorConfigurationListMatch[1]!) });
+        return;
+      }
+      const connectorConfigurationDecisionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration-requests\/([^/]+)\/decision$/);
+      if (connectorConfigurationDecisionMatch && request.method === "POST") {
+        const body = await readJson<{ decision?: "apply" | "dismiss" }>(request);
+        if (body.decision !== "apply" && body.decision !== "dismiss") return sendError(response, 400, "Invalid configuration decision");
+        const sessionId = connectorConfigurationDecisionMatch[1]!;
+        if (body.decision === "apply" && await sessionHasActiveRun(store, sessionId)) {
+          return sendError(response, 409, "Wait for the current run to finish before applying configuration");
+        }
+        const decided = await store.decideConnectorConfiguration({
+          sessionId, requestId: connectorConfigurationDecisionMatch[2]!, decision: body.decision,
+          assertReady: (connectorId) => {
+            const settings = store.getSessionSettings(sessionId).effective;
+            if (connectorId !== "web" && (!mcpRegistry.has(connectorId)
+              || mcpCatalog.getStatus(connectorId).status !== "ready")) {
+              throw new SessionStoreHttpError("Connector is not ready", 409);
+            }
+            if (!filterEnabledMcpSources([connectorId], settings.plugins).includes(connectorId)) {
+              throw new SessionStoreHttpError("MCP is disabled for this Session", 409);
+            }
+          },
+        });
+        sendJson(response, 200, decided);
+        return;
+      }
       if (sessionMatch && request.method === "GET") {
         const session = await store.getSessionDetail(sessionMatch[1]!);
         if (!session) return sendError(response, 404, "Session not found");
