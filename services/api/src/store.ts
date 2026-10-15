@@ -28,6 +28,11 @@ import { ShellExecutions } from "./shell-executions.js";
 import { WorkspaceTransfers } from "./workspace-transfers.js";
 import type { ConnectorConfigurationRequest } from "@sciencediscovery/schema";
 
+// Explicitly reviewed public, read-only source. New connectors are never auto-authorized by default.
+export function isAutoApplicableConnector(connectorId: string): boolean {
+  return connectorId === "pubmed";
+}
+
 import type {
   ChatMessage,
   ArtifactReviewRun,
@@ -983,6 +988,7 @@ export class SessionStore {
           || savedApproval.approvalMode === "never_ask"
           ? "always_allow" as const
           : "ask_for_dangerous" as const,
+        autoApplyLowRiskConfiguration: session.autoApplyLowRiskConfiguration === true,
         ...(session.archivedAt ? { archivedAt: session.archivedAt } : {}),
         createdAt: session.createdAt,
         enabledConnectorIds,
@@ -2232,6 +2238,35 @@ export class SessionStore {
     return rows.map((row) => JSON.parse(row.record_json) as ConnectorConfigurationRequest);
   }
 
+  getConnectorConfigurationRequest(sessionId: string, requestId: string): ConnectorConfigurationRequest | undefined {
+    if (!this.getSession(sessionId)) throw new Error("Session not found");
+    if (!this.database) throw new Error("Catalog database is not initialized");
+    const row = this.database.prepare("SELECT record_json FROM connector_configuration_requests WHERE id = ? AND session_id = ?")
+      .get(requestId, sessionId) as { record_json: string } | undefined;
+    return row ? JSON.parse(row.record_json) as ConnectorConfigurationRequest : undefined;
+  }
+
+  withdrawConnectorAutoApply(sessionId: string, requestId: string): void {
+    const request = this.getConnectorConfigurationRequest(sessionId, requestId);
+    if (!request || request.state !== "awaiting_confirmation" || !request.autoApplyAt || !this.database) return;
+    delete request.autoApplyAt;
+    request.updatedAt = new Date().toISOString();
+    this.database.prepare("UPDATE connector_configuration_requests SET record_json = ? WHERE id = ? AND state = 'awaiting_confirmation'")
+      .run(JSON.stringify(request), request.id);
+  }
+
+  invalidateConnectorConfigurationRequestsForStop(sessionId: string): void {
+    if (!this.database || !this.getSession(sessionId)) return;
+    for (const request of this.listConnectorConfigurationRequests(sessionId)) {
+      if (request.state !== "awaiting_confirmation" || request.runId.startsWith("user-request:")) continue;
+      request.state = "stale";
+      delete request.autoApplyAt;
+      request.updatedAt = new Date().toISOString();
+      this.database.prepare("UPDATE connector_configuration_requests SET state = ?, record_json = ? WHERE id = ? AND state = 'awaiting_confirmation'")
+        .run(request.state, JSON.stringify(request), request.id);
+    }
+  }
+
   proposeConnectorConfiguration(input: {
     sessionId: string; runId: string; connectorId: string; connectorName: string; reason: string;
   }): ConnectorConfigurationRequest {
@@ -2244,7 +2279,13 @@ export class SessionStore {
       .get(session.id, input.connectorId) as { record_json: string } | undefined;
     if (pending) {
       const proposal = JSON.parse(pending.record_json) as ConnectorConfigurationRequest;
-      if (JSON.stringify(proposal.baselineConnectorIds) === JSON.stringify(currentIds)) return proposal;
+      if (JSON.stringify(proposal.baselineConnectorIds) === JSON.stringify(currentIds)
+        && (proposal.stopGeneration === undefined || proposal.stopGeneration === this.notifications.generation(session.id))) return proposal;
+    }
+    if (!input.runId.startsWith("user-request:")) {
+      const other = this.database.prepare("SELECT id FROM connector_configuration_requests WHERE session_id = ? AND run_id = ? AND state = 'awaiting_confirmation' AND connector_id <> ? LIMIT 1")
+        .get(session.id, input.runId, input.connectorId);
+      if (other) throw new Error("A connector configuration request is already pending for this run");
     }
     const existing = this.database.prepare("SELECT record_json FROM connector_configuration_requests WHERE session_id = ? AND run_id = ? AND connector_id = ? LIMIT 1")
       .get(session.id, input.runId, input.connectorId) as { record_json: string } | undefined;
@@ -2255,6 +2296,9 @@ export class SessionStore {
       connectorId: input.connectorId, connectorName: input.connectorName.slice(0, 100),
       reason: input.reason.trim().slice(0, 500), baselineConnectorIds: [...currentIds],
       state: "awaiting_confirmation", createdAt: now, updatedAt: now,
+      stopGeneration: this.notifications.generation(session.id),
+      ...(session.autoApplyLowRiskConfiguration && isAutoApplicableConnector(input.connectorId)
+        ? { autoApplyAt: new Date(Date.now() + 30_000).toISOString() } : {}),
     };
     this.database.prepare("INSERT INTO connector_configuration_requests(id,session_id,run_id,connector_id,state,record_json) VALUES(?,?,?,?,?,?)")
       .run(proposal.id, proposal.sessionId, proposal.runId, proposal.connectorId, proposal.state, JSON.stringify(proposal));
@@ -2262,7 +2306,8 @@ export class SessionStore {
   }
 
   async decideConnectorConfiguration(input: {
-    sessionId: string; requestId: string; decision: "apply" | "dismiss"; assertReady?: (connectorId: string) => void;
+    sessionId: string; requestId: string; decision: "apply" | "dismiss";
+    source?: "user" | "auto"; assertReady?: (connectorId: string) => void;
   }): Promise<ConnectorConfigurationRequest> {
     return this.withSettingsMutation(async () => {
       await this.saveQueue;
@@ -2273,6 +2318,18 @@ export class SessionStore {
       if (!row) throw new Error("Connector configuration request not found");
       const proposal = JSON.parse(row.record_json) as ConnectorConfigurationRequest;
       if (proposal.state !== "awaiting_confirmation") return proposal;
+      if (input.decision === "apply" && !proposal.runId.startsWith("user-request:")) {
+        const source = await this.getSessionRun(session.id, proposal.runId);
+        if (!source || !["completed", "interrupted"].includes(source.status) || !this.notifications.canWake(session.id)
+          || (proposal.stopGeneration !== undefined && proposal.stopGeneration !== this.notifications.generation(session.id))) {
+          throw new SessionStoreHttpError("The source task was stopped or is not ready for configuration", 409);
+        }
+      }
+      if (input.source === "auto" && (input.decision !== "apply"
+        || !session.autoApplyLowRiskConfiguration || !isAutoApplicableConnector(proposal.connectorId)
+        || !proposal.autoApplyAt || Date.parse(proposal.autoApplyAt) > Date.now())) {
+        throw new SessionStoreHttpError("Automatic configuration is not authorized or not due", 409);
+      }
       const previousCatalog = structuredClone(this.catalog);
       const effective = this.getSessionSettings(session.id).effective.enabledConnectorIds;
       if (input.decision === "apply") {
@@ -2293,6 +2350,7 @@ export class SessionStore {
         proposal.state = "dismissed";
       }
       proposal.updatedAt = new Date().toISOString();
+      proposal.decisionSource = input.source ?? "user";
       if (proposal.state === "applied") session.updatedAt = proposal.updatedAt;
       this.database.exec("BEGIN IMMEDIATE");
       try {
@@ -2311,6 +2369,62 @@ export class SessionStore {
       if (proposal.state === "applied") this.pluginControl?.changed(session.projectId, session.id);
       return proposal;
     });
+  }
+
+  /** The request ID gives the continuation a stable identity across retries and restarts. */
+  async ensureConnectorContinuationRun(input: {
+    sessionId: string; requestId: string;
+  }): Promise<SessionRun | undefined> {
+    this.assertSessionWritable(input.sessionId);
+    const proposal = this.getConnectorConfigurationRequest(input.sessionId, input.requestId);
+    if (!proposal || proposal.state !== "applied" || proposal.runId.startsWith("user-request:")) return undefined;
+    if (!this.notifications.canWake(input.sessionId)
+      || (proposal.stopGeneration !== undefined && proposal.stopGeneration !== this.notifications.generation(input.sessionId))) {
+      throw new Error("Session was stopped before task continuation");
+    }
+    if (!this.getSessionSettings(input.sessionId).effective.enabledConnectorIds.includes(proposal.connectorId)) {
+      throw new Error("Approved connector is no longer enabled");
+    }
+    const continuationId = `configuration-${proposal.id}`;
+    const run = await this.mutateArray<SessionRun, SessionRun>(this.sessionRunsPath(input.sessionId), (runs) => {
+      const existing = runs.find((candidate) => candidate.id === continuationId);
+      if (existing) return structuredClone(existing);
+      if (!this.notifications.canWake(input.sessionId)
+        || (proposal.stopGeneration !== undefined && proposal.stopGeneration !== this.notifications.generation(input.sessionId))) {
+        throw new Error("Session was stopped before task continuation");
+      }
+      const source = runs.find((candidate) => candidate.id === proposal.runId);
+      if (!source || !["completed", "interrupted"].includes(source.status)) {
+        throw new Error("Source run has not reached a safe continuation boundary");
+      }
+      const next: SessionRun = {
+        annotationIds: [],
+        configurationContinuation: {
+          requestId: proposal.id, sourceRunId: source.id, connectorName: proposal.connectorName,
+        },
+        createdAt: new Date().toISOString(),
+        id: continuationId,
+        prompt: source.prompt,
+        queueOrder: runs.reduce((max, candidate) => Math.max(max, candidate.queueOrder), 0) + 1,
+        references: [],
+        sessionId: input.sessionId,
+        settingsSnapshot: {
+          ...structuredClone(source.settingsSnapshot),
+          enabledConnectorIds: [...new Set([...source.settingsSnapshot.enabledConnectorIds, proposal.connectorId])],
+        },
+        ...(source.skillLibraryRefs?.length ? { skillLibraryRefs: structuredClone(source.skillLibraryRefs) } : {}),
+        status: "queued",
+      };
+      runs.push(next);
+      return structuredClone(next);
+    });
+    if (proposal.continuationRunId !== run.id && this.database) {
+      proposal.continuationRunId = run.id;
+      proposal.updatedAt = new Date().toISOString();
+      this.database.prepare("UPDATE connector_configuration_requests SET record_json = ? WHERE id = ? AND state = 'applied'")
+        .run(JSON.stringify(proposal), proposal.id);
+    }
+    return run;
   }
 
   async replaceGlobalSettings(value: unknown): Promise<RuntimeSettingsDetails> {
@@ -2838,6 +2952,7 @@ export class SessionStore {
     input: RuntimeSettingsOverrides | string = {},
     governance: {
       approvalMode?: "always_allow" | "ask_for_dangerous";
+      autoApplyLowRiskConfiguration?: boolean;
       reviewCriteria?: string[];
       reviewMode?: "auto" | "manual";
       remoteRunnerHostIds?: string[];
@@ -2880,6 +2995,7 @@ export class SessionStore {
     );
     const session: Session = {
       approvalMode: governance.approvalMode ?? "ask_for_dangerous",
+      autoApplyLowRiskConfiguration: governance.autoApplyLowRiskConfiguration === true,
       createdAt: now,
       enabledConnectorIds: [...resolved.effective.enabledConnectorIds],
       enabledSkillIds: [...resolved.effective.enabledSkillIds],
@@ -4412,7 +4528,7 @@ export class SessionStore {
   ): Promise<Session> {
     return this.withSettingsMutation(async () => {
       const session = this.assertSessionWritable(sessionId);
-      const { approvalMode, remoteRunnerHostIds, runnerIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
+      const { approvalMode, autoApplyLowRiskConfiguration, remoteRunnerHostIds, runnerIds, reviewCriteria, reviewMode, specialistId, title, ...settingsChanges } = changes;
       const nextTitle = hasOwn(changes, "title") ? requiredLabel(title, "Session title") : session.title;
       const nextSettings = this.normalizeSettings({ ...session.settingsOverrides, ...settingsChanges });
       const nextModel = this.getModel(nextSettings.modelId);
@@ -4427,6 +4543,9 @@ export class SessionStore {
         if (nextSettings.thinkingEffort !== undefined) nextSettings.thinkingEffort = constrained.effort;
       }
       if (approvalMode !== undefined) throw new Error("Use setApprovalMode to change approval policy");
+      if (autoApplyLowRiskConfiguration !== undefined && typeof autoApplyLowRiskConfiguration !== "boolean") {
+        throw new Error("Invalid automatic configuration policy");
+      }
       if (reviewMode !== undefined && reviewMode !== "auto" && reviewMode !== "manual") throw new Error("Invalid review mode");
       if (specialistId && !this.getSpecialist(specialistId)) throw new Error("Specialist not found");
       const nextRunnerIds = runnerIds == null ? undefined : this.validateRunnerIds(runnerIds);
@@ -4435,6 +4554,18 @@ export class SessionStore {
         : this.validateSessionRemoteRunnerHosts(session.projectId, remoteRunnerHostIds);
       session.settingsOverrides = nextSettings;
       session.title = nextTitle;
+      if (autoApplyLowRiskConfiguration !== undefined) {
+        session.autoApplyLowRiskConfiguration = autoApplyLowRiskConfiguration;
+        if (!autoApplyLowRiskConfiguration && this.database) {
+          const pending = this.listConnectorConfigurationRequests(sessionId).filter((request) =>
+            request.state === "awaiting_confirmation" && request.autoApplyAt);
+          for (const request of pending) {
+            delete request.autoApplyAt;
+            this.database.prepare("UPDATE connector_configuration_requests SET record_json = ? WHERE id = ?")
+              .run(JSON.stringify(request), request.id);
+          }
+        }
+      }
       if (reviewMode) session.reviewMode = reviewMode;
       if (reviewCriteria !== undefined) session.reviewCriteria = this.normalizeReviewCriteria(reviewCriteria);
       if (specialistId === null) delete session.specialistId;

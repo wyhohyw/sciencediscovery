@@ -586,6 +586,7 @@ async function executeAgentRun(
   evolve: EvolveRuntimeFactory | undefined,
   notificationDelivery?: NotificationBatch,
   deliveredNotice?: RuntimeNotice,
+  configurationContinuation?: boolean,
 ): Promise<SessionRunStatus> {
   const continuation = notificationDelivery && notificationDelivery.agentId !== "main"
     ? store.listSubagents(sessionId).find((child) => `subagent:${child.id}` === notificationDelivery.agentId) : undefined;
@@ -733,7 +734,7 @@ async function executeAgentRun(
   const proposeConnectorTool: AgentTool<typeof connectorProposalParameters> = {
     name: "propose_connector_enable",
     label: "Request connector configuration",
-    description: `If the user task needs an installed connector that is not enabled, request user confirmation before using it. Available connectors: ${configurableConnectors.map((item) => `${item.id} (${item.name})`).join(", ")}. Call this before taking actions that depend on the connector. This tool only proposes a change; it cannot approve it. After calling, stop and tell the user to confirm in the configuration card.`,
+    description: `If the user task needs an installed connector that is not enabled, request user confirmation before using it. Available connectors: ${configurableConnectors.map((item) => `${item.id} (${item.name})`).join(", ")}. Call this before taking actions that depend on the connector. This tool only proposes a change; it cannot approve it. After calling, stop at a safe point. The system will resume the task after confirmation.`,
     parameters: connectorProposalParameters,
     execute: async (_toolCallId, params) => {
       const connector = configurableConnectors.find((item) => item.id === params.connectorId);
@@ -745,7 +746,7 @@ async function executeAgentRun(
         reason: "CONNECTOR_REQUIRED_FOR_TASK",
       });
       return { content: [{ type: "text", text: JSON.stringify({ requestId: proposal.id, state: proposal.state,
-        instruction: "Wait for the user to confirm in the configuration card." }) }] };
+        instruction: "Stop at a safe point while configuration is pending. The system will resume this task after confirmation." }) }] };
     },
   };
   const leadExtraTools = [...ideaTreeTools, ...authorityTools, ...(configurableConnectors.length ? [proposeConnectorTool] : [])];
@@ -865,7 +866,8 @@ async function executeAgentRun(
   // A turn the runtime woke on its own has no user-authored body, so it is
   // recorded as a wake notice rather than as something the researcher typed.
   const userMessage = await store.appendMessage(sessionId, "user", visibleContent, undefined,
-    composerReferences, body.annotationIds, deliveredNotice && !visibleContent ? "wake_notice" : "message",
+    composerReferences, body.annotationIds, configurationContinuation ? "configuration_notice"
+      : deliveredNotice && !visibleContent ? "wake_notice" : "message",
     undefined, deliveredNotice);
   if (await store.getSessionRun(sessionId, runId)) await store.updateSessionRun(sessionId, runId, { userMessageId: userMessage.id });
   // Re-send the session's first user-authored message on every run. The goal
@@ -2333,7 +2335,8 @@ async function executeAgentRun(
       message: (await store.readMessages(sessionId)).find((entry) => entry.id === message.id) ?? message,
       type: "run.completed",
     });
-    return "completed";
+    return store.listConnectorConfigurationRequests(sessionId).some((request) =>
+      request.runId === runId && request.state === "awaiting_confirmation") ? "interrupted" : "completed";
   } catch (error) {
     if (cancelledRuns.has(runId)) {
       if (!promptManifest && taskInvocationAttempted) {
@@ -2507,6 +2510,7 @@ export async function cancelCurrentSessionRun(
   // Current Stop owns the lead-Agent wake gate. Reviewer work has a dedicated
   // endpoint and must not be stopped as a side effect of cancelling a run.
   store.notifications.stop(sessionId);
+  store.invalidateConnectorConfigurationRequestsForStop(sessionId);
   const active = await findCurrentCancelableRun(store, sessionId);
   if (!active) {
     sendJson(response, legacyResponse ? 202 : 200, { cancelled: true, sessionId } satisfies CancelRunResult);
@@ -2833,6 +2837,19 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
   return snapshot;
 }
 
+/** Recovery-safe handoff for an applied connector request from an Agent task. */
+export async function ensureConnectorContinuation(
+  store: SessionStore, sessionId: string, requestId: string,
+): Promise<SessionRun | undefined> {
+  const request = store.getConnectorConfigurationRequest(sessionId, requestId);
+  if (!request || request.state !== "applied" || request.runId.startsWith("user-request:")) return undefined;
+  const run = await store.ensureConnectorContinuationRun({
+    sessionId, requestId,
+  });
+  if (run?.status === "queued") await publishRunEvent(store, sessionId, run.id, { run, type: "run.queued" });
+  return run;
+}
+
 async function computeQueuedSettingsSnapshot(
   store: SessionStore,
   _skillCatalog: SkillCatalog,
@@ -3056,6 +3073,19 @@ export function scheduleSessionRuns(
       while (true) {
         const next = (await store.listSessionRuns(sessionId)).find((run) => run.status === "queued");
         if (!next) return;
+        if (next.configurationContinuation) {
+          const request = store.getConnectorConfigurationRequest(sessionId, next.configurationContinuation.requestId);
+          const source = await store.getSessionRun(sessionId, next.configurationContinuation.sourceRunId);
+          if (request?.state !== "applied" || !source || !["completed", "interrupted"].includes(source.status)
+            || !store.notifications.canWake(sessionId)
+            || (request.stopGeneration !== undefined && request.stopGeneration !== store.notifications.generation(sessionId))
+            || !next.settingsSnapshot.enabledConnectorIds.includes(request.connectorId)
+            || !store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId)
+            || (request.connectorId !== "web" && mcpCatalog.getStatus(request.connectorId).status !== "ready")) {
+            await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
+            continue;
+          }
+        }
         if (next.automaticWake && (!next.notificationDelivery || !store.notifications.deliveryAllowed(next.notificationDelivery))) {
           await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
           continue;
@@ -3117,7 +3147,7 @@ export function scheduleSessionRuns(
               annotationIds: next.annotationIds,
               // An automatic wake contributes no user-authored text; a delivery
               // riding along with a real request must not be glued onto it.
-              content: next.automaticWake ? "" : next.prompt,
+              content: next.automaticWake || next.configurationContinuation ? "" : next.prompt,
               references: next.references,
               skillLibraryRefs: next.skillLibraryRefs,
               webForceRefresh: next.webForceRefresh,
@@ -3129,7 +3159,12 @@ export function scheduleSessionRuns(
             memoryGraphClient,
             evolve,
             delivery && delivery.agentId !== "main" ? delivery : undefined,
-            delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery)) : undefined,
+            delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery))
+              : next.configurationContinuation ? {
+                executions: 0, timers: 0,
+                prompt: `The user approved enabling ${next.configurationContinuation.connectorName} for this Session. Continue the existing task from the previous run. Its completed tool calls and artifacts are already in the conversation history. Do not repeat a side-effecting action unless you can verify that it is safe; if its outcome is unknown, ask the user. The user has not submitted a new task.`,
+              } : undefined,
+            Boolean(next.configurationContinuation),
           );
         } catch (reason) {
           error = runFailureMessage(reason);
@@ -3149,6 +3184,8 @@ export function scheduleSessionRuns(
           const durationMs = Math.max(0, Date.now() - Date.parse(startedAt));
           if (status === "completed") {
             runLog.info("run_completed", { durationMs, runId: next.id, sessionId });
+          } else if (status === "interrupted") {
+            runLog.info("run_waiting_for_configuration", { durationMs, runId: next.id, sessionId });
           } else if (status === "cancelled") {
             runLog.info("run_cancelled", { durationMs, reason: "user_cancelled", runId: next.id, sessionId });
           } else {
@@ -3388,7 +3425,10 @@ export async function cancelSessionRun(
     sendJson(response, 200, run);
     return;
   }
-  if (run.status !== "queued") store.notifications.stop(sessionId);
+  if (run.status !== "queued") {
+    store.notifications.stop(sessionId);
+    store.invalidateConnectorConfigurationRequestsForStop(sessionId);
+  }
   cancelledRuns.add(runId);
   runLog.info("run_cancel_requested", { reason: "user_cancelled", runId, sessionId });
   const controller = activeRunAbortControllers.get(runId);
@@ -3410,6 +3450,7 @@ export async function cancelSessionRun(
       return;
     }
     store.notifications.stop(sessionId);
+    store.invalidateConnectorConfigurationRequestsForStop(sessionId);
     activeRunAbortControllers.get(runId)?.abort();
     sendJson(response, 202, current);
     return;

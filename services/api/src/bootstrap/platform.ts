@@ -47,7 +47,7 @@ import { EvolveSidecarClient } from "../evolution/sidecar.js";
 import { EvolutionStore } from "../evolution/store.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
-import { recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
+import { ensureConnectorContinuation, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
 import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
@@ -522,6 +522,19 @@ export async function initializePlatformServices(
   });
   await initializeComponent("artifact_recovery", () => artifactManager.resumeInterrupted());
   await initializeComponent("run_recovery", () => recoverSessionRuns(store, memoryGraphClient));
+  for (const project of store.listProjects()) {
+    for (const session of store.listSessions(project.id, "all")) {
+      if (session.archivedAt) continue;
+      for (const request of store.listConnectorConfigurationRequests(session.id)) {
+        if (request.state !== "applied" || request.runId.startsWith("user-request:")) continue;
+        await ensureConnectorContinuation(store, session.id, request.id).catch((error) => {
+          apiLog.warn("configuration_continuation_recovery_failed", {
+            requestId: request.id, sessionId: session.id, errorMessage: shortErrorMessage(error),
+          });
+        });
+      }
+    }
+  }
   // A run left "running" by a previous process is never going to finish: the
   // sidecar's stream died with that connection. Settle them at boot so the UI
   // never shows a spinner for a run nobody is driving.

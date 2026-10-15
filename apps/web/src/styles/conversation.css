@@ -140,6 +140,9 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .conversation-configuration-guidance { color: var(--muted); }
 .conversation-configuration-dismiss { justify-self: start; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 12px; text-decoration: underline; }
 .conversation-configuration-error { border: 1px solid var(--danger-border); border-radius: 7px; background: var(--danger-soft); padding: 9px; color: var(--danger); }
+.conversation-configuration-resume { margin: 8px 16px; padding: 9px 12px; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--accent-softer); color: var(--accent-ink); font-size: 12px; }
+.composer-auto-config-policy { display: inline-flex; align-items: center; gap: 5px; max-width: 260px; color: var(--muted); font-size: 11px; line-height: 1.3; cursor: pointer; }
+.composer-auto-config-policy input { accent-color: var(--accent); }
 .conversation-configuration-receipt { margin: 12px 16px; border: 1px solid var(--success-border); border-radius: 9px; background: var(--success-soft); padding: 10px 13px; color: var(--text-heading); font-size: 12px; }
 @media (max-width: 600px) { .conversation-configuration-impact { grid-template-columns: 1fr; gap: 3px; } .conversation-configuration-impact strong { margin-bottom: 6px; } .conversation-configuration-card { margin: 12px 8px; padding: 12px; } }
 .composer-model-notice + .composer-footer, .composer-thinking-notice + .composer-footer { border-top: 0; }

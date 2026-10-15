@@ -1976,6 +1976,31 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     return () => { cancelled = true; };
   }, [activeProjectId, client, projectsLoaded, sessionListState]);
 
+  const pendingAutoConfigurationIds = connectorConfigurationRequests
+    .filter((request) => request.sessionId === activeSessionId && request.state === "awaiting_confirmation" && request.autoApplyAt)
+    .map((request) => request.id).join(",");
+  useEffect(() => {
+    if (!activeSessionId || !pendingAutoConfigurationIds) return;
+    let cancelled = false;
+    let busy = false;
+    const poll = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const { items } = await client.listConnectorConfigurationRequests(activeSessionId);
+        if (cancelled || !shouldApplySessionScopedUpdate(activeSessionId, activeSessionIdRef.current)) return;
+        setConnectorConfigurationRequests(items);
+        const watched = new Set(pendingAutoConfigurationIds.split(","));
+        if (items.some((item) => watched.has(item.id) && item.state !== "awaiting_confirmation")) {
+          await refreshSession(activeSessionId);
+        }
+      } catch { /* The next poll or normal Session refresh will reconcile the card. */ }
+      finally { busy = false; }
+    };
+    const timer = setInterval(() => { void poll(); }, 2_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [activeSessionId, client, pendingAutoConfigurationIds]);
+
   async function refreshSession(sessionId = activeSessionId): Promise<void> {
     if (!sessionId) {
       setSession(undefined);
@@ -2703,12 +2728,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   }
 
   async function updateSessionSettings(changes: UpdateSessionRequest): Promise<void> {
-    const approvalOnly = Object.keys(changes).every((key) => key === "approvalMode");
-    if (!activeSessionId || (isRunning && !approvalOnly) || session?.archivedAt) return;
+    const policyOnly = Object.keys(changes).every((key) => key === "approvalMode" || key === "autoApplyLowRiskConfiguration");
+    if (!activeSessionId || (isRunning && !policyOnly) || session?.archivedAt) return;
     try {
       const updated = await client.updateSession(activeSessionId, changes);
       syncSessionSummary(updated);
-      if (approvalOnly) {
+      if (changes.approvalMode !== undefined) {
         const [requests, grants, jobs] = await Promise.all([
           client.listPermissionRequests(activeSessionId),
           client.listPermissionGrants(),
@@ -4612,6 +4637,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                           reviews={artifactReviews}
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
                         />
+                      ) : block.message.kind === "configuration_notice" ? (
+                        <div className="conversation-configuration-resume" role="status">{t("configuration.connector.resuming")}</div>
                       ) : block.message.kind === "wake_notice" && block.message.runtimeNotice ? (
                         <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                       ) : (
@@ -4630,7 +4657,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                           {block.message.role === "assistant" && block.message.kind !== "review_notice" ? <CopyButton className="message-copy" getText={() => block.message.content} label={t("app.copyMessage")} /> : null}
                         </article>
                       )}
-                      {block.message.kind !== "wake_notice" && block.message.runtimeNotice
+                      {block.message.kind !== "wake_notice" && block.message.kind !== "configuration_notice" && block.message.runtimeNotice
                         ? <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                         : null}
                       {(activityGroupsByMessage.get(block.message.id) ?? []).map((group) => renderRunActivityGroup(group))}
@@ -4806,6 +4833,12 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       mode={session.approvalMode}
                       onChange={(approvalMode) => void updateSessionSettings({ approvalMode })}
                     />
+                    <label className="composer-auto-config-policy" title={t("configuration.autoPolicyDetail")}>
+                      <input checked={session.autoApplyLowRiskConfiguration === true} disabled={sessionArchived}
+                        onChange={(event) => void updateSessionSettings({ autoApplyLowRiskConfiguration: event.target.checked })}
+                        type="checkbox" />
+                      <span>{t("configuration.autoPolicy")}</span>
+                    </label>
                     <ComposerRunButton action={composerRunAction} onStop={() => void stopRun()} />
                   </div>
                 </form>

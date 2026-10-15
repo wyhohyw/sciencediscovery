@@ -270,6 +270,7 @@ import {
   createNotificationRun,
   emptyMatch,
   emptyTrace,
+  ensureConnectorContinuation,
   getActiveSessionRun,
   publishApprovalModeChange,
   scheduleSessionRuns,
@@ -2223,6 +2224,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           settingsOverrides,
           {
             approvalMode: body.approvalMode,
+            autoApplyLowRiskConfiguration: body.autoApplyLowRiskConfiguration,
             reviewCriteria: body.reviewCriteria,
             reviewMode: body.reviewMode,
             remoteRunnerHostIds: body.remoteRunnerHostIds,
@@ -2397,7 +2399,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         const body = await readJson<{ decision?: "apply" | "dismiss" }>(request);
         if (body.decision !== "apply" && body.decision !== "dismiss") return sendError(response, 400, "Invalid configuration decision");
         const sessionId = connectorConfigurationDecisionMatch[1]!;
-        if (body.decision === "apply" && await sessionHasActiveRun(store, sessionId)) {
+        const existingRequest = store.getConnectorConfigurationRequest(sessionId, connectorConfigurationDecisionMatch[2]!);
+        if (body.decision === "apply" && existingRequest?.state === "awaiting_confirmation"
+          && await sessionHasActiveRun(store, sessionId)) {
           return sendError(response, 409, "Wait for the current run to finish before applying configuration");
         }
         const decided = await store.decideConnectorConfiguration({
@@ -2413,7 +2417,16 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             }
           },
         });
-        sendJson(response, 200, decided);
+        if (decided.state === "applied" && !decided.runId.startsWith("user-request:")) {
+          const continuation = await ensureConnectorContinuation(store, sessionId, decided.id);
+          if (continuation?.status === "queued") scheduleSessionRuns(
+            store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+            artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+            ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+            config, memoryGraphClient, evolveRuntimeFactory,
+          );
+        }
+        sendJson(response, 200, store.getConnectorConfigurationRequest(sessionId, decided.id) ?? decided);
         return;
       }
       if (sessionMatch && request.method === "GET") {
@@ -3711,6 +3724,59 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     notificationTimer.unref();
   }).catch(() => undefined); // normal startup error handling owns ready failures
   server.once("close", () => { notificationClosed = true; clearInterval(notificationTimer); dispatcher.close(); });
+  let configurationTimer: ReturnType<typeof setInterval> | undefined;
+  let configurationClosed = false;
+  let configurationBusy = false;
+  const processConfigurationTimers = async () => {
+    if (configurationClosed || configurationBusy) return;
+    configurationBusy = true;
+    try {
+      for (const project of store.listProjects()) {
+        for (const session of store.listSessions(project.id, "active")) {
+          for (const pending of store.listConnectorConfigurationRequests(session.id)) {
+            if (pending.state !== "awaiting_confirmation" || !pending.autoApplyAt
+              || Date.parse(pending.autoApplyAt) > Date.now() || !session.autoApplyLowRiskConfiguration) continue;
+            if (await sessionHasActiveRun(store, session.id)) continue;
+            try {
+              const decided = await store.decideConnectorConfiguration({
+                sessionId: session.id, requestId: pending.id, decision: "apply", source: "auto",
+                assertReady: (connectorId) => {
+                  const settings = store.getSessionSettings(session.id).effective;
+                  if ((connectorId !== "web" && (!mcpRegistry.has(connectorId)
+                    || mcpCatalog.getStatus(connectorId).status !== "ready"))
+                    || !filterEnabledMcpSources([connectorId], settings.plugins).includes(connectorId)) {
+                    throw new SessionStoreHttpError("Connector is not ready", 409);
+                  }
+                },
+              });
+              if (decided.state !== "applied") continue;
+              const continuation = await ensureConnectorContinuation(store, session.id, decided.id);
+              if (continuation?.status === "queued") scheduleSessionRuns(
+                store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+                artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+                ideaTreeAuthorities, ideaTreeRepository(session.id), memoryGraphSink, session.id,
+                config, memoryGraphClient, evolveRuntimeFactory,
+              );
+            } catch (error) {
+              store.withdrawConnectorAutoApply(session.id, pending.id);
+              apiLog.warn("configuration_auto_apply_failed", {
+                requestId: pending.id, sessionId: session.id, errorMessage: shortErrorMessage(error),
+              });
+            }
+          }
+        }
+      }
+    } finally { configurationBusy = false; }
+  };
+  void ready.then(() => {
+    if (configurationClosed) return;
+    configurationTimer = setInterval(() => {
+      void processConfigurationTimers().catch((error) => apiLog.warn("configuration_timer_failed", { errorMessage: shortErrorMessage(error) }));
+    }, 1_000);
+    configurationTimer.unref();
+    void processConfigurationTimers().catch((error) => apiLog.warn("configuration_timer_failed", { errorMessage: shortErrorMessage(error) }));
+  }).catch(() => undefined);
+  server.once("close", () => { configurationClosed = true; clearInterval(configurationTimer); });
   server.on("close", () => {
     store.close();
   });

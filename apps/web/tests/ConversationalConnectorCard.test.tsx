@@ -41,3 +41,28 @@ test("CFG connector card waits for user confirmation and shows the session-only 
   });
   assert.match(JSON.stringify(renderer!.toJSON()), /You requested PubMed for this session/);
 });
+
+test("CFG low-risk connector card shows the cancel window and automatic task continuation", async () => {
+  const request: ConnectorConfigurationRequest = {
+    id: "request-auto", sessionId: "session-1", projectId: "project-1", runId: "run-1",
+    connectorId: "pubmed", connectorName: "PubMed", reason: "CONNECTOR_REQUIRED_FOR_TASK",
+    baselineConnectorIds: [], state: "awaiting_confirmation",
+    autoApplyAt: new Date(Date.now() + 30_000).toISOString(),
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConversationalConnectorCard, {
+      request, runActive: false, onDecision: async () => undefined,
+    })));
+  });
+  assert.match(JSON.stringify(renderer!.toJSON()), /Pre-authorized low-risk change: applies automatically in 30s/);
+  await act(async () => {
+    renderer!.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConversationalConnectorCard, {
+      request: { ...request, state: "applied", continuationRunId: "configuration-request-auto" },
+      runActive: false, onDecision: async () => undefined,
+    })));
+  });
+  assert.match(JSON.stringify(renderer!.toJSON()), /task resumes automatically in a linked run/);
+  await act(async () => { renderer!.unmount(); });
+});

@@ -54,6 +54,8 @@ export function createLocalSessionTitle(
 
 export interface Session {
   approvalMode: ApprovalMode;
+  /** Separate, opt-in authorization for reviewed low-risk Session configuration. */
+  autoApplyLowRiskConfiguration?: boolean;
   archivedAt?: string;
   createdAt: string;
   /** Compatibility mirror of the effective enabledConnectorIds. */
@@ -152,7 +154,7 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   id: string;
-  kind?: "message" | "review_notice" | "reviewer_checkpoint" | "timeout_notice" | "wake_notice";
+  kind?: "message" | "review_notice" | "reviewer_checkpoint" | "timeout_notice" | "wake_notice" | "configuration_notice";
   modelId?: string;
   modelName?: string;
   /** Canonical provider transcript for this assistant turn. It is replayed to
@@ -369,6 +371,8 @@ export interface SessionRun {
     notifications: Array<{ id: string; sessionId: string; agentId: string; kind: "execution" | "timer"; sourceId: string; message: string; createdAt: number; readAt?: number }>;
   };
   automaticWake?: boolean;
+  /** Server-created continuation after a conversational configuration request. */
+  configurationContinuation?: { requestId: string; sourceRunId: string; connectorName: string };
   annotationIds: string[];
   assistantMessageId?: string;
   createdAt: string;
@@ -497,6 +501,7 @@ export interface CreateSessionRequest {
   /** Compatibility shortcut for settingsOverrides.modelId. */
   modelId?: string;
   approvalMode?: ApprovalMode;
+  autoApplyLowRiskConfiguration?: boolean;
   reviewCriteria?: string[];
   reviewMode?: "auto" | "manual";
   remoteRunnerHostIds?: string[];
@@ -508,6 +513,7 @@ export interface CreateSessionRequest {
 
 export interface UpdateSessionRequest {
   approvalMode?: ApprovalMode;
+  autoApplyLowRiskConfiguration?: boolean;
   enabledConnectorIds?: ConnectorId[];
   enabledSkillLibraries?: EnabledSkillLibrary[];
   enabledSkillIds?: string[];

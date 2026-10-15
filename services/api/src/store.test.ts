@@ -52,7 +52,7 @@ test("CFG connector proposals require a user decision and preserve inherited con
   const project = await store.createProject("Configuration test");
   const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
   const other = await store.createSession(project.id, "Two", {}, {}, { allowUnconfiguredModel: true });
-  const input = { sessionId: session.id, runId: "run-1", connectorId: "uniprot", connectorName: "UniProt", reason: "Needed for this task" };
+  const input = { sessionId: session.id, runId: "user-request:run-1", connectorId: "uniprot", connectorName: "UniProt", reason: "Needed for this task" };
   const request = store.proposeConnectorConfiguration(input);
   assert.equal(store.proposeConnectorConfiguration(input).id, request.id, "repeated tool calls share one pending proposal");
   assert.deepEqual(store.getSessionSettings(session.id).effective.enabledConnectorIds, ["pubmed"], "proposing does not write settings");
@@ -86,11 +86,74 @@ test("CFG connector proposal becomes stale after an independent settings change"
   const store = new SessionStore(root); await store.load();
   const project = await store.createProject("Configuration stale test");
   const session = await store.createSession(project.id, "One", {}, {}, { allowUnconfiguredModel: true });
-  const request = store.proposeConnectorConfiguration({ sessionId: session.id, runId: "run-1", connectorId: "uniprot", connectorName: "UniProt", reason: "Needed" });
+  const request = store.proposeConnectorConfiguration({ sessionId: session.id, runId: "user-request:run-1", connectorId: "uniprot", connectorName: "UniProt", reason: "Needed" });
   await store.updateSession(session.id, { enabledConnectorIds: ["pubmed"] });
   const decision = await store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply" });
   assert.equal(decision.state, "stale");
   assert.deepEqual(store.getSessionSettings(session.id).effective.enabledConnectorIds, ["pubmed"]);
+});
+
+test("CFG connector confirmation creates one durable continuation of the source task", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `connector-continuation-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Configuration continuation");
+  const session = await store.createSession(project.id, "Task", {}, {}, { allowUnconfiguredModel: true });
+  const source = await store.createSessionRun({ sessionId: session.id, prompt: "Search PubMed and summarize", settingsSnapshot: store.resolveRuntimeSettings(session.id).effective });
+  await store.updateSessionRunStatus(session.id, source.id, "interrupted");
+  const request = store.proposeConnectorConfiguration({ sessionId: session.id, runId: source.id,
+    connectorId: "pubmed", connectorName: "PubMed", reason: "CONNECTOR_REQUIRED_FOR_TASK" });
+  await store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply" });
+  const [first, repeated] = await Promise.all([
+    store.ensureConnectorContinuationRun({ sessionId: session.id, requestId: request.id }),
+    store.ensureConnectorContinuationRun({ sessionId: session.id, requestId: request.id }),
+  ]);
+  assert.equal(first?.id, repeated?.id);
+  assert.equal(first?.configurationContinuation?.sourceRunId, source.id);
+  assert.deepEqual(first?.settingsSnapshot.enabledConnectorIds,
+    [...new Set([...source.settingsSnapshot.enabledConnectorIds, "pubmed"])],
+    "the continuation retains the frozen source connectors and adds only the approved one");
+  assert.equal((await store.listSessionRuns(session.id)).length, 2);
+  const reopened = new SessionStore(root); await reopened.load();
+  const afterRestart = await reopened.ensureConnectorContinuationRun({ sessionId: session.id, requestId: request.id });
+  assert.equal(afterRestart?.id, first?.id);
+  assert.equal((await reopened.listSessionRuns(session.id)).length, 2);
+});
+
+test("CFG automatic application needs separate opt-in and a reviewed connector", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `connector-auto-policy-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Automatic configuration");
+  const session = await store.createSession(project.id, "Task", {}, { approvalMode: "always_allow" }, { allowUnconfiguredModel: true });
+  const manual = store.proposeConnectorConfiguration({ sessionId: session.id, runId: "user-request:run-a", connectorId: "pubmed", connectorName: "PubMed", reason: "Needed" });
+  assert.equal(manual.autoApplyAt, undefined, "always_allow must not authorize configuration");
+  await store.updateSession(session.id, { autoApplyLowRiskConfiguration: true });
+  const reviewed = store.proposeConnectorConfiguration({ sessionId: session.id, runId: "user-request:run-b", connectorId: "uniprot", connectorName: "UniProt", reason: "Needed" });
+  assert.equal(reviewed.autoApplyAt, undefined, "unreviewed connector remains manual");
+  await store.decideConnectorConfiguration({ sessionId: session.id, requestId: manual.id, decision: "dismiss" });
+  const timed = store.proposeConnectorConfiguration({ sessionId: session.id, runId: "user-request:run-c", connectorId: "pubmed", connectorName: "PubMed", reason: "Needed" });
+  assert.ok(timed.autoApplyAt);
+  await assert.rejects(store.decideConnectorConfiguration({ sessionId: session.id, requestId: timed.id, decision: "apply", source: "auto" }), /not authorized or not due/);
+  await store.updateSession(session.id, { autoApplyLowRiskConfiguration: false });
+  assert.equal(store.getConnectorConfigurationRequest(session.id, timed.id)?.autoApplyAt, undefined);
+});
+
+test("CFG Stop invalidates a pending task configuration before it can auto-apply", async (context) => {
+  const root = resolve(process.cwd(), ".tmp", `connector-stop-${randomUUID()}`);
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const store = new SessionStore(root); await store.load();
+  const project = await store.createProject("Stopped configuration task");
+  const session = await store.createSession(project.id, "Task", {}, { autoApplyLowRiskConfiguration: true }, { allowUnconfiguredModel: true });
+  const request = store.proposeConnectorConfiguration({ sessionId: session.id, runId: "run-before-stop",
+    connectorId: "pubmed", connectorName: "PubMed", reason: "Needed" });
+  assert.ok(request.autoApplyAt);
+  store.notifications.stop(session.id);
+  store.invalidateConnectorConfigurationRequestsForStop(session.id);
+  assert.equal(store.getConnectorConfigurationRequest(session.id, request.id)?.state, "stale");
+  assert.equal(store.getConnectorConfigurationRequest(session.id, request.id)?.autoApplyAt, undefined);
+  assert.equal((await store.decideConnectorConfiguration({ sessionId: session.id, requestId: request.id, decision: "apply", source: "auto" })).state, "stale");
+  assert.deepEqual(store.getSessionSettings(session.id).effective.enabledConnectorIds.includes("pubmed"), false);
 });
 
 interface PersistedCatalog {

@@ -14,6 +14,13 @@ export interface ConnectorConfigurationRequest {
   state: "awaiting_confirmation" | "applied" | "dismissed" | "stale";
   createdAt: string;
   updatedAt: string;
+  /** Set only for a task run; a standalone configuration instruction has no task to resume. */
+  continuationRunId?: string;
+  /** Present only when a separate Session authorization was active at proposal time. */
+  autoApplyAt?: string;
+  decisionSource?: "user" | "auto";
+  /** Session stop generation at proposal time; a Stop invalidates this request. */
+  stopGeneration?: number;
 }
 
 export type ConnectorConfigurationPreflightResult =
