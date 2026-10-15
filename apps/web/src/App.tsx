@@ -228,6 +228,7 @@ import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
 import { ConversationalModelCard } from "./configuration/ConversationalModelCard.js";
 import { ConversationalConnectorCard } from "./configuration/ConversationalConnectorCard.js";
+import { connectorConfigurationPresentation } from "./configuration/presentation.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, ideaTreeWeightsValid, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
@@ -4201,10 +4202,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const showModelConfigurationCard = shouldShowModelConfigurationCard(
     session?.id, configurationRequestedSessionId, composerRunAction.noModelReason, sessionArchived, isRunning,
   );
-  const visibleConnectorConfigurationRequests = connectorConfigurationRequests.filter((item) => item.sessionId === session?.id
-    && (item.state === "awaiting_confirmation"
-      || ((item.state === "stale" || item.state === "applied")
-        && !sessionRuns.some((run) => run.createdAt > item.updatedAt))));
+  const { continuationByNoticeId, visibleRequests: visibleConnectorConfigurationRequests } = connectorConfigurationPresentation(
+    connectorConfigurationRequests, sessionRuns, session?.messages ?? [], session?.id,
+  );
   const composerTrigger = getComposerTrigger(message, composerTextarea.current?.selectionStart ?? message.length);
   const selectedComposerCommands = selectedSkillAuthoringCommands(message);
   const composerSuggestions: ComposerSuggestion[] = !composerTrigger ? [] : composerTrigger.symbol === "@"
@@ -4638,7 +4638,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
                         />
                       ) : block.message.kind === "configuration_notice" ? (
-                        <div className="conversation-configuration-resume" role="status">{t("configuration.connector.resuming")}</div>
+                        <div className="conversation-configuration-resume" role="status">{continuationByNoticeId.has(block.message.id)
+                          ? t("configuration.connector.appliedSummary", { name: continuationByNoticeId.get(block.message.id)!.connectorName })
+                          : t("configuration.connector.resuming")}</div>
                       ) : block.message.kind === "wake_notice" && block.message.runtimeNotice ? (
                         <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                       ) : (

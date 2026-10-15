@@ -63,6 +63,8 @@ test("CFG low-risk connector card shows the cancel window and automatic task con
       runActive: false, onDecision: async () => undefined,
     })));
   });
-  assert.match(JSON.stringify(renderer!.toJSON()), /task resumes automatically in a linked run/);
+  const applied = JSON.stringify(renderer!.toJSON());
+  assert.match(applied, /PubMed enabled · this session only/);
+  assert.doesNotMatch(applied, /Enable data connector|Proposed change|Confirm/);
   await act(async () => { renderer!.unmount(); });
 });

@@ -19,6 +19,13 @@ export function ConversationalConnectorCard({ request, runActive, onDecision }: 
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [request.autoApplyAt, request.state]);
+  if (request.state === "applied" || request.state === "stale") {
+    return <div className="conversation-configuration-resume" role="status">{t(
+      request.state === "applied" ? "configuration.connector.appliedSummary" : "configuration.connector.staleSummary",
+      { name: request.connectorName },
+    )}</div>;
+  }
+  if (request.state === "dismissed") return null;
   const remainingSeconds = request.autoApplyAt
     ? Math.max(0, Math.ceil((Date.parse(request.autoApplyAt) - now) / 1_000)) : undefined;
   async function decide(decision: "apply" | "dismiss") {
@@ -32,7 +39,7 @@ export function ConversationalConnectorCard({ request, runActive, onDecision }: 
   return <section aria-label={t("configuration.connector.title")} className="conversation-configuration-card">
     <div className="conversation-configuration-heading">
       <div><span className="eyebrow">{t("configuration.card.eyebrow")}</span><h3>{t("configuration.connector.title")}: {request.connectorName}</h3></div>
-      <span className="conversation-configuration-status">{t(request.state === "applied" ? "configuration.connector.applied" : request.state === "stale" ? "configuration.connector.stale" : "configuration.card.awaiting")}</span>
+      <span className="conversation-configuration-status">{t("configuration.card.awaiting")}</span>
     </div>
     <p>{request.reason === "CONNECTOR_REQUIRED_FOR_TASK"
       ? t("configuration.connector.reason", { name: request.connectorName })
@@ -44,10 +51,8 @@ export function ConversationalConnectorCard({ request, runActive, onDecision }: 
       <span>{t("configuration.connector.scope")}</span>
       <strong>{t("configuration.card.sessionScope")}</strong>
       <span>{t("configuration.card.continuation")}</span>
-      <strong>{t(request.state === "applied" ? request.runId.startsWith("user-request:")
-        ? "configuration.connector.nextRun" : "configuration.connector.autoContinuing"
-        : request.reason === "USER_REQUESTED_CONNECTOR" ? "configuration.connector.userPendingNext"
-          : "configuration.connector.currentRun")}</strong>
+      <strong>{t(request.reason === "USER_REQUESTED_CONNECTOR" ? "configuration.connector.userPendingNext"
+        : "configuration.connector.currentRun")}</strong>
     </div>
     {request.state === "awaiting_confirmation" && remainingSeconds !== undefined
       ? <p role="status">{remainingSeconds > 0
