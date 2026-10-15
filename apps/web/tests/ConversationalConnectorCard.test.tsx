@@ -65,6 +65,19 @@ test("CFG low-risk connector card shows the cancel window and automatic task con
   });
   const applied = JSON.stringify(renderer!.toJSON());
   assert.match(applied, /PubMed enabled · this session only/);
-  assert.doesNotMatch(applied, /Enable data connector|Proposed change|Confirm/);
+  const disclosure = renderer!.root.findByType("details");
+  assert.equal(disclosure.props.open, false);
+  assert.equal(renderer!.root.findAllByType("button").length, 0);
+  assert.match(applied, /A linked run was created; follow its progress below/);
+  await act(async () => {
+    const target = { open: true };
+    disclosure.props.onToggle({ target, currentTarget: target });
+  });
+  assert.equal(renderer!.root.findByType("details").props.open, true);
+  await act(async () => {
+    const target = { open: false };
+    renderer!.root.findByType("details").props.onToggle({ target, currentTarget: target });
+  });
+  assert.equal(renderer!.root.findByType("details").props.open, false);
   await act(async () => { renderer!.unmount(); });
 });

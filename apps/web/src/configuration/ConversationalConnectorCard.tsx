@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import type { ConnectorConfigurationRequest } from "@sciencediscovery/schema";
 import { useLocale } from "../i18n/index.js";
+import { ConversationalConnectorReceipt } from "./ConversationalConnectorReceipt.js";
 
 export function ConversationalConnectorCard({ request, runActive, onDecision }: {
   request: ConnectorConfigurationRequest;
@@ -20,10 +21,7 @@ export function ConversationalConnectorCard({ request, runActive, onDecision }: 
     return () => clearInterval(timer);
   }, [request.autoApplyAt, request.state]);
   if (request.state === "applied" || request.state === "stale") {
-    return <div className="conversation-configuration-resume" role="status">{t(
-      request.state === "applied" ? "configuration.connector.appliedSummary" : "configuration.connector.staleSummary",
-      { name: request.connectorName },
-    )}</div>;
+    return <ConversationalConnectorReceipt request={request} />;
   }
   if (request.state === "dismissed") return null;
   const remainingSeconds = request.autoApplyAt

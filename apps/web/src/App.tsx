@@ -228,6 +228,7 @@ import { McpServerSettings } from "./McpServerSettings.js";
 import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./ProviderModelSettings.js";
 import { ConversationalModelCard } from "./configuration/ConversationalModelCard.js";
 import { ConversationalConnectorCard } from "./configuration/ConversationalConnectorCard.js";
+import { ConversationalConnectorReceipt } from "./configuration/ConversationalConnectorReceipt.js";
 import { connectorConfigurationPresentation } from "./configuration/presentation.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
@@ -4205,6 +4206,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const { continuationByNoticeId, visibleRequests: visibleConnectorConfigurationRequests } = connectorConfigurationPresentation(
     connectorConfigurationRequests, sessionRuns, session?.messages ?? [], session?.id,
   );
+  const connectorConfigurationRequestById = new Map(connectorConfigurationRequests.map((request) => [request.id, request]));
   const composerTrigger = getComposerTrigger(message, composerTextarea.current?.selectionStart ?? message.length);
   const selectedComposerCommands = selectedSkillAuthoringCommands(message);
   const composerSuggestions: ComposerSuggestion[] = !composerTrigger ? [] : composerTrigger.symbol === "@"
@@ -4638,9 +4640,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
                         />
                       ) : block.message.kind === "configuration_notice" ? (
-                        <div className="conversation-configuration-resume" role="status">{continuationByNoticeId.has(block.message.id)
-                          ? t("configuration.connector.appliedSummary", { name: continuationByNoticeId.get(block.message.id)!.connectorName })
-                          : t("configuration.connector.resuming")}</div>
+                        <ConversationalConnectorReceipt
+                          connectorName={continuationByNoticeId.get(block.message.id)?.connectorName}
+                          request={connectorConfigurationRequestById.get(continuationByNoticeId.get(block.message.id)?.requestId ?? "")}
+                        />
                       ) : block.message.kind === "wake_notice" && block.message.runtimeNotice ? (
                         <WakeNotice agentLabel={wakeNoticeAgentLabel} notice={block.message.runtimeNotice} onOpenRecord={revealActivityRecord} />
                       ) : (
