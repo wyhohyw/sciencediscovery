@@ -68,6 +68,11 @@ test("CFG connector proposals require a user decision and preserve inherited con
   const reopened = new SessionStore(root); await reopened.load();
   assert.equal(reopened.listConnectorConfigurationRequests(session.id)[0]?.state, "applied", "proposal survives restart");
   assert.deepEqual(reopened.getSessionSettings(session.id).effective.enabledConnectorIds, ["pubmed", "uniprot"]);
+  await reopened.updateSession(session.id, { enabledConnectorIds: ["pubmed"] });
+  const requestedAgain = reopened.proposeConnectorConfiguration({ ...input, runId: "user-request:2", reason: "USER_REQUESTED_CONNECTOR" });
+  assert.notEqual(requestedAgain.id, request.id, "an old applied proposal does not block a new request after the connector is disabled");
+  assert.equal(reopened.proposeConnectorConfiguration({ ...input, runId: "user-request:3" }).id, requestedAgain.id,
+    "a pending request is reused across repeated user submissions");
   await reopened.deleteProject(project.id, project.id);
   const db = new DatabaseSync(resolve(root, "catalog.sqlite"));
   try {

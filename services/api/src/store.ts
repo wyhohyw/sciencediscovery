@@ -2240,6 +2240,12 @@ export class SessionStore {
     if (!this.connectorIds.has(input.connectorId)) throw new Error("Connector is not installed");
     const currentIds = this.getSessionSettings(session.id).effective.enabledConnectorIds;
     if (currentIds.includes(input.connectorId)) throw new Error("Connector is already enabled in this Session");
+    const pending = this.database.prepare("SELECT record_json FROM connector_configuration_requests WHERE session_id = ? AND connector_id = ? AND state = 'awaiting_confirmation' ORDER BY rowid DESC LIMIT 1")
+      .get(session.id, input.connectorId) as { record_json: string } | undefined;
+    if (pending) {
+      const proposal = JSON.parse(pending.record_json) as ConnectorConfigurationRequest;
+      if (JSON.stringify(proposal.baselineConnectorIds) === JSON.stringify(currentIds)) return proposal;
+    }
     const existing = this.database.prepare("SELECT record_json FROM connector_configuration_requests WHERE session_id = ? AND run_id = ? AND connector_id = ? LIMIT 1")
       .get(session.id, input.runId, input.connectorId) as { record_json: string } | undefined;
     if (existing) return JSON.parse(existing.record_json) as ConnectorConfigurationRequest;

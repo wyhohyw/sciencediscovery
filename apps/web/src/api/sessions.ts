@@ -15,6 +15,7 @@
 import type {
   CreatePermissionRequest,
   ConnectorConfigurationRequest,
+  ConnectorConfigurationPreflightResult,
   CreateRemoteJobRequest,
   CreateSessionRequest,
   DeletionImpact,
@@ -41,6 +42,12 @@ import type {
 import { ProjectsApiClient } from "./projects.js";
 
 export class SessionsApiClient extends ProjectsApiClient {
+  preflightConnectorConfiguration(sessionId: string, content: string): Promise<ConnectorConfigurationPreflightResult> {
+    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration/preflight`, {
+      body: JSON.stringify({ content }), method: "POST",
+    });
+  }
+
   listConnectorConfigurationRequests(sessionId: string): Promise<{ items: ConnectorConfigurationRequest[] }> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests`);
   }

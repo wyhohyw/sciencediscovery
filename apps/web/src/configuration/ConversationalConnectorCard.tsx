@@ -27,14 +27,18 @@ export function ConversationalConnectorCard({ request, runActive, onDecision }: 
       <span className="conversation-configuration-status">{t(request.state === "applied" ? "configuration.connector.applied" : request.state === "stale" ? "configuration.connector.stale" : "configuration.card.awaiting")}</span>
     </div>
     <p>{request.reason === "CONNECTOR_REQUIRED_FOR_TASK"
-      ? t("configuration.connector.reason", { name: request.connectorName }) : request.reason}</p>
+      ? t("configuration.connector.reason", { name: request.connectorName })
+      : request.reason === "USER_REQUESTED_CONNECTOR"
+        ? t("configuration.connector.userReason", { name: request.connectorName }) : request.reason}</p>
     <div className="conversation-configuration-impact">
       <span>{t("configuration.connector.change")}</span>
       <strong>{t("configuration.connector.enable", { name: request.connectorName })}</strong>
       <span>{t("configuration.connector.scope")}</span>
       <strong>{t("configuration.card.sessionScope")}</strong>
       <span>{t("configuration.card.continuation")}</span>
-      <strong>{t(request.state === "applied" ? "configuration.connector.nextRun" : "configuration.connector.currentRun")}</strong>
+      <strong>{t(request.state === "applied" ? "configuration.connector.nextRun"
+        : request.reason === "USER_REQUESTED_CONNECTOR" ? "configuration.connector.userPendingNext"
+          : "configuration.connector.currentRun")}</strong>
     </div>
     {request.state === "awaiting_confirmation" ? <div className="conversation-configuration-actions">
       <button className="primary-button" disabled={busy || runActive} onClick={() => void decide("apply")} type="button">{busy ? t("configuration.card.applying") : t("configuration.connector.confirm")}</button>

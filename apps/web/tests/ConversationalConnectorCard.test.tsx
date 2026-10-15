@@ -33,4 +33,11 @@ test("CFG connector card waits for user confirmation and shows the session-only 
     renderer!.root.findByProps({ className: "primary-button" }).props.onClick();
   });
   assert.deepEqual(decisions, ["apply"]);
+  await act(async () => {
+    renderer!.update(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ConversationalConnectorCard, {
+      request: { ...request, reason: "USER_REQUESTED_CONNECTOR" }, runActive: false,
+      onDecision: async () => undefined,
+    })));
+  });
+  assert.match(JSON.stringify(renderer!.toJSON()), /You requested PubMed for this session/);
 });

@@ -15,3 +15,9 @@ export interface ConnectorConfigurationRequest {
   createdAt: string;
   updatedAt: string;
 }
+
+export type ConnectorConfigurationPreflightResult =
+  | { status: "not_applicable" }
+  | { status: "proposal"; request: ConnectorConfigurationRequest }
+  | { status: "already_enabled"; connectorName: string }
+  | { status: "unavailable"; connectorName: string };

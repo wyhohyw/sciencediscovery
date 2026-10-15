@@ -1132,6 +1132,9 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [timelineMessageIds, setTimelineMessageIds] = useState<Readonly<Record<string, string>>>({});
   const [sessionRuns, setSessionRuns] = useState<SessionRun[]>([]);
   const [message, setMessage] = useState("");
+  const latestMessageRef = useRef(message);
+  latestMessageRef.current = message;
+  const configurationPreflightPendingRef = useRef(false);
   const [configurationRequestedSessionId, setConfigurationRequestedSessionId] = useState<string>();
   const [connectorConfigurationRequests, setConnectorConfigurationRequests] = useState<ConnectorConfigurationRequest[]>([]);
   const [configurationReceipt, setConfigurationReceipt] = useState<{
@@ -3419,6 +3422,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   async function submitMessage(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (!activeSessionId || !session || !message.trim() || session.archivedAt) return;
+    if (configurationPreflightPendingRef.current) return;
     if (message.trim() === "/web-usage") {
       try {
         const usage = await client.getWebUsage();
@@ -3441,6 +3445,37 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       return;
     }
     const submittedSessionId = activeSessionId;
+    const requestedContent = message.trim();
+    configurationPreflightPendingRef.current = true;
+    try {
+      const preflight = await client.preflightConnectorConfiguration(submittedSessionId, requestedContent);
+      if (!shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) return;
+      if (preflight.status === "proposal") {
+        setConnectorConfigurationRequests((current) => [preflight.request, ...current.filter((item) => item.id !== preflight.request.id)]);
+        setMessage((current) => current.trim() === requestedContent ? "" : current);
+        setError(undefined);
+        requestAnimationFrame(scrollToLatest);
+        return;
+      }
+      if (preflight.status === "already_enabled") {
+        pushToast("success", t("configuration.connector.title"), t("configuration.connector.alreadyEnabled", { name: preflight.connectorName }));
+        setMessage((current) => current.trim() === requestedContent ? "" : current);
+        setError(undefined);
+        return;
+      }
+      if (preflight.status === "unavailable") {
+        setError(t("configuration.connector.unavailable", { name: preflight.connectorName }));
+        return;
+      }
+    } catch (reason) {
+      if (shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) {
+        setError(reason instanceof Error ? reason : t("error.runFailed"));
+      }
+      return;
+    } finally {
+      configurationPreflightPendingRef.current = false;
+    }
+    if (latestMessageRef.current.trim() !== requestedContent) return;
     const selectedModel = models.find((item) => item.id === session.modelId);
     if (!selectedModel) {
       setConfigurationRequestedSessionId(submittedSessionId);
@@ -4705,7 +4740,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                   {visibleConnectorConfigurationRequests.map((connectorConfigurationRequest) => <ConversationalConnectorCard
                     key={connectorConfigurationRequest.id}
                     request={connectorConfigurationRequest}
-                    runActive={sessionRuns.some((run) => run.id === connectorConfigurationRequest.runId && isActiveRunStatus(run.status))}
+                    runActive={isRunning || sessionRuns.some((run) => run.id === connectorConfigurationRequest.runId && isActiveRunStatus(run.status))}
                     onDecision={(decision) => decideConversationalConnector(connectorConfigurationRequest, decision)} />)}
                   {configurationReceipt?.sessionId === session.id ? <div className="conversation-configuration-receipt" role="status">
                     <strong>{t(configurationReceipt.globalDefault ? "configuration.card.savedGlobal" : "configuration.card.saved")}: {configurationReceipt.modelName}</strong>

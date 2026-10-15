@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
+import { explicitConnectorEnableTarget } from "../configuration/explicit-connector.js";
 import { handlePluginRequest } from "../plugins/http.js";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -2360,6 +2361,32 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
 
       const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+      const connectorConfigurationPreflightMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration\/preflight$/);
+      if (connectorConfigurationPreflightMatch && request.method === "POST") {
+        const sessionId = connectorConfigurationPreflightMatch[1]!;
+        if (!store.getSession(sessionId)) return sendError(response, 404, "Session not found");
+        const body = await readJson<{ content?: unknown }>(request);
+        if (!body || typeof body.content !== "string") return sendError(response, 400, "Content is required");
+        const target = explicitConnectorEnableTarget(body.content, mcpRegistry.listManifests().map((manifest) => ({
+          id: manifest.id, name: mcpConnectorManifest(manifest).displayName ?? manifest.id,
+        })));
+        if (!target) return sendJson(response, 200, { status: "not_applicable" });
+        store.assertSessionWritable(sessionId);
+        const settings = store.getSessionSettings(sessionId).effective;
+        if (settings.enabledConnectorIds.includes(target.id)) {
+          return sendJson(response, 200, { status: "already_enabled", connectorName: target.name });
+        }
+        if (mcpCatalog.getStatus(target.id).status !== "ready"
+          || !filterEnabledMcpSources([target.id], settings.plugins).includes(target.id)) {
+          return sendJson(response, 200, { status: "unavailable", connectorName: target.name });
+        }
+        const proposal = store.proposeConnectorConfiguration({
+          sessionId, runId: `user-request:${randomUUID()}`, connectorId: target.id,
+          connectorName: target.name, reason: "USER_REQUESTED_CONNECTOR",
+        });
+        sendJson(response, 200, { status: "proposal", request: proposal });
+        return;
+      }
       const connectorConfigurationListMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration-requests$/);
       if (connectorConfigurationListMatch && request.method === "GET") {
         sendJson(response, 200, { items: store.listConnectorConfigurationRequests(connectorConfigurationListMatch[1]!) });
