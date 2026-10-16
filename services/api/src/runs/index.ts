@@ -881,7 +881,8 @@ async function executeAgentRun(
   // A turn the runtime woke on its own has no user-authored body, so it is
   // recorded as a wake notice rather than as something the researcher typed.
   const userMessage = configurationResume
-    ? { id: persistedRun!.userMessageId!, role: "user" as const, content: "", createdAt: new Date().toISOString(), kind: "configuration_notice" as const }
+    ? { id: persistedRun!.userMessageId!, role: "user" as const, content: "", createdAt: new Date().toISOString(),
+      kind: "configuration_notice" as const, runtimeNotice: deliveredNotice }
     : await store.appendMessage(sessionId, "user", visibleContent, undefined,
       composerReferences, body.annotationIds, configurationContinuation ? "configuration_notice"
         : deliveredNotice && !visibleContent ? "wake_notice" : "message",
@@ -3255,8 +3256,8 @@ export function scheduleSessionRuns(
               : next.configurationResume ? {
                 executions: 0, timers: 0,
                 prompt: next.configurationResume.decision === "apply"
-                  ? `The user approved enabling ${next.configurationResume.connectorName} in this Session. Resume the original task from its committed checkpoint. The prior tool calls and outputs are already in your history. Do not repeat completed actions. If an external outcome is uncertain, ask the user. This is not a new user request.`
-                  : `The user declined enabling ${next.configurationResume.connectorName}. Resume the original task from its committed checkpoint. Use a safe alternative if one exists; otherwise explain the limitation. Do not repeat completed actions. This is not a new user request.`,
+                  ? `The user approved enabling ${next.configurationResume.connectorName} in this Session, and the connector is now enabled. Any earlier tool result saying it is awaiting confirmation describes the past and is no longer current. Resume the original task from its committed checkpoint and use the connector where the task requires it. Do not ask for confirmation again or repeat completed actions. If an external outcome is uncertain, ask the user. This is not a new user request.`
+                  : `The user declined enabling ${next.configurationResume.connectorName}. Any earlier tool result saying it is awaiting confirmation describes the past and is no longer current. Resume the original task from its committed checkpoint. Use a safe alternative if one exists; otherwise explain the limitation. Do not ask for confirmation again or repeat completed actions. This is not a new user request.`,
               } : next.configurationContinuation ? {
                 executions: 0, timers: 0,
                 prompt: `The user approved enabling ${next.configurationContinuation.connectorName} for this Session. Continue the existing task from the previous run. Its completed tool calls and artifacts are already in the conversation history. Do not repeat a side-effecting action unless you can verify that it is safe; if its outcome is unknown, ask the user. The user has not submitted a new task.`,
