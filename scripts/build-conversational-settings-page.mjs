@@ -10,9 +10,10 @@ import { gfm, gfmHtml } from '../node_modules/.pnpm/node_modules/micromark-exten
 const root = new URL('../', import.meta.url);
 const docsRoot = new URL('docs/zh/explanation/', root);
 const sources = [
-  { id: 'design', label: '完整设计 v11', english: 'COMPLETE PRODUCT DESIGN', filename: 'conversational-settings.v11.md', version: 'v11 / 完整整合版 · 2026.10.19', note: '完整产品设计，可从头独立阅读。已实现范围与后续目标在各节明确区分，无需先拼接旧版本。' },
+  { id: 'design', label: '完整设计 v12 · 评审版', english: 'PRODUCT REVIEW · SCENARIOS & DIAGRAMS', filename: 'conversational-settings.v12.md', version: 'v12 / 评审讲解版 · 2026.10.19', note: '从用户问题和一条 PubMed 任务讲起，配六张流程与卡片示意。无需先了解 issue；当前实现与目标设计分别说明。' },
   { id: 'development', label: '完整开发文档 v4', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v4.md', version: 'v4 / 完整整合版 · 2026.10.19', note: '完整工程规格，覆盖模块、契约、数据、暂停恢复、前端和测试。明确区分现有接口与目标通用框架。' },
-  { id: 'status', label: '当前实现与实测', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v3.md', version: 'v3 / 更新于 2026.10.19', note: '运行实现基线 a88d9283；真实模型验证日期为 2026.10.16。此记录说明实际覆盖范围，不把全部设计验收标为通过。' },
+  { id: 'status', label: '当前实现与实测', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v4.md', version: 'v4 / 更新于 2026.10.19', note: '运行实现基线 a88d9283；真实模型验证日期为 2026.10.16。此记录说明实际覆盖范围，不把全部设计验收标为通过。' },
+  { id: 'design-v11', label: '历史完整设计 v11', english: 'COMPLETE PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v11.md', version: 'v11 / 历史完整规格', archived: true, note: '历史完整设计，当前评审表达已在 v12 中重写；功能边界与技术约束保持可追溯。' },
   { id: 'interaction', label: '历史交互修订 v10', english: 'INTERACTION REVISION · ARCHIVE', filename: 'conversational-settings.v10.md', version: 'v10 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整设计 v11。当前阅读可直接从完整设计开始。' },
   { id: 'engineering', label: '历史恢复规格 v3', english: 'RECOVERY REVISION · ARCHIVE', filename: 'conversational-settings-development.v3.md', version: 'v3 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整开发文档 v4；保留供追溯。' },
   { id: 'archive-design', label: '历史产品设计 v1', english: 'PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v1.md', version: 'v1 / 2026.10.12 · 历史基线', archived: true, note: '历史设计基线，保留原文。完整设计 v11 已统一后续交互、作用范围和暂停恢复决策。' },
@@ -53,10 +54,25 @@ function architectureDiagram(source) {
   </figure>`;
 }
 
+async function embedReviewFigures(html) {
+  const pattern = /<p><img src="(assets\/conversational-settings\/[0-9]{2}-[a-z-]+\.svg)" alt="([^"]*)"\s*\/?>\s*<\/p>/g;
+  for (const match of Array.from(html.matchAll(pattern))) {
+    const svg = (await readFile(new URL(match[1], docsRoot), 'utf8')).replaceAll('\r\n', '\n');
+    if (/<(?:script|foreignObject|image|use)\b|\bon\w+\s*=|(?:href|src)\s*=/i.test(svg)) {
+      throw new Error(`Review figure must be a self-contained static SVG: ${match[1]}`);
+    }
+    const dimensions = svg.match(/<svg\b[^>]*\bwidth="(\d+)"[^>]*\bheight="(\d+)"/);
+    if (!dimensions) throw new Error(`Missing review figure dimensions: ${match[1]}`);
+    const image = `<figure class="review-figure"><img src="data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}" alt="${match[2]}" width="${dimensions[1]}" height="${dimensions[2]}"><figcaption>${escapeHtml(plain(match[2]))}<a href="${match[1]}" download>下载矢量图 ↗</a></figcaption></figure>`;
+    html = html.replace(match[0], image);
+  }
+  return html;
+}
+
 const documents = [];
 for (const source of sources) {
   const raw = (await readFile(new URL(source.filename, docsRoot), 'utf8')).replaceAll('\r\n', '\n');
-  const sections = splitDocument(raw).map((part, index) => {
+  const sections = await Promise.all(splitDocument(raw).map(async (part, index) => {
     const id = `${source.id}-${String(index).padStart(2, '0')}`;
     const title = part.title.replace(/^\d+\.\s*/, '');
     const outline = [];
@@ -67,17 +83,18 @@ for (const source of sources) {
       return `<h${level} id="${headingId}">${content}</h${level}>`;
     });
     html = html.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, (_, value) => architectureDiagram(value));
+    html = await embedReviewFigures(html);
     html = html.replace(/<table>/g, '<div class="table-scroll" tabindex="0" role="region" aria-label="可横向滚动的数据表"><table>').replace(/<\/table>/g, '</table></div>');
     html = html.replace(/<pre><code(?: class="language-([^"<>]+)")?>([\s\S]*?)<\/code><\/pre>/g, (_, language = 'text', value) => `<div class="code-block"><div class="code-toolbar"><span>${escapeHtml(language.toUpperCase())}</span><button type="button" class="copy-code" aria-label="复制 ${escapeHtml(language)} 代码">复制代码</button></div><pre><code${language !== 'text' ? ` class="language-${escapeHtml(language)}"` : ''}>${value}</code></pre></div>`);
     for (const target of sources) {
       html = html.replaceAll(`href="${target.filename}"`, `href="#${target.id}-00"`);
     }
     return { id, index, title, originalTitle: part.title, html, outline, searchText: part.markdown };
-  });
+  }));
   documents.push({ ...source, raw, sha256: createHash('sha256').update(raw).digest('hex'), sections });
 }
 
-const expectedSections = { design: 14, development: 17, status: 8, interaction: 4, engineering: 4, 'archive-design': 9, 'archive-development': 15 };
+const expectedSections = { design: 14, development: 17, status: 8, 'design-v11': 14, interaction: 4, engineering: 4, 'archive-design': 9, 'archive-development': 15 };
 for (const doc of documents) if (doc.sections.length !== expectedSections[doc.id]) {
   throw new Error(`Document structure changed: ${doc.filename}; update chapter links before rebuilding.`);
 }

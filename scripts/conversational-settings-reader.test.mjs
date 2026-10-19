@@ -65,3 +65,22 @@ test('generated offline HTML contains every chapter in order before any JavaScri
     for (const heading of section.outline) assert.ok(body.includes(`id="${heading.id}"`));
   }
 });
+
+test('review diagrams are distinct, accessible SVGs embedded without network dependencies', async () => {
+  const base = new URL('../docs/zh/explanation/', import.meta.url);
+  const page = await readFile(new URL('conversational-settings.html', base), 'utf8');
+  const body = page.slice(page.indexOf('<body>'), page.indexOf('<script type="application/json"'));
+  const figures = Array.from(body.matchAll(/<figure class="review-figure"><img src="data:image\/svg\+xml;base64,([^"]+)" alt="([^"]+)" width="(\d+)" height="(\d+)"><figcaption>[\s\S]*?<a href="(assets\/conversational-settings\/[^"<>]+\.svg)" download>/g));
+  assert.equal(figures.length, 6);
+  assert.equal(new Set(figures.map(figure => figure[1])).size, 6);
+  for (const [, encoded, description, width, height, file] of figures) {
+    const svg = Buffer.from(encoded, 'base64').toString('utf8');
+    assert.equal(svg, (await readFile(new URL(file, base), 'utf8')).replaceAll('\r\n', '\n'));
+    assert.match(description, /^图 [1-6]：/);
+    assert.equal(width, '1040');
+    assert.ok(Number(height) > 500);
+    assert.match(svg, /<title>图 [1-6]：/);
+    assert.doesNotMatch(svg, /<(?:script|foreignObject|image|use)\b|\bon\w+\s*=|(?:href|src)\s*=/i);
+  }
+  assert.doesNotMatch(body, /<img src="assets\//);
+});
