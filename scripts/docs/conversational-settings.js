@@ -28,10 +28,12 @@
 
   function makeNav() {
     for (const doc of documents) {
-      const group = document.createElement(doc.archived ? 'details' : 'div');
+      const group = document.createElement('details');
       group.className = 'nav-group';
       group.dataset.document = doc.id;
-      const label = document.createElement(doc.archived ? 'summary' : 'div');
+      group.dataset.primary = String(!doc.archived);
+      group.open = doc.id === 'design';
+      const label = document.createElement('summary');
       label.className = 'nav-group-label';
       const name = document.createElement('span');
       name.textContent = doc.label;
@@ -60,8 +62,15 @@
   function setActiveNavigation(id) {
     document.querySelectorAll('#document-nav [aria-current]').forEach(link => link.removeAttribute('aria-current'));
     const selected = id ? document.querySelector(`[data-section="${id}"]`) : document.querySelector('.overview-link');
-    const historicalGroup = selected?.closest('details.nav-group');
-    if (historicalGroup) historicalGroup.open = true;
+    const activeGroup = selected?.closest('details.nav-group');
+    if (activeGroup) {
+      if (activeGroup.dataset.primary === 'true') {
+        document.querySelectorAll('details.nav-group[data-primary="true"]').forEach(group => {
+          group.open = group === activeGroup;
+        });
+      }
+      activeGroup.open = true;
+    }
     selected?.setAttribute('aria-current', 'page');
     selected?.scrollIntoView({ block: 'nearest' });
   }
@@ -175,7 +184,7 @@
     const items = query
       ? sections.filter(section => `${section.originalTitle}\n${section.searchText}`.toLocaleLowerCase().includes(query))
           .sort((a, b) => Number(b.title.toLocaleLowerCase().includes(query)) - Number(a.title.toLocaleLowerCase().includes(query)))
-      : sections.filter(section => ['status-01', 'status-03', 'status-05', 'status-06'].includes(section.id));
+      : sections.filter(section => ['design-03', 'design-08', 'development-06', 'development-09', 'status-06'].includes(section.id));
     $('search-summary').textContent = query ? `找到 ${items.length} 个相关章节` : '常用章节';
     for (const section of items) {
       const button = document.createElement('button');
@@ -236,7 +245,7 @@
   function preparePrint() {
     const target = $('print-content');
     if (target.childElementCount) return;
-    for (const source of documents) {
+    for (const source of documents.filter(source => !source.archived)) {
       const documentBlock = document.createElement('div');
       documentBlock.className = 'print-document';
       const title = document.createElement('h1');
