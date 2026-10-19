@@ -10,15 +10,15 @@ import { gfm, gfmHtml } from '../node_modules/.pnpm/node_modules/micromark-exten
 const root = new URL('../', import.meta.url);
 const docsRoot = new URL('docs/zh/explanation/', root);
 const sources = [
-  { id: 'design', label: '完整设计 v14 · 评审版', english: 'PRODUCT REVIEW · SCENARIOS & DIAGRAMS', filename: 'conversational-settings.v14.md', version: 'v14 / 项目评审版 · 2026.10.19', note: '面向熟悉项目的评审人员，聚焦配置痛点、关键设计取舍与 PubMed 交互闭环；配六张图，区分当前实现与目标架构。' },
-  { id: 'development', label: '完整开发文档 v4', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v4.md', version: 'v4 / 完整整合版 · 2026.10.19', note: '完整工程规格，覆盖模块、契约、数据、暂停恢复、前端和测试。明确区分现有接口与目标通用框架。' },
-  { id: 'research', label: '竞品与底座调研 v1', english: 'PRODUCT PATTERNS & FRAMEWORK REUSE', filename: 'conversational-settings-research.v1.md', version: 'v1 / 官方文档与源码核对 · 2026.10.19', note: '比较 Codex、OpenCode、WorkBuddy 与 openJiuwen core / WorkSwarm。区分产品行为、源码能力、依赖版本与接入建议，不把上游组件存在当作本项目集成已通过。' },
-  { id: 'status', label: '当前实现与实测', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v4.md', version: 'v4 / 更新于 2026.10.19', note: '运行实现基线 a88d9283；真实模型验证日期为 2026.10.16。此记录说明实际覆盖范围，不把全部设计验收标为通过。' },
-  { id: 'design-v11', label: '历史完整设计 v11', english: 'COMPLETE PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v11.md', version: 'v11 / 历史完整规格', archived: true, note: '历史完整设计，当前评审表达已在 v14 中重写；功能边界与技术约束保持可追溯。' },
+  { id: 'design', label: '完整设计 v15 · 复用方案', english: 'PRODUCT REVIEW · SCENARIOS & DIAGRAMS', filename: 'conversational-settings.v15.md', version: 'v15 / 复用与接入方案 · 2026.10.19', note: '面向项目评审，明确已有能力复用、自研协调层与双执行器接入条件；配六张图，新增目标要求不代表已交付。' },
+  { id: 'development', label: '完整开发文档 v5', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v5.md', version: 'v5 / 复用与桥接合同 · 2026.10.19', note: '完整工程规格：复用来源、依赖门槛、本地/外部提交、凭据桥接、生效与恢复端口、工作包和验收；目标接口仍待实现。' },
+  { id: 'research', label: '竞品与底座调研 v2', english: 'PRODUCT PATTERNS & FRAMEWORK REUSE', filename: 'conversational-settings-research.v2.md', version: 'v2 / 结论已纳入设计与开发 · 2026.10.19', note: '比较 Codex、OpenCode、WorkBuddy 与 openJiuwen core / WorkSwarm。区分产品行为、源码能力、依赖版本与接入建议，不把上游组件存在当作本项目集成已通过。' },
+  { id: 'status', label: '当前实现与实测', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v5.md', version: 'v5 / 更新于 2026.10.19', note: '运行实现基线 a88d9283；真实模型验证日期为 2026.10.16。此记录说明实际覆盖范围，不把全部设计验收标为通过。' },
+  { id: 'design-v11', label: '历史完整设计 v11', english: 'COMPLETE PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v11.md', version: 'v11 / 历史完整规格', archived: true, note: '历史完整设计，当前评审与复用方案见 v15；功能边界与技术约束保持可追溯。' },
   { id: 'interaction', label: '历史交互修订 v10', english: 'INTERACTION REVISION · ARCHIVE', filename: 'conversational-settings.v10.md', version: 'v10 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整设计 v11。当前阅读可直接从完整设计开始。' },
   { id: 'engineering', label: '历史恢复规格 v3', english: 'RECOVERY REVISION · ARCHIVE', filename: 'conversational-settings-development.v3.md', version: 'v3 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整开发文档 v4；保留供追溯。' },
   { id: 'archive-design', label: '历史产品设计 v1', english: 'PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v1.md', version: 'v1 / 2026.10.12 · 历史基线', archived: true, note: '历史设计基线，保留原文。完整设计 v11 已统一后续交互、作用范围和暂停恢复决策。' },
-  { id: 'archive-development', label: '历史开发规格 v1', english: 'ENGINEERING GUIDE · ARCHIVE', filename: 'conversational-settings-development.v1.md', version: 'v1 / 2026.10.12 · 历史基线', archived: true, note: '历史目标架构，保留原文。请优先阅读完整开发文档 v4，其中已校正接口、状态和实现范围。' },
+  { id: 'archive-development', label: '历史开发规格 v1', english: 'ENGINEERING GUIDE · ARCHIVE', filename: 'conversational-settings-development.v1.md', version: 'v1 / 2026.10.12 · 历史基线', archived: true, note: '历史目标架构，保留原文。请优先阅读完整开发文档 v5，其中已校正接口、状态和实现范围。' },
 ];
 
 const escapeHtml = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');

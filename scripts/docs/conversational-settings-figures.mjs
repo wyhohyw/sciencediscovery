@@ -143,24 +143,22 @@ const figures = [];
 }
 
 {
-  let body = text(36, 44, '公共流程复用，领域规则分别实现', { size: 28, weight: 700 });
-  body += text(36, 76, '目标架构示意：通用公共层尚未完整提取，不能视为全部设置已经接入。', { size: 18, color: c.amber });
-  body += box(48, 110, 440, 88, 'Agent：说明任务需要什么', ['只能检查和提案，不能批准自己的变更'], { fill: c.blueSoft, stroke: '#b9cfdf', size: 22 });
-  body += box(552, 110, 440, 88, '用户：补缺项并决定', ['确认具体变更、验证动作与影响范围'], { fill: c.blueSoft, stroke: '#b9cfdf', size: 22 });
-  body += arrow('268,198 268,238') + arrow('772,198 772,238');
-  body += box(48, 240, 944, 170, '目标公共配置服务', ['共用：卡片与输入描述 → 变更预览 → 用户决定 → 验证与保存', '共用：结果记录、重复操作处理，以及新配置生效和任务恢复协调', '正式设置仍写入原来的领域存储，不另存一套配置值。'], { fill: c.amberSoft, stroke: '#bf9854', dashed: true, size: 25 });
-  const adapters = [
-    [48, '模型适配器', ['协议、地址、凭据', '模型发现、验证与绑定']],
-    [374, '连接器适配器', ['已安装与就绪检查', '会话启用与工具重建']],
-    [700, '其他设置适配器', ['例如超时、代理、Runner', '按类型接入，尚待实现']],
-  ];
-  adapters.forEach(([x, title, lines]) => {
-    body += arrow(`${x + 146},410 ${x + 146},452`);
-    body += box(x, 454, 292, 114, title, lines, { fill: title === '连接器适配器' ? c.soft : '#fff', size: 22 });
-    body += arrow(`${x + 146},568 ${x + 146},606`);
-  });
-  body += box(48, 608, 944, 90, '复用已有设置、模型和凭据存储', ['每个适配器负责领域校验与影响范围，公共流程负责统一组织。'], { fill: c.soft, stroke: c.green, size: 23 });
-  figures.push(['06-shared-architecture.svg', svg('图 6：公共配置机制与领域适配器分工', 732, body)]);
+  let body = text(36, 44, '复用已有能力，把自研集中在配置协调', { size: 28, weight: 700 });
+  body += text(36, 76, '目标接入架构：原生 PubMed 路径已验证；上游模块仍需按版本适配与验收。', { size: 18, color: c.muted });
+  body += box(32, 116, 976, 84, '复用本项目交互：Agent 提案 → 用户决定 → 可展开回执', ['ModelConnectWizard / 连接器卡片 / ProcessRecord'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 23 });
+  body += arrow('520,200 520,238');
+  body += box(32, 240, 976, 136, '本项目待补齐：统一配置协调', ['能力与字段归一化 / 变更预览 / 范围和版本检查 / 配置决定', '本地条件事务或外部操作回执；保存、激活、恢复分别记录。'], { fill: c.amberSoft, stroke: '#bf9854', titleColor: c.amber, size: 25 });
+  body += arrow('270,376 270,414') + arrow('770,376 770,414');
+  body += box(32, 416, 476, 142, '本项目现有领域服务', ['模型向导 / 连接器目录 / 凭据存储', '保留原有正式配置来源'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 22 });
+  body += box(532, 416, 476, 142, 'WorkSwarm 领域控制面 · 待接入', ['凭据 Schema / config / MCP 连接与重载', '桥接版本、幂等回执与生效核对'], { fill: c.soft, stroke: c.green, titleColor: c.green, dashed: true, size: 21 });
+  body += arrow('270,558 270,596') + arrow('770,558 770,596');
+  body += box(32, 598, 976, 110, '本项目待补齐：执行器恢复桥接', ['绑定 request / run / Session / interrupt，协调 Stop 与等待状态', '设置已保存 → 对目标任务生效 → 原 run 继续'], { fill: c.amberSoft, stroke: '#bf9854', titleColor: c.amber, size: 24 });
+  body += arrow('270,708 270,746') + arrow('770,708 770,746');
+  body += box(32, 748, 476, 116, 'Native · 复用现有检查点', ['当前 PubMed 同 run 路径已验证', '公共端口提取及其他设置仍待完成'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 22 });
+  body += box(532, 748, 476, 116, 'core / WorkSwarm · 待桥接', ['复用 interrupt / resume / checkpointer', '版本与集成验收通过后开放同 run'], { fill: c.soft, stroke: c.green, titleColor: c.green, dashed: true, size: 22 });
+  body += text(36, 905, '正式设置只存一处；远端 RPC 在本地事务外处理。', { size: 19, weight: 700, color: c.ink });
+  body += text(36, 938, '蓝：本项目已有　｜　绿虚线：上游已有、待适配　｜　橙：本项目待实现', { size: 18, color: c.muted });
+  figures.push(['06-reuse-boundaries.svg', svg('图 6：已有能力复用与本项目待实现的接入边界', 974, body)]);
 }
 
 for (const [name, content] of figures) await writeFile(new URL(name, output), content + '\n', 'utf8');
