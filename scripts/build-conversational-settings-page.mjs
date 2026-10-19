@@ -12,6 +12,7 @@ const docsRoot = new URL('docs/zh/explanation/', root);
 const sources = [
   { id: 'design', label: '完整设计 v14 · 评审版', english: 'PRODUCT REVIEW · SCENARIOS & DIAGRAMS', filename: 'conversational-settings.v14.md', version: 'v14 / 项目评审版 · 2026.10.19', note: '面向熟悉项目的评审人员，聚焦配置痛点、关键设计取舍与 PubMed 交互闭环；配六张图，区分当前实现与目标架构。' },
   { id: 'development', label: '完整开发文档 v4', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v4.md', version: 'v4 / 完整整合版 · 2026.10.19', note: '完整工程规格，覆盖模块、契约、数据、暂停恢复、前端和测试。明确区分现有接口与目标通用框架。' },
+  { id: 'research', label: '竞品与底座调研 v1', english: 'PRODUCT PATTERNS & FRAMEWORK REUSE', filename: 'conversational-settings-research.v1.md', version: 'v1 / 官方文档与源码核对 · 2026.10.19', note: '比较 Codex、OpenCode、WorkBuddy 与 openJiuwen core / WorkSwarm。区分产品行为、源码能力、依赖版本与接入建议，不把上游组件存在当作本项目集成已通过。' },
   { id: 'status', label: '当前实现与实测', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v4.md', version: 'v4 / 更新于 2026.10.19', note: '运行实现基线 a88d9283；真实模型验证日期为 2026.10.16。此记录说明实际覆盖范围，不把全部设计验收标为通过。' },
   { id: 'design-v11', label: '历史完整设计 v11', english: 'COMPLETE PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v11.md', version: 'v11 / 历史完整规格', archived: true, note: '历史完整设计，当前评审表达已在 v14 中重写；功能边界与技术约束保持可追溯。' },
   { id: 'interaction', label: '历史交互修订 v10', english: 'INTERACTION REVISION · ARCHIVE', filename: 'conversational-settings.v10.md', version: 'v10 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整设计 v11。当前阅读可直接从完整设计开始。' },
@@ -94,7 +95,7 @@ for (const source of sources) {
   documents.push({ ...source, raw, sha256: createHash('sha256').update(raw).digest('hex'), sections });
 }
 
-const expectedSections = { design: 14, development: 17, status: 8, 'design-v11': 14, interaction: 4, engineering: 4, 'archive-design': 9, 'archive-development': 15 };
+const expectedSections = { design: 14, development: 17, research: 11, status: 8, 'design-v11': 14, interaction: 4, engineering: 4, 'archive-design': 9, 'archive-development': 15 };
 for (const doc of documents) if (doc.sections.length !== expectedSections[doc.id]) {
   throw new Error(`Document structure changed: ${doc.filename}; update chapter links before rebuilding.`);
 }
