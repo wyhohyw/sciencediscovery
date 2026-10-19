@@ -1,15 +1,22 @@
 (() => {
   'use strict';
+  /* READING_POSITION */
   const documents = JSON.parse(document.getElementById('document-data').textContent);
   const sections = documents.flatMap(doc => doc.sections.map(section => ({ ...section, document: doc })));
   const byId = new Map(sections.map(section => [section.id, section]));
+  const byAnchor = new Map(sections.flatMap(section => [
+    [section.id, section], ...section.outline.map(heading => [heading.id, section]),
+  ]));
   const $ = id => document.getElementById(id);
   const navGroups = $('nav-groups');
-  const overview = $('overview-view');
-  const reader = $('reader-view');
+  const chapters = sections.map(section => ({
+    section,
+    element: section.index === 0 ? $(`document-${section.document.id}`) : $(section.id),
+  }));
   const searchDialog = $('search-dialog');
   const searchInput = $('search-input');
-  let activeSection = null;
+  let activeSection;
+  let readingFrame = 0;
   let toastTimer;
 
   function notify(message) {
@@ -71,8 +78,15 @@
       }
       activeGroup.open = true;
     }
-    selected?.setAttribute('aria-current', 'page');
-    selected?.scrollIntoView({ block: 'nearest' });
+    selected?.setAttribute('aria-current', 'location');
+    // Scroll the navigation container only, never the reading surface.
+    if (selected && window.innerWidth > 850) {
+      const nav = $('document-nav');
+      const item = selected.getBoundingClientRect();
+      const bounds = nav.getBoundingClientRect();
+      if (item.top < bounds.top + 8) nav.scrollTop += item.top - bounds.top - 8;
+      else if (item.bottom > bounds.bottom - 8) nav.scrollTop += item.bottom - bounds.bottom + 8;
+    }
   }
 
   function renderOutline(section) {
@@ -98,59 +112,76 @@
     });
   }
 
-  function renderPagination(section) {
-    const pagination = $('chapter-pagination');
-    pagination.replaceChildren();
-    const index = sections.findIndex(item => item.id === section.id);
-    for (const [neighbor, label] of [[sections[index - 1], '← 上一章'], [sections[index + 1], '下一章 →']]) {
-      if (!neighbor) {
-        pagination.append(document.createElement('span'));
-        continue;
-      }
-      const link = document.createElement('a');
-      link.href = `#${neighbor.id}`;
-      const meta = document.createElement('small');
-      meta.textContent = label;
-      const title = document.createElement('b');
-      title.textContent = neighbor.title;
-      link.append(meta, title);
-      pagination.append(link);
+  function readHash() {
+    try { return decodeURIComponent(location.hash.slice(1)); }
+    catch { return ''; }
+  }
+
+  function setCurrentSection(section) {
+    if (activeSection === section) return;
+    activeSection = section;
+    $('breadcrumb-current').textContent = section ? `${section.document.label} / ${section.title}` : '总览';
+    setActiveNavigation(section?.id);
+    $('article-outline').hidden = !section;
+    $('download-source').textContent = `下载${section?.document.label ?? documents[0].label} Markdown`;
+    if (!section) {
+      document.title = '对话内按需配置 · ScienceDiscovery 文档';
+      return;
     }
+    renderOutline(section);
+    document.title = `${section.title} · 对话内按需配置`;
   }
 
   function renderRoute() {
-    const hash = decodeURIComponent(location.hash.slice(1));
-    const section = byId.get(hash) || sections.find(item => hash.startsWith(`${item.id}-h`));
-    activeSection = section || null;
-    overview.hidden = Boolean(section);
-    reader.hidden = !section;
-    $('breadcrumb-current').textContent = section ? `${section.document.label} / ${section.title}` : '总览';
-    setActiveNavigation(section?.id);
+    const hash = readHash();
+    const section = byAnchor.get(hash);
+    if (hash !== 'overview' && !section) return;
     closeNavigation();
     if (!section) {
-      document.title = '对话内按需配置 · ScienceDiscovery 文档';
-      window.scrollTo(0, 0);
-      updateProgress();
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      setCurrentSection(null);
+      requestReadingUpdate();
       return;
     }
-    $('article-eyebrow').textContent = `${section.document.english}  /  ${String(section.index).padStart(2, '0')}`;
-    $('article-title').textContent = section.originalTitle;
-    $('article-document').textContent = section.document.label;
-    $('article-version').textContent = section.document.version;
-    $('document-notice').textContent = section.document.note;
-    $('document-notice').classList.toggle('is-archive', Boolean(section.document.archived));
-    $('article-footer-note').textContent = section.document.archived
-      ? '历史基线原文；当前行为请查阅最新规格与实测范围。'
-      : '实现状态和测试范围以“当前实现与实测”为准。';
-    $('article-count').textContent = section.index === 0 ? '文档说明' : `第 ${section.index} / ${section.document.sections.length - 1} 章`;
-    $('article-content').innerHTML = section.html;
-    renderOutline(section);
-    renderPagination(section);
-    document.title = `${section.title} · 对话内按需配置`;
+    const target = hash === section.id && section.index === 0
+      ? $(`document-${section.document.id}`) : $(hash) ?? $(section.id);
+    const historyDocument = target.closest('details.archive-document');
+    if (historyDocument) historyDocument.open = true;
+    setCurrentSection(section);
     requestAnimationFrame(() => {
-      if (hash !== section.id && document.getElementById(hash)) document.getElementById(hash).scrollIntoView();
-      else window.scrollTo(0, 0);
-      updateProgress();
+      target.scrollIntoView({ block: 'start', behavior: 'instant' });
+      requestReadingUpdate();
+    });
+  }
+
+  function updateReadingPosition() {
+    const positions = chapters.map(({ section, element }) => ({
+      id: section.id,
+      top: element.getBoundingClientRect().top,
+      visible: element.getClientRects().length > 0,
+    }));
+    const id = currentReadingSection(positions, {
+      line: document.querySelector('.topbar').getBoundingClientRect().height + 40,
+      atBottom: window.scrollY > 0 && window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4,
+    });
+    const previous = activeSection?.id;
+    const section = byId.get(id) ?? null;
+    setCurrentSection(section);
+    if (previous !== section?.id) {
+      const hash = readHash();
+      if (!(section && byAnchor.get(hash)?.id === section.id)) {
+        try { history.replaceState(null, '', `#${id ?? 'overview'}`); }
+        catch { /* Some local-file environments disallow history changes. */ }
+      }
+    }
+    updateProgress();
+  }
+
+  function requestReadingUpdate() {
+    if (readingFrame) return;
+    readingFrame = requestAnimationFrame(() => {
+      readingFrame = 0;
+      updateReadingPosition();
     });
   }
 
@@ -230,8 +261,7 @@
   }
 
   function downloadMarkdown() {
-    if (!activeSection) return;
-    const source = activeSection.document;
+    const source = activeSection?.document ?? documents[0];
     const url = URL.createObjectURL(new Blob([source.raw], { type: 'text/markdown;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
@@ -272,9 +302,23 @@
 
   makeNav();
   renderRoute();
+  requestReadingUpdate();
   window.addEventListener('hashchange', renderRoute);
-  window.addEventListener('scroll', updateProgress, { passive: true });
-  window.addEventListener('resize', updateProgress);
+  window.addEventListener('scroll', requestReadingUpdate, { passive: true });
+  window.addEventListener('resize', requestReadingUpdate);
+  window.addEventListener('load', requestReadingUpdate);
+  $('article-content').addEventListener('toggle', requestReadingUpdate, true);
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[href^="#"]');
+    if (!link || event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const href = link.getAttribute('href');
+    let hash;
+    try { hash = decodeURIComponent(href.slice(1)); } catch { return; }
+    if (hash !== 'overview' && !byAnchor.has(hash)) return;
+    event.preventDefault();
+    if (location.hash === href) renderRoute();
+    else location.hash = href;
+  });
   $('search-launch').addEventListener('click', () => openSearch());
   $('close-search').addEventListener('click', () => searchDialog.close());
   searchInput.addEventListener('input', renderSearch);
@@ -303,7 +347,9 @@
     else notify('浏览器未允许复制，请选中代码手动复制');
   });
   $('copy-link').addEventListener('click', async () => {
-    const link = location.href;
+    const url = new URL(location.href);
+    url.hash = activeSection?.id ?? 'overview';
+    const link = url.href;
     if (await copyText(link)) notify('章节链接已复制');
     else {
       $('link-value').value = link;

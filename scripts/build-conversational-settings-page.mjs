@@ -12,7 +12,7 @@ const docsRoot = new URL('docs/zh/explanation/', root);
 const sources = [
   { id: 'design', label: '完整设计 v11', english: 'COMPLETE PRODUCT DESIGN', filename: 'conversational-settings.v11.md', version: 'v11 / 完整整合版 · 2026.10.19', note: '完整产品设计，可从头独立阅读。已实现范围与后续目标在各节明确区分，无需先拼接旧版本。' },
   { id: 'development', label: '完整开发文档 v4', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v4.md', version: 'v4 / 完整整合版 · 2026.10.19', note: '完整工程规格，覆盖模块、契约、数据、暂停恢复、前端和测试。明确区分现有接口与目标通用框架。' },
-  { id: 'status', label: '当前实现与实测', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v2.md', version: 'v2 / 更新于 2026.10.19', note: '运行实现基线 a88d9283；真实模型验证日期为 2026.10.16。此记录说明实际覆盖范围，不把全部设计验收标为通过。' },
+  { id: 'status', label: '当前实现与实测', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v3.md', version: 'v3 / 更新于 2026.10.19', note: '运行实现基线 a88d9283；真实模型验证日期为 2026.10.16。此记录说明实际覆盖范围，不把全部设计验收标为通过。' },
   { id: 'interaction', label: '历史交互修订 v10', english: 'INTERACTION REVISION · ARCHIVE', filename: 'conversational-settings.v10.md', version: 'v10 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整设计 v11。当前阅读可直接从完整设计开始。' },
   { id: 'engineering', label: '历史恢复规格 v3', english: 'RECOVERY REVISION · ARCHIVE', filename: 'conversational-settings-development.v3.md', version: 'v3 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整开发文档 v4；保留供追溯。' },
   { id: 'archive-design', label: '历史产品设计 v1', english: 'PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v1.md', version: 'v1 / 2026.10.12 · 历史基线', archived: true, note: '历史设计基线，保留原文。完整设计 v11 已统一后续交互、作用范围和暂停恢复决策。' },
@@ -84,9 +84,24 @@ for (const doc of documents) if (doc.sections.length !== expectedSections[doc.id
 const json = JSON.stringify(documents).replaceAll('<', '\\u003c');
 const template = await readFile(new URL('scripts/docs/conversational-settings.template.html', root), 'utf8');
 const styles = await readFile(new URL('scripts/docs/conversational-settings.css', root), 'utf8');
-const script = await readFile(new URL('scripts/docs/conversational-settings.js', root), 'utf8');
+const readingPosition = await readFile(new URL('scripts/docs/conversational-settings-reading.mjs', root), 'utf8');
+const script = (await readFile(new URL('scripts/docs/conversational-settings.js', root), 'utf8'))
+  .replace('/* READING_POSITION */', readingPosition.replace(/^export function /m, 'function '));
 if (template.split('<!-- DOCUMENT_DATA -->').length !== 2) throw new Error('Expected one document-data insertion point');
-const anchors = new Set(['overview', ...Array.from(template.matchAll(/\bid="([^"]+)"/g), match => match[1])]);
+if (template.split('<!-- DOCUMENT_CONTENT -->').length !== 2) throw new Error('Expected one continuous-content insertion point');
+const content = documents.map(doc => {
+  const body = `<article class="reading-document" id="document-${doc.id}">
+    <header class="reading-document-header"><div class="eyebrow">${escapeHtml(doc.english)}</div>
+      <h1>${escapeHtml(doc.label)}</h1><p class="reading-document-meta">${escapeHtml(doc.version)} · ${doc.sections.length - 1} 章 · 连续全文</p>
+      <aside class="document-notice${doc.archived ? ' is-archive' : ''}">${escapeHtml(doc.note)}</aside>
+    </header>
+    ${doc.sections.map(section => `<section class="document-chapter" id="${section.id}" aria-labelledby="${section.id}-title">
+      <h2 id="${section.id}-title">${escapeHtml(section.originalTitle)}</h2><div class="prose">${section.html}</div>
+    </section>`).join('\n')}
+  </article>`;
+  return doc.archived ? `<details class="archive-document"><summary>${escapeHtml(doc.label)} <span>历史全文 · 点击展开</span></summary>${body}</details>` : body;
+}).join('\n');
+const anchors = new Set(['overview', ...Array.from((template + content).matchAll(/\bid="([^"]+)"/g), match => match[1])]);
 for (const doc of documents) for (const section of doc.sections) {
   anchors.add(section.id);
   for (const heading of section.outline) anchors.add(heading.id);
@@ -99,6 +114,7 @@ for (const html of [template, ...documents.flatMap(doc => doc.sections.map(secti
 const output = template
   .replace('/* PAGE_STYLES */', styles)
   .replace('/* PAGE_SCRIPT */', script)
+  .replace('<!-- DOCUMENT_CONTENT -->', content)
   .replace('<!-- DOCUMENT_DATA -->', `<script type="application/json" id="document-data">${json}</script>`);
 for (const match of output.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
   if (match[0].startsWith('<script type="application/json"')) continue;
