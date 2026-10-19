@@ -10,10 +10,10 @@ import { gfm, gfmHtml } from '../node_modules/.pnpm/node_modules/micromark-exten
 const root = new URL('../', import.meta.url);
 const docsRoot = new URL('docs/zh/explanation/', root);
 const sources = [
-  { id: 'design', label: '完整设计 v12 · 评审版', english: 'PRODUCT REVIEW · SCENARIOS & DIAGRAMS', filename: 'conversational-settings.v12.md', version: 'v12 / 评审讲解版 · 2026.10.19', note: '从用户问题和一条 PubMed 任务讲起，配六张流程与卡片示意。无需先了解 issue；当前实现与目标设计分别说明。' },
+  { id: 'design', label: '完整设计 v13 · 评审版', english: 'PRODUCT REVIEW · SCENARIOS & DIAGRAMS', filename: 'conversational-settings.v13.md', version: 'v13 / 用户负担对比版 · 2026.10.19', note: '从用户问题和一条 PubMed 任务讲起，配六张流程与卡片示意。无需先了解 issue；当前实现与目标设计分别说明。' },
   { id: 'development', label: '完整开发文档 v4', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v4.md', version: 'v4 / 完整整合版 · 2026.10.19', note: '完整工程规格，覆盖模块、契约、数据、暂停恢复、前端和测试。明确区分现有接口与目标通用框架。' },
   { id: 'status', label: '当前实现与实测', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v4.md', version: 'v4 / 更新于 2026.10.19', note: '运行实现基线 a88d9283；真实模型验证日期为 2026.10.16。此记录说明实际覆盖范围，不把全部设计验收标为通过。' },
-  { id: 'design-v11', label: '历史完整设计 v11', english: 'COMPLETE PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v11.md', version: 'v11 / 历史完整规格', archived: true, note: '历史完整设计，当前评审表达已在 v12 中重写；功能边界与技术约束保持可追溯。' },
+  { id: 'design-v11', label: '历史完整设计 v11', english: 'COMPLETE PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v11.md', version: 'v11 / 历史完整规格', archived: true, note: '历史完整设计，当前评审表达已在 v13 中重写；功能边界与技术约束保持可追溯。' },
   { id: 'interaction', label: '历史交互修订 v10', english: 'INTERACTION REVISION · ARCHIVE', filename: 'conversational-settings.v10.md', version: 'v10 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整设计 v11。当前阅读可直接从完整设计开始。' },
   { id: 'engineering', label: '历史恢复规格 v3', english: 'RECOVERY REVISION · ARCHIVE', filename: 'conversational-settings-development.v3.md', version: 'v3 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整开发文档 v4；保留供追溯。' },
   { id: 'archive-design', label: '历史产品设计 v1', english: 'PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v1.md', version: 'v1 / 2026.10.12 · 历史基线', archived: true, note: '历史设计基线，保留原文。完整设计 v11 已统一后续交互、作用范围和暂停恢复决策。' },

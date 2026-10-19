@@ -28,29 +28,38 @@ function svg(title, h, content) {
 const figures = [];
 
 {
-  let body = text(36, 44, '把配置工作带回研究对话', { size: 28, weight: 700 });
-  body += text(36, 76, '体验对比示意：减少用户找入口、理解字段和重述任务的负担。', { size: 18, color: c.muted });
-  body += box(32, 102, 476, 58, '原来：用户自己找设置', [], { fill: c.gray, size: 21 });
-  body += box(532, 102, 476, 58, '目标体验：对话内完成必要配置', [], { fill: c.soft, stroke: c.green, titleColor: c.green, size: 21 });
+  let body = text(36, 44, '把用户的配置负担，收敛为一次明确确认', { size: 28, weight: 700 });
+  body += text(36, 76, '同一场景：模型可用，PubMed 已安装且就绪，仅当前会话尚未启用。', { size: 18, color: c.muted });
+  body += box(32, 100, 976, 78, '共同起点：用户提出“用 PubMed 查几篇文献”', [], { fill: c.gray, size: 23 });
+  body += text(54, 217, '原来 · 配置工作由用户承担', { size: 24, weight: 700, color: c.amber });
+  body += text(554, 217, '现在 · 用户只需决定是否启用', { size: 24, weight: 700, color: c.green });
+  body += text(54, 247, '离开研究对话，进入设置流程', { size: 18, color: c.muted });
+  body += text(554, 247, '留在当前对话，系统承接其余工作', { size: 18, color: c.muted });
   const before = [
-    ['① 研究任务遇到缺口', '例如当前会话还不能用 PubMed'],
-    ['② 离开对话，寻找设置', '找对入口，判断应该修改哪个字段'],
-    ['③ 填写、保存、判断影响', '还要确认会不会影响其他会话'],
-    ['④ 回来继续解释任务', '确认设置已生效，再尝试接着做'],
-  ];
-  const after = [
-    ['① 用户照常提出研究要求', '已有配置够用，就直接执行'],
-    ['② Agent 带出一项具体变更', '说明原因、修改内容和使用范围'],
-    ['③ 用户在卡片中确认', '只补缺项，不用自己寻找设置页'],
-    ['④ 原任务从已保存进度继续', '保留决定记录，最终返回研究结果'],
+    ['用户找入口', '到哪里开启 PubMed？'],
+    ['用户认字段、判断范围', '改哪一项？会不会影响其他会话？'],
+    ['用户修改并保存', '自己完成启用操作，确认设置生效'],
+    ['用户返回对话继续任务', '切回研究上下文，接着完成检索'],
   ];
   for (let i = 0; i < 4; i++) {
-    const y = 180 + i * 105;
-    body += box(32, y, 476, 88, before[i][0], [before[i][1]], { fill: c.gray, size: 21 });
-    body += box(532, y, 476, 88, after[i][0], [after[i][1]], { fill: i === 3 ? c.soft : '#fff', size: 21 });
-    if (i < 3) body += arrow(`270,${y + 88} 270,${y + 103}`) + arrow(`770,${y + 88} 770,${y + 103}`);
+    const y = 270 + i * 107;
+    body += box(32, y, 476, 88, before[i][0], [before[i][1]], { fill: c.amberSoft, stroke: '#e2ce9c', titleColor: c.amber, size: 21 });
+    if (i < 3) body += arrow(`270,${y + 88} 270,${y + 105}`);
   }
-  figures.push(['01-before-after.svg', svg('图 1：配置前后的用户操作对比', 610, body)]);
+  body += box(532, 270, 476, 104, '系统自动准备', ['定位缺项、准备变更，展示原因和范围'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, dashed: true, size: 20 });
+  body += arrow('770,374 770,404');
+  body += `<rect x="532" y="408" width="476" height="156" rx="16" fill="${c.green}"/>`;
+  body += text(556, 444, '唯一需要用户操作的配置环节', { size: 18, color: '#d9efdf', weight: 600 });
+  body += text(770, 495, '确认本次启用', { size: 34, color: '#fff', weight: 700, anchor: 'middle' });
+  body += text(770, 534, '范围清楚：仅当前会话', { size: 20, color: '#fff', anchor: 'middle' });
+  body += arrow('770,564 770,594');
+  body += box(532, 598, 476, 81, '系统写入并接回原任务', ['提供新增工具，继续未完成的研究'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, dashed: true, size: 20 });
+  body += arrow('270,679 270,706 520,706 520,728');
+  body += arrow('770,679 770,706 520,706');
+  body += box(32, 732, 976, 72, '共同终点：PubMed 在本次会话生效，研究任务继续', [], { fill: c.soft, stroke: c.green, titleColor: c.green, size: 23 });
+  body += text(36, 846, '收益：不用找入口、不用辨认字段、不用离开对话；配置控制权仍在用户手中。', { size: 20, weight: 700, color: c.green });
+  body += text(36, 882, ['此处比较用户承担的工作，不是固定点击数或耗时统计。', '“一次确认”限于上述就绪场景；需要凭据时仍须补充信息，工具调用权限另行审批。'], { size: 17, line: 26, color: c.muted });
+  figures.push(['01-user-effort.svg', svg('图 1：用户承担的配置工作，从自行处理到确认具体变更', 936, body)]);
 }
 
 {
