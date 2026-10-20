@@ -84,3 +84,20 @@ test('review diagrams are distinct, accessible SVGs embedded without network dep
   }
   assert.doesNotMatch(body, /<img src="assets\//);
 });
+
+test('current documents expose the implemented local layer and distinguish blocked upstream integration from historical evidence', async () => {
+  const page = await readFile(new URL('../docs/zh/explanation/conversational-settings.html', import.meta.url), 'utf8');
+  const data = JSON.parse(page.split('<script type="application/json" id="document-data">')[1].split('</script>')[0]);
+  const current = new Map(data.filter(doc => !doc.archived).map(doc => [doc.id, doc]));
+  assert.equal(current.get('design').filename, 'conversational-settings.v17.md');
+  assert.equal(current.get('development').filename, 'conversational-settings-development.v7.md');
+  assert.equal(current.get('status').filename, 'conversational-settings-status.v7.md');
+  assert.equal(current.get('research').filename, 'conversational-settings-research.v2.md');
+  const implementation = current.get('development').sections.find(section => section.id === 'development-18');
+  assert.ok(implementation);
+  for (const id of ['DEV-CFG-01', 'DEV-CFG-08', 'DEV-CFG-09', 'DEV-CFG-10']) assert.ok(implementation.searchText.includes(id));
+  assert.match(implementation.searchText, /宿主桥接待开发/);
+  assert.match(current.get('status').raw, /历史真实模型用例/);
+  assert.ok(current.get('status').raw.includes('同一通用 revision/previewDigest 决定服务'));
+  assert.match(page, /href="#development-18"/);
+});

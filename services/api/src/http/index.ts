@@ -283,6 +283,10 @@ import { syncScientificEnvironmentCatalog } from "../scientific-environment-cata
 import { NotificationDispatcher } from "../notification-dispatch.js";
 import { manageRunnerEnvironment, runnerWorkspaceBindings, runnerTarget } from "../runner-management.js";
 import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
+import { configurationFramework } from "../configuration/framework.js";
+import { handleConfigurationHttp } from "../configuration/http.js";
+import { prepareNativeConnectorActivation } from "../configuration/native-activation.js";
+import { digest as configurationDigest } from "../configuration/validation.js";
 import {
   createPlatformServices,
   initializePlatformServices,
@@ -374,6 +378,37 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   } = platform;
   const skillLibraryCatalog = new SkillLibraryCatalog(config.dataDir);
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
+  const conversationalConfiguration = () => {
+    store.setConfigurationConnectorRevisionSource(() => configurationDigest({
+      manifests: mcpRegistry.listManifests().map(manifest => ({ id: manifest.id, version: manifest.version,
+        schemaVersion: manifest.schemaVersion, transport: manifest.transport, tools: manifest.tools,
+        governance: manifest.governance, prompt: manifest.prompt })).sort((a, b) => a.id.localeCompare(b.id)),
+      catalogRevision: mcpCatalog.getCatalog()?.revision ?? null,
+      tools: mcpCatalog.getCatalog()?.servers.map(server => server.tools) ?? [],
+    }));
+    return configurationFramework(store, {
+    nativeExecutor: !jiuwenSwarmConfigFromEnv(),
+    connector: (sessionId, connectorId) => {
+      const manifest = mcpRegistry.listManifests().find(item => item.id === connectorId);
+      if (!manifest && connectorId !== "web") return undefined;
+      const settings = store.getSessionSettings(sessionId).effective;
+      return { name: manifest ? mcpConnectorManifest(manifest).displayName ?? connectorId : "Web",
+        ready: (connectorId === "web" || mcpCatalog.getStatus(connectorId).status === "ready")
+          && filterEnabledMcpSources([connectorId], settings.plugins).includes(connectorId) };
+    },
+    activate: (record, receipt) => prepareNativeConnectorActivation({ store, record, receipt, registry: mcpRegistry, catalog: mcpCatalog }),
+    resume: async (sessionId, requestId) => {
+      const continuation = await ensureConnectorContinuation(store, sessionId, requestId);
+      if (continuation?.status === "queued") scheduleSessionRuns(
+        store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
+        artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
+        ideaTreeAuthorities, ideaTreeRepository(sessionId), memoryGraphSink, sessionId,
+        config, memoryGraphClient, evolveRuntimeFactory,
+      );
+      return continuation;
+    },
+    });
+  };
   const reviewerAuditCoordinator = new ReviewerAuditCoordinator(store, {
     run: async (task, signal) => {
       const session = store.getSession(task.sessionId);
@@ -617,6 +652,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     .then(() => skillLibraryCatalog.load())
     .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
     .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
+    .then(() => conversationalConfiguration().service.recoverPendingVerifications())
     .then(() => store.plugins.bindAssets(async (settings) => {
       const refs = await skillLibraryCatalog.resolveEnabledRefs(settings.enabledSkillLibraries);
       const skills = skillCatalog.resolve(settings.enabledSkillIds ?? []).map(({id,hash,revision,version}) => ({id,hash,revision:revision ?? null,version}));
@@ -2369,6 +2405,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
 
       const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+      if (await handleConfigurationHttp({ request, response, url, store, framework: conversationalConfiguration(),
+        hasActiveRun: (sessionId, requestId) => requestId
+          ? sessionHasActiveRunExceptConfigurationWait(store, sessionId, requestId)
+          : sessionHasActiveRun(store, sessionId) })) return;
       const connectorConfigurationPreflightMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/configuration\/preflight$/);
       if (connectorConfigurationPreflightMatch && request.method === "POST") {
         const sessionId = connectorConfigurationPreflightMatch[1]!;
@@ -3759,6 +3799,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     if (configurationClosed || configurationBusy) return;
     configurationBusy = true;
     try {
+      await conversationalConfiguration().tick();
       for (const project of store.listProjects()) {
         for (const session of store.listSessions(project.id, "active")) {
           for (const pending of store.listConnectorConfigurationRequests(session.id)) {
@@ -3766,6 +3807,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
               || Date.parse(pending.autoApplyAt) > Date.now() || !session.autoApplyLowRiskConfiguration) continue;
             if (await sessionHasActiveRunExceptConfigurationWait(store, session.id, pending.id)) continue;
             try {
+              const framework = conversationalConfiguration();
+              const generic = framework.repository.get(pending.id, session.id);
+              if (generic) {
+                // A V2 companion is never approved by the legacy writer: use its exact preview.
+                if (generic.view.state === "awaiting_confirmation" && generic.view.autoApplyAt
+                  && Date.parse(generic.view.autoApplyAt) <= Date.now() && generic.view.previewDigest) {
+                  await framework.decide(session.id, pending.id, { decision: "apply", revision: generic.view.revision,
+                    previewDigest: generic.view.previewDigest }, `auto:${pending.id}:${generic.view.revision}`, "auto");
+                }
+                continue;
+              }
               const decided = await store.decideConnectorConfiguration({
                 sessionId: session.id, requestId: pending.id, decision: "apply", source: "auto",
                 assertReady: (connectorId) => {

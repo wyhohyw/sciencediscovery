@@ -98,9 +98,10 @@ function unprefixedWorkspacePath(path: string | undefined, prefix: string | unde
   return path.startsWith(`${cleanedPrefix}/`) ? path.slice(cleanedPrefix.length + 1) : path;
 }
 
-export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWorkspaceTools {
+/** The same frozen descriptors used to construct executable workspace tools and configuration activation. */
+export function describeMcpWorkspaceTools(options: Pick<McpWorkspaceToolOptions, "registry" | "catalog" | "enabledSourceIds">) {
   const enabledSourceIds = new Set(options.enabledSourceIds);
-  const mcpTools: NonNullable<WorkspaceAgentOptions["mcpTools"]> = options.registry.list()
+  return options.registry.list()
     .filter((adapter) => enabledSourceIds.has(adapter.manifest.id))
     .flatMap((adapter) => {
       const availableTools = new Set(options.catalog.getStatus(adapter.manifest.id).availableTools);
@@ -115,6 +116,19 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
             ...adapter.manifest.prompt.caveats,
           ].filter(Boolean).join(" "),
           displayName: `${adapter.manifest.displayName}: ${tool.displayName}`,
+          inputSchema: structuredClone(tool.inputSchema),
+          name: `mcp__${adapter.manifest.id.replace(/[^A-Za-z0-9_-]/g, "_")}__${tool.id.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+          routing: structuredClone(tool.routing),
+          sourceId: adapter.manifest.id,
+          toolId: tool.id,
+        }));
+    });
+}
+
+export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWorkspaceTools {
+  const enabledSourceIds = new Set(options.enabledSourceIds);
+  const mcpTools: NonNullable<WorkspaceAgentOptions["mcpTools"]> = describeMcpWorkspaceTools(options)
+    .map((tool) => ({ ...tool,
           execute: async (toolCallId: string, input: JsonValue, signal?: AbortSignal) => {
             const response = await options.broker.invoke({
               allowedSourceIds: [...enabledSourceIds],
@@ -135,10 +149,10 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
               projectId: options.projectId,
               sessionId: options.sessionId,
               signal,
-              sourceId: adapter.manifest.id,
+              sourceId: tool.sourceId,
               ...(options.suppressMemoryGraphMirror ? { suppressMemoryGraphMirror: true } : {}),
               toolCallId,
-              toolId: tool.id,
+              toolId: tool.toolId,
               turnId: options.turnId,
               parentSubagentId: options.parentSubagentId,
             });
@@ -147,13 +161,7 @@ export function createMcpWorkspaceTools(options: McpWorkspaceToolOptions): McpWo
               invocationId: response.invocation.id,
             };
           },
-          inputSchema: tool.inputSchema,
-          name: `mcp__${adapter.manifest.id.replace(/[^A-Za-z0-9_-]/g, "_")}__${tool.id.replace(/[^A-Za-z0-9_-]/g, "_")}`,
-          routing: tool.routing,
-          sourceId: adapter.manifest.id,
-          toolId: tool.id,
-        }));
-    });
+    }));
 
   return {
     artifactDownload: async (input, signal): Promise<ArtifactDownloadResult> => {

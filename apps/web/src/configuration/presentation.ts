@@ -1,7 +1,31 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
 
-import type { ChatMessage, ConnectorConfigurationRequest, SessionRun } from "@sciencediscovery/schema";
+import type { ChatMessage, ConfigurationRequestView, ConnectorConfigurationRequest, SessionRun } from "@sciencediscovery/schema";
+
+/** Once a resolved v2 request has a persisted timeline notice, render its
+ * disclosure there exactly once instead of adding a second legacy receipt. */
+export function genericConfigurationPresentation(
+  requests: readonly ConfigurationRequestView[],
+  messages: readonly ChatMessage[],
+  notices: ReadonlyMap<string, { requestId: string }>,
+  sessionId: string | undefined,
+) {
+  const current = requests.filter((request) => request.sessionId === sessionId);
+  const byId = new Map(current.map((request) => [request.id, request]));
+  const byNoticeId = new Map<string, ConfigurationRequestView>();
+  const suppressedNoticeIds = new Set<string>();
+  const placed = new Set<string>();
+  for (const message of messages) {
+    if (message.kind !== "configuration_notice") continue;
+    const request = byId.get(notices.get(message.id)?.requestId ?? "");
+    if (!request || !["applied", "dismissed", "cancelled", "expired"].includes(request.state)) continue;
+    if (placed.has(request.id)) { suppressedNoticeIds.add(message.id); continue; }
+    byNoticeId.set(message.id, request);
+    placed.add(request.id);
+  }
+  return { byNoticeId, suppressedNoticeIds, visibleRequests: current.filter((request) => !placed.has(request.id)) };
+}
 
 /** Keep a resolved request visible only until its in-conversation receipt exists. */
 export function connectorConfigurationPresentation(

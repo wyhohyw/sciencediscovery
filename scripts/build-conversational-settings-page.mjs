@@ -10,15 +10,15 @@ import { gfm, gfmHtml } from '../node_modules/.pnpm/node_modules/micromark-exten
 const root = new URL('../', import.meta.url);
 const docsRoot = new URL('docs/zh/explanation/', root);
 const sources = [
-  { id: 'design', label: '完整设计 v16 · 产品对比', english: 'PRODUCT REVIEW · SCENARIOS & DIAGRAMS', filename: 'conversational-settings.v16.md', version: 'v16 / 含产品方案对比 · 2026.10.19', note: '完整设计含 Codex、OpenCode、WorkBuddy 与本方案对比，说明交互取舍及复用边界；当前实现与目标分别标注。' },
-  { id: 'development', label: '完整开发文档 v6', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v6.md', version: 'v6 / 含 JiuwenSwarm 专项分析 · 2026.10.19', note: '完整工程规格，新增 JiuwenSwarm 已有模块、适配缺口与新增开发专项分析，映射源码、职责及工作包；目标接口仍待实现。' },
+  { id: 'design', label: '完整设计 v17 · 通用配置', english: 'PRODUCT REVIEW · IMPLEMENTATION BOUNDARIES', filename: 'conversational-settings.v17.md', version: 'v17 / 四适配器与真实边界 · 2026.10.20', note: '本地四适配器、通用卡片与 Native 协调已接入；JiuwenSwarm 实际中断宿主和外部条件写入仍待贯通，不能当作完整双执行器发布。' },
+  { id: 'development', label: '完整开发文档 v7', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v7.md', version: 'v7 / 本轮实现与任务对照 · 2026.10.20', note: '按实际模块、HTTP 与四领域合同说明实现；第 18 节区分已接入、合同验证与宿主依赖阻塞。测试结论以本轮状态记录为准。' },
   { id: 'research', label: '竞品与底座调研 v2', english: 'PRODUCT PATTERNS & FRAMEWORK REUSE', filename: 'conversational-settings-research.v2.md', version: 'v2 / 结论已纳入设计与开发 · 2026.10.19', note: '比较 Codex、OpenCode、WorkBuddy 与 openJiuwen core / WorkSwarm。区分产品行为、源码能力、依赖版本与接入建议，不把上游组件存在当作本项目集成已通过。' },
-  { id: 'status', label: '当前实现与实测', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v6.md', version: 'v6 / 更新于 2026.10.19', note: '运行实现基线 a88d9283；真实模型验证日期为 2026.10.16。此记录说明实际覆盖范围，不把全部设计验收标为通过。' },
-  { id: 'design-v11', label: '历史完整设计 v11', english: 'COMPLETE PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v11.md', version: 'v11 / 历史完整规格', archived: true, note: '历史完整设计，当前评审与产品对比见 v16；功能边界与技术约束保持可追溯。' },
+  { id: 'status', label: '当前实现与实测 v7', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v7.md', version: 'v7 / 本轮验证单独记录 · 2026.10.20', note: '本轮构建、类型、架构及功能测试独立记录；Docker/SSH 外部用例按用户确认跳过，历史真实模型用例不替代新版本验收。' },
+  { id: 'design-v11', label: '历史完整设计 v11', english: 'COMPLETE PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v11.md', version: 'v11 / 历史完整规格', archived: true, note: '历史完整设计，当前评审与实现边界见 v17；功能边界与技术约束保持可追溯。' },
   { id: 'interaction', label: '历史交互修订 v10', english: 'INTERACTION REVISION · ARCHIVE', filename: 'conversational-settings.v10.md', version: 'v10 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整设计 v11。当前阅读可直接从完整设计开始。' },
   { id: 'engineering', label: '历史恢复规格 v3', english: 'RECOVERY REVISION · ARCHIVE', filename: 'conversational-settings-development.v3.md', version: 'v3 / 历史增量修订', archived: true, note: '历史增量修订，已整合进完整开发文档 v4；保留供追溯。' },
   { id: 'archive-design', label: '历史产品设计 v1', english: 'PRODUCT DESIGN · ARCHIVE', filename: 'conversational-settings.v1.md', version: 'v1 / 2026.10.12 · 历史基线', archived: true, note: '历史设计基线，保留原文。完整设计 v11 已统一后续交互、作用范围和暂停恢复决策。' },
-  { id: 'archive-development', label: '历史开发规格 v1', english: 'ENGINEERING GUIDE · ARCHIVE', filename: 'conversational-settings-development.v1.md', version: 'v1 / 2026.10.12 · 历史基线', archived: true, note: '历史目标架构，保留原文。请优先阅读完整开发文档 v6，其中已校正接口、状态和实现范围。' },
+  { id: 'archive-development', label: '历史开发规格 v1', english: 'ENGINEERING GUIDE · ARCHIVE', filename: 'conversational-settings-development.v1.md', version: 'v1 / 2026.10.12 · 历史基线', archived: true, note: '历史目标架构，保留原文。请优先阅读完整开发文档 v7，其中已校正接口、状态和实现范围。' },
 ];
 
 const escapeHtml = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
@@ -95,7 +95,7 @@ for (const source of sources) {
   documents.push({ ...source, raw, sha256: createHash('sha256').update(raw).digest('hex'), sections });
 }
 
-const expectedSections = { design: 15, development: 18, research: 11, status: 8, 'design-v11': 14, interaction: 4, engineering: 4, 'archive-design': 9, 'archive-development': 15 };
+const expectedSections = { design: 15, development: 19, research: 11, status: 8, 'design-v11': 14, interaction: 4, engineering: 4, 'archive-design': 9, 'archive-development': 15 };
 for (const doc of documents) if (doc.sections.length !== expectedSections[doc.id]) {
   throw new Error(`Document structure changed: ${doc.filename}; update chapter links before rebuilding.`);
 }

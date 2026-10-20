@@ -28,3 +28,80 @@ export type ConnectorConfigurationPreflightResult =
   | { status: "proposal"; request: ConnectorConfigurationRequest }
   | { status: "already_enabled"; connectorName: string }
   | { status: "unavailable"; connectorName: string };
+
+/** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
+export type ConfigurationCapabilityId = "model.select" | "model.connect" | "model.repair_credential" | "connector.enable";
+export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
+export type ConfigurationScalar = string | number | boolean;
+export type ConfigurationValues = Record<string, ConfigurationScalar>;
+export type ConfigurationRequestState = "collecting_input" | "awaiting_confirmation" | "validating" | "applying" | "applied" | "needs_fix" | "stale" | "failed" | "dismissed" | "cancelled" | "expired";
+export type ConfigurationAction = "preview" | "apply" | "dismiss" | "continue" | "reversal" | "query" | "cancel";
+export type ConfigurationFieldView = {
+  id: string;
+  label: string;
+  required: boolean;
+  description?: string;
+  placeholder?: string;
+  help?: { label: string; url: string };
+} & (
+  | { kind: "credential"; status: "missing" | "provided" | "expired" }
+  | { kind: "text" | "url" | "number" | "boolean" | "enum"; value?: ConfigurationScalar; choices?: Array<{ id: string; label: string }> }
+);
+export interface ConfigurationRequestView {
+  id: string;
+  sessionId: string;
+  projectId: string;
+  runId?: string;
+  revision: number;
+  stateVersion: number;
+  capabilityId: ConfigurationCapabilityId;
+  adapterVersion: number;
+  schemaVersion: number;
+  state: ConfigurationRequestState;
+  reason: { code: string; message: string };
+  scope: ConfigurationScope;
+  fields: ConfigurationFieldView[];
+  changes: Array<{ field: string; before?: string; after?: string }>;
+  impact: { resourceLocation: string; effectiveScope: string; message: string };
+  verificationPlan: { targets: string[]; actions: string[]; maxRequests: number; mayCharge: boolean };
+  previewDigest?: string;
+  activation: {
+    mode: "before_first_run" | "same_run" | "next_run" | "requires_restart";
+    state: "not_requested" | "pending" | "active" | "failed" | "suppressed" | "needs_user_action";
+    effectiveRevision?: string;
+  };
+  resumption: { state: "not_requested" | "pending" | "queued" | "started" | "completed" | "failed" | "suppressed" | "needs_user_action"; runId?: string };
+  error?: { code: string; message: string; field?: string; retryable: boolean };
+  allowedActions: ConfigurationAction[];
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string;
+  /** Server-scheduled only under a separate, revocable low-risk Session authorization. */
+  autoApplyAt?: string;
+  decisionSource?: "user" | "auto";
+}
+export interface ConfigurationPreviewInput {
+  expectedRevision: number;
+  values: ConfigurationValues;
+  scope?: ConfigurationScope;
+  credentialHandle?: string;
+}
+export interface ConfigurationDecisionInput {
+  revision: number;
+  previewDigest: string;
+  decision: "apply" | "dismiss";
+}
+export interface ConfigurationCredentialInput {
+  expectedRevision: number;
+  fieldId: string;
+  secret: string;
+}
+export interface ConfigurationCredentialDraftView { handle: string; expiresAt: string; }
+export interface ConfigurationCapabilityView {
+  id: ConfigurationCapabilityId;
+  adapterVersion: number;
+  schemaVersion: number;
+  scopes: Array<ConfigurationScope["kind"]>;
+  persistence: "local_transaction" | "external_control";
+  autoApplyEligible: boolean;
+}

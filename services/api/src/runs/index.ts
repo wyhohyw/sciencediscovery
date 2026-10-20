@@ -13,6 +13,8 @@
 // limitations under the License.
 
 import { materializeArtifact } from "../artifacts/materialize.js";
+import { persistNativeConfigurationWait } from "../configuration/runtime-bridge.js";
+import { verifyNativeConfigurationToolAssembly } from "../configuration/native-activation.js";
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
@@ -181,6 +183,7 @@ import { closedModelContext } from "./model-context.js";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
+import { createConfigurationAgentTools } from "../configuration/agent-tools.js";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
 import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { EvolveRunProposal } from "@sciencediscovery/schema";
@@ -764,7 +767,7 @@ async function executeAgentRun(
         instruction: "Stop at a safe point while configuration is pending. The system will resume this task after confirmation." }) }] };
     },
   };
-  const leadExtraTools = [...ideaTreeTools, ...authorityTools, ...(configurableConnectors.length ? [proposeConnectorTool] : [])];
+  const leadExtraTools = [...ideaTreeTools, ...authorityTools, ...createConfigurationAgentTools({ store, sessionId, runId }), ...(configurableConnectors.length ? [proposeConnectorTool] : [])];
   let leaseHeartbeatQueue = Promise.resolve();
   let leaseHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
   const sessionSpecialist = store.getSpecialist(session.specialistId);
@@ -2142,6 +2145,8 @@ async function executeAgentRun(
       })),
     workspaceRoot: store.workspacePath(sessionId),
   };
+  if (configurationResume) verifyNativeConfigurationToolAssembly({ store, sessionId, runId,
+    requestId: configurationResume.requestId, enabledConnectorIds: settingsSnapshot.enabledConnectorIds, tools: agentOptions.mcpTools ?? [] });
   const mainProfile = createMainAgentProfile({
     connectorIds: settingsSnapshot.enabledConnectorIds,
     gatewayThreadId: sessionId,
@@ -2280,21 +2285,25 @@ async function executeAgentRun(
         item.runId === runId && item.state === "awaiting_confirmation");
       if (!request) throw new Error("Configuration suspension has no pending request");
       await flushWorkspaceRefresh();
-      const committedAt = new Date().toISOString();
-      const stopGeneration = store.notifications.generation(sessionId);
-      const historyRef = await new VersionStore(store.dataDir).putRecord("ConfigurationCheckpoint", {
-        requestId: request.id,
-        history: closedModelContext(initialResult.finalMessages),
-        stopGeneration,
-        committedAt,
-      });
-      await store.updateSessionRun(sessionId, runId, {
-        configurationWait: true,
-        configurationCheckpoint: {
+      await persistNativeConfigurationWait({
+        sessionId, runId, requestId: request.id,
+        generation: () => store.notifications.generation(sessionId),
+        commitCheckpoint: (stopGeneration, committedAt) => new VersionStore(store.dataDir).putRecord("ConfigurationCheckpoint", {
           requestId: request.id,
-          historyRef,
+          history: closedModelContext(initialResult.finalMessages),
           stopGeneration,
           committedAt,
+        }),
+        commitWait: async (binding) => {
+          await store.updateSessionRun(sessionId, runId, {
+            configurationWait: true,
+            configurationCheckpoint: {
+              requestId: binding.requestId,
+              historyRef: binding.checkpointRef,
+              stopGeneration: binding.stopGeneration,
+              committedAt: binding.committedAt,
+            },
+          });
         },
       });
       return "blocked";

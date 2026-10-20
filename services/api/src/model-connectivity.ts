@@ -14,7 +14,8 @@
 
 import { request } from "undici";
 
-import { isAnthropicEndpoint, proxyDispatcher } from "@sciencediscovery/model";
+import { endpointRoot, isAnthropicEndpoint, proxyDispatcher } from "@sciencediscovery/model";
+import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS } from "@sciencediscovery/schema";
 import type {
   ModelConnectivityTestCategory,
   ModelConnectivityTestResult,
@@ -95,9 +96,21 @@ function validAnthropicMessage(payload: unknown): boolean {
     && Array.isArray(payload.content);
 }
 
+function validOpenAiResponse(payload: unknown): boolean {
+  return isRecord(payload) && payload.object === "response" && Array.isArray(payload.output)
+    && payload.status !== "failed" && payload.error == null;
+}
+
 function connectivityRequest(profile: ModelProfile, apiToken: string): ConnectivityRequest {
-  const baseUrl = profile.baseUrl.replace(/\/+$/, "");
-  if (isAnthropicEndpoint(profile.baseUrl)) {
+  // Share endpoint suffix normalization with the real model client. Only old
+  // profiles without an explicit protocol retain the legacy /api/plan fallback.
+  const baseUrl = endpointRoot(profile.baseUrl);
+  const protocol = profile.apiProtocol ?? (isAnthropicEndpoint(profile.baseUrl) ? "anthropic-messages" : "openai-chat-completions");
+  const variant = profile.apiVariant ?? DEFAULT_MODEL_API_VARIANT[protocol];
+  if (!Object.hasOwn(MODEL_API_VARIANTS, protocol) || !MODEL_API_VARIANTS[protocol].includes(variant)) throw new Error("Unsupported protocol variant");
+  const endpoint = new URL(baseUrl);
+  if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error("Invalid model endpoint");
+  if (protocol === "anthropic-messages") {
     return {
       body: JSON.stringify({
         max_tokens: CONNECTIVITY_MAX_TOKENS,
@@ -111,10 +124,25 @@ function connectivityRequest(profile: ModelProfile, apiToken: string): Connectiv
         "content-type": "application/json",
         ...(apiToken ? { "x-api-key": apiToken } : {}),
       },
-      url: `${baseUrl}/v1/messages`,
+      url: baseUrl.endsWith("/v1") ? `${baseUrl}/messages` : `${baseUrl}/v1/messages`,
       validate: validAnthropicMessage,
     };
   }
+  if (protocol === "openai-responses") {
+    return {
+      body: JSON.stringify({ model: profile.model, instructions: "This is a model connectivity test.",
+        input: [{ role: "user", content: [{ type: "input_text", text: "Reply with OK." }] }],
+        stream: false, store: false, max_output_tokens: CONNECTIVITY_MAX_TOKENS }),
+      headers: { ...(apiToken ? { authorization: `Bearer ${apiToken}` } : {}), "content-type": "application/json" },
+      url: `${baseUrl}/responses`, validate: validOpenAiResponse,
+    };
+  }
+  // The same finite chat dialect controls used by the model client, with
+  // thinking disabled for this bounded, non-research connectivity input.
+  const dialect = variant === "deepseek" ? { thinking: { type: "disabled" } }
+    : variant === "qwen" ? { chat_template_kwargs: { enable_thinking: false } }
+      : variant === "minimax" ? { reasoning_split: false }
+        : variant === "gemini" ? { reasoning_effort: "none" } : {};
   return {
     body: JSON.stringify({
       max_tokens: CONNECTIVITY_MAX_TOKENS,
@@ -124,6 +152,7 @@ function connectivityRequest(profile: ModelProfile, apiToken: string): Connectiv
       ],
       model: profile.model,
       stream: false,
+      ...dialect,
     }),
     headers: {
       ...(apiToken ? { authorization: `Bearer ${apiToken}` } : {}),
@@ -134,17 +163,27 @@ function connectivityRequest(profile: ModelProfile, apiToken: string): Connectiv
   };
 }
 
+function discardResponse(body: { destroy(): unknown; once(event: "error", listener: () => void): unknown }): void {
+  // Undici emits UND_ERR_ABORTED asynchronously when an unread body is
+  // destroyed. Consume that expected error instead of leaking it to the host.
+  body.once("error", () => undefined);
+  body.destroy();
+}
+
 async function readBoundedResponse(
-  body: AsyncIterable<Uint8Array> & { dump(): Promise<void> },
+  body: AsyncIterable<Uint8Array> & { destroy(): unknown; once(event: "error", listener: () => void): unknown },
 ): Promise<string | undefined> {
   const decoder = new TextDecoder();
   let text = "";
+  let bytes = 0;
   for await (const chunk of body) {
-    text += decoder.decode(chunk, { stream: true });
-    if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) {
-      await body.dump().catch(() => undefined);
+    bytes += chunk.byteLength;
+    if (bytes > MAX_RESPONSE_BYTES) {
+      // Do not drain an unbounded provider stream after exceeding the budget.
+      discardResponse(body);
       return undefined;
     }
+    text += decoder.decode(chunk, { stream: true });
   }
   return text + decoder.decode();
 }
@@ -165,27 +204,37 @@ export async function testModelConnectivity(
     return result("network", startedAt, "Could not resolve the configured model proxy");
   }
 
-  const probe = connectivityRequest(options.profile, apiToken ?? "");
+  let probe: ConnectivityRequest;
+  try { probe = connectivityRequest(options.profile, apiToken ?? ""); }
+  catch { return result("invalid_response", startedAt, "The endpoint protocol, variant, or URL is not supported"); }
   const controller = new AbortController();
-  const dispatcher = proxyDispatcher(proxy);
+  let dispatcher;
+  try { dispatcher = proxyDispatcher(proxy); }
+  catch { return result("network", startedAt, "Could not resolve the configured model proxy"); }
+  const requestedTimeout = options.timeoutMs;
+  const timeoutMs = requestedTimeout !== undefined && Number.isFinite(requestedTimeout)
+    ? Math.max(1, Math.min(CONNECTIVITY_TIMEOUT_MS, requestedTimeout)) : CONNECTIVITY_TIMEOUT_MS;
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, options.timeoutMs ?? CONNECTIVITY_TIMEOUT_MS);
+  }, timeoutMs);
 
   try {
     const response = await request(probe.url, {
       body: probe.body,
       bodyTimeout: 0,
       headers: probe.headers,
-      headersTimeout: options.timeoutMs ?? CONNECTIVITY_TIMEOUT_MS,
+      headersTimeout: timeoutMs,
+      // Undici request() has no redirect/retry interceptor. In particular this
+      // paid POST must never be transparently replayed as an idempotent call.
+      idempotent: false,
       method: "POST",
       signal: controller.signal,
       ...(dispatcher ? { dispatcher } : {}),
     });
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      await response.body.dump().catch(() => undefined);
+      discardResponse(response.body);
       return classifyProviderStatus(response.statusCode, startedAt);
     }
     const raw = await readBoundedResponse(response.body);

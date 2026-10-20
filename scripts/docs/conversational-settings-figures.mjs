@@ -126,7 +126,7 @@ const figures = [];
 
 {
   let body = text(36, 44, '30 秒自动应用：先授权，再等待取消机会', { size: 28, weight: 700 });
-  body += text(36, 76, '工具的 Always allow 不自动授予配置修改权。当前配置白名单只有 PubMed。', { size: 18, color: c.muted });
+  body += text(36, 76, 'Native 通用 PubMed 已接入；人工 / 到期共用版本化决定服务。', { size: 18, color: c.muted });
   body += diamond(300, 188, 470, 126, ['已开启独立的低风险', '会话配置授权？']);
   body += arrow('300,251 300,294', '是', 320, 280);
   body += diamond(300, 358, 470, 126, ['PubMed 在白名单，且', '安装、就绪等条件满足？']);
@@ -134,31 +134,31 @@ const figures = [];
   body += arrow('535,358 580,358 580,318 630,318', '否', 552, 345);
   body += box(632, 264, 350, 108, '等待用户明确确认', ['不会因等待时间过去而批准'], { fill: c.blueSoft, stroke: '#b9cfdf', size: 22 });
   body += arrow('300,421 300,464', '是', 320, 450);
-  body += box(70, 466, 460, 108, '30 秒缓冲，可取消', ['到期由服务端重新检查条件', '不靠用户浏览器保持在线'], { fill: c.amberSoft, stroke: '#e2ce9c' });
+  body += box(70, 466, 460, 108, '30 秒缓冲，可取消', ['同一 v2 revision / digest 决定服务', '进入决定和提交前双重复核授权'], { fill: c.amberSoft, stroke: '#e2ce9c' });
   body += arrow('530,520 632,520', '发生变化', 534, 502);
   body += box(634, 466, 348, 108, '停止自动应用', ['取消、Stop、关闭授权', '或设置/连接器条件已变化'], { fill: c.gray, size: 22 });
   body += arrow('300,574 300,620', '条件仍满足', 321, 602);
   body += box(70, 622, 460, 88, '应用配置，接回原任务', ['工具调用仍按自己的权限策略执行'], { fill: c.soft, stroke: c.green });
-  figures.push(['05-auto-apply.svg', svg('图 5：低风险自动应用的判断路径', 744, body)]);
+  figures.push(['05-versioned-auto-apply.svg', svg('图 5：低风险自动应用的判断路径', 744, body)]);
 }
 
 {
   let body = text(36, 44, '复用已有能力，把自研集中在配置协调', { size: 28, weight: 700 });
-  body += text(36, 76, '目标接入架构：原生 PubMed 路径已验证；上游模块仍需按版本适配与验收。', { size: 18, color: c.muted });
-  body += box(32, 116, 976, 84, '复用本项目交互：Agent 提案 → 用户决定 → 可展开回执', ['ModelConnectWizard / 连接器卡片 / ProcessRecord'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 23 });
+  body += text(36, 76, '当前接入边界：本地通用层与 Native 已接入；上游实际宿主仍受能力门控。', { size: 18, color: c.muted });
+  body += box(32, 116, 976, 84, '复用本项目交互：Agent 提案 → 用户决定 → 可展开回执', ['旧向导与专用卡片保留；通用 schema 卡片 / ProcessRecord'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 23 });
   body += arrow('520,200 520,238');
-  body += box(32, 240, 976, 136, '本项目待补齐：统一配置协调', ['能力与字段归一化 / 变更预览 / 范围和版本检查 / 配置决定', '本地条件事务或外部操作回执；保存、激活、恢复分别记录。'], { fill: c.amberSoft, stroke: '#bf9854', titleColor: c.amber, size: 25 });
+  body += box(32, 240, 976, 136, '已实现：统一配置服务与四类适配器', ['能力与字段归一化 / 变更预览 / 范围和版本检查 / 配置决定', '本地事务、revision、receipt、outbox；远端 worker 已有合同，实际后端待接通。'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 25 });
   body += arrow('270,376 270,414') + arrow('770,376 770,414');
   body += box(32, 416, 476, 142, '本项目现有领域服务', ['模型向导 / 连接器目录 / 凭据存储', '保留原有正式配置来源'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 22 });
   body += box(532, 416, 476, 142, 'WorkSwarm 领域控制面 · 待接入', ['凭据 Schema / config / MCP 连接与重载', '桥接版本、幂等回执与生效核对'], { fill: c.soft, stroke: c.green, titleColor: c.green, dashed: true, size: 21 });
   body += arrow('270,558 270,596') + arrow('770,558 770,596');
-  body += box(32, 598, 976, 110, '本项目待补齐：执行器恢复桥接', ['绑定 request / run / Session / interrupt，协调 Stop 与等待状态', '设置已保存 → 对目标任务生效 → 原 run 继续'], { fill: c.amberSoft, stroke: '#bf9854', titleColor: c.amber, size: 24 });
+  body += box(32, 598, 976, 110, '按执行器接入：Native 已贯通，JiuwenSwarm 仍需实际宿主', ['Native 复用原检查点与队列；JiuwenSwarm 保留精确 interrupt 绑定合同', '设置已保存 → 对目标任务生效 → 原 run 继续'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 24 });
   body += arrow('270,708 270,746') + arrow('770,708 770,746');
-  body += box(32, 748, 476, 116, 'Native · 复用现有检查点', ['当前 PubMed 同 run 路径已验证', '公共端口提取及其他设置仍待完成'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 22 });
-  body += box(532, 748, 476, 116, 'core / WorkSwarm · 待桥接', ['复用 interrupt / resume / checkpointer', '版本与集成验收通过后开放同 run'], { fill: c.soft, stroke: c.green, titleColor: c.green, dashed: true, size: 22 });
+  body += box(32, 748, 476, 116, 'Native · 复用现有检查点', ['持久 phase / outbox、准备工具目录', '恢复前核对实际可执行工具指纹'], { fill: c.blueSoft, stroke: '#b9cfdf', titleColor: c.blue, size: 22 });
+  body += box(532, 748, 476, 116, 'core / WorkSwarm · 待桥接', ['复用 interrupt / resume / checkpointer', 'core 补丁待集成，宿主桥接待开发'], { fill: c.soft, stroke: c.green, titleColor: c.green, dashed: true, size: 22 });
   body += text(36, 905, '正式设置只存一处；远端 RPC 在本地事务外处理。', { size: 19, weight: 700, color: c.ink });
-  body += text(36, 938, '蓝：本项目已有　｜　绿虚线：上游已有、待适配　｜　橙：本项目待实现', { size: 18, color: c.muted });
-  figures.push(['06-reuse-boundaries.svg', svg('图 6：已有能力复用与本项目待实现的接入边界', 974, body)]);
+  body += text(36, 938, '蓝：本项目已接入　｜　绿虚线：复用上游基础，宿主增强待开发', { size: 18, color: c.muted });
+  figures.push(['06-implementation-boundaries.svg', svg('图 6：本轮已接入的公共层与待接通的上游宿主', 974, body)]);
 }
 
 for (const [name, content] of figures) await writeFile(new URL(name, output), content + '\n', 'utf8');

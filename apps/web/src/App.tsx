@@ -35,6 +35,7 @@ import type {
   ConnectorId,
   ConnectorManifest,
   ConnectorConfigurationRequest,
+  ConfigurationRequestView,
   CreateProxyServerRequest,
   DeletionImpact,
   ExecutionRun,
@@ -229,7 +230,9 @@ import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./Provi
 import { ConversationalModelCard } from "./configuration/ConversationalModelCard.js";
 import { ConversationalConnectorCard } from "./configuration/ConversationalConnectorCard.js";
 import { ConversationalConnectorReceipt } from "./configuration/ConversationalConnectorReceipt.js";
-import { connectorConfigurationPresentation } from "./configuration/presentation.js";
+import { connectorConfigurationPresentation, genericConfigurationPresentation } from "./configuration/presentation.js";
+import { ConfigurationRequestCard, isConfigurationRequestView } from "./configuration/ConfigurationRequestCard.js";
+import { QuickConfigurationMenu } from "./configuration/QuickConfigurationMenu.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
 import { createMemoryGraphSettingsDraft, MemoryGraphSettingsEditor, memoryGraphSettingsRequest, type MemoryGraphSettingsDraft } from "./MemoryGraphSettingsEditor.js";
 import { createIdeaTreeSettingsDraft, IdeaTreeSettingsEditor, ideaTreeSettingsRequest, ideaTreeWeightsValid, type IdeaTreeSettingsDraft } from "./IdeaTreeSettingsEditor.js";
@@ -1139,6 +1142,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const configurationPreflightPendingRef = useRef(false);
   const [configurationRequestedSessionId, setConfigurationRequestedSessionId] = useState<string>();
   const [connectorConfigurationRequests, setConnectorConfigurationRequests] = useState<ConnectorConfigurationRequest[]>([]);
+  const [configurationRequests, setConfigurationRequests] = useState<ConfigurationRequestView[]>([]);
   const [configurationReceipt, setConfigurationReceipt] = useState<{
     sessionId: string;
     modelName: string;
@@ -1978,22 +1982,50 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     return () => { cancelled = true; };
   }, [activeProjectId, client, projectsLoaded, sessionListState]);
 
-  const pendingAutoConfigurationIds = connectorConfigurationRequests
+  function receiveConfigurationRequests(items: Array<ConnectorConfigurationRequest | ConfigurationRequestView>) {
+    setConnectorConfigurationRequests(items.filter((item): item is ConnectorConfigurationRequest => !isConfigurationRequestView(item)));
+    setConfigurationRequests((current) => items.filter(isConfigurationRequestView).map((snapshot) => {
+      const previous = current.find((item) => item.id === snapshot.id);
+      return previous && (previous.revision > snapshot.revision || (previous.revision === snapshot.revision && previous.stateVersion > snapshot.stateVersion)) ? previous : snapshot;
+    }));
+  }
+  function receiveConfigurationRequest(request: ConfigurationRequestView) {
+    if (!shouldApplySessionScopedUpdate(request.sessionId, activeSessionIdRef.current)) return;
+    setConfigurationRequests((items) => {
+      const previous = items.find((item) => item.id === request.id);
+      if (previous && (previous.revision > request.revision || (previous.revision === request.revision && previous.stateVersion > request.stateVersion))) return items;
+      return [request, ...items.filter((item) => item.id !== request.id)];
+    });
+    if (request.state === "applied" || request.state === "dismissed") void refreshSession(request.sessionId).catch(() => undefined);
+    if (request.state === "applied" && request.capabilityId.startsWith("model.")) {
+      void Promise.all([client.listModels(), client.listProviders(), client.getGlobalSettings()]).then(([modelItems, registry, settings]) => {
+        setModels(modelItems);
+        setModelProviders(registry.providers);
+        setGlobalSettings(settings);
+      }).catch(() => undefined);
+    }
+  }
+  const pendingAutoConfigurationIds = [...connectorConfigurationRequests
     .filter((request) => request.sessionId === activeSessionId && request.state === "awaiting_confirmation" && request.autoApplyAt)
-    .map((request) => request.id).join(",");
+    .map((request) => request.id), ...configurationRequests.filter((request) => request.sessionId === activeSessionId
+      && ((request.state === "awaiting_confirmation" && request.autoApplyAt) || ["validating", "applying"].includes(request.state) || request.activation.state === "pending"
+        || ["pending", "queued"].includes(request.resumption.state))).map((request) => request.id)].join(",");
   useEffect(() => {
     if (!activeSessionId || !pendingAutoConfigurationIds) return;
     let cancelled = false;
     let busy = false;
+    const automaticIds = new Set(configurationRequests.filter((request) => request.sessionId === activeSessionId
+      && request.state === "awaiting_confirmation" && request.autoApplyAt).map((request) => request.id));
     const poll = async () => {
       if (busy) return;
       busy = true;
       try {
-        const { items } = await client.listConnectorConfigurationRequests(activeSessionId);
+        const { items } = await client.listConfigurationRequests(activeSessionId);
         if (cancelled || !shouldApplySessionScopedUpdate(activeSessionId, activeSessionIdRef.current)) return;
-        setConnectorConfigurationRequests(items);
+        receiveConfigurationRequests(items);
         const watched = new Set(pendingAutoConfigurationIds.split(","));
-        if (items.some((item) => watched.has(item.id) && item.state !== "awaiting_confirmation")) {
+        if (items.some((item) => (!isConfigurationRequestView(item) && watched.has(item.id) && item.state !== "awaiting_confirmation")
+          || (isConfigurationRequestView(item) && automaticIds.has(item.id) && (item.state !== "awaiting_confirmation" || !item.autoApplyAt)))) {
           await refreshSession(activeSessionId);
         }
       } catch { /* The next poll or normal Session refresh will reconcile the card. */ }
@@ -2010,6 +2042,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       setPermissionEpoch(undefined);
       setPermissionRequests([]);
       setConnectorConfigurationRequests([]);
+      setConfigurationRequests([]);
       setSessionUsage(undefined);
       setSessionRuns([]);
       setArtifactOutputs([]);
@@ -2048,7 +2081,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       client.listSubagents(sessionId),
       client.listRemoteJobs(sessionId),
       client.listArtifactOutputs(sessionId),
-      client.listConnectorConfigurationRequests(sessionId),
+      client.listConfigurationRequests(sessionId),
     ]);
     const activeRun = selectSessionReplayRun(sessionRunItems.filter((run) => isActiveRunStatus(run.status)));
     const replayEvents = activeRun ? await client.listRunEvents(sessionId, activeRun.id) : [];
@@ -2097,7 +2130,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     setArtifacts(projectArtifacts);
     setPermissionEpoch(epoch);
     setPermissionRequests(permissionRequestItems);
-    setConnectorConfigurationRequests(connectorConfigurationResult.items);
+    receiveConfigurationRequests(connectorConfigurationResult.items);
     setPermissionGrants(permissionGrantItems);
     setSessionUsage(usageSummary);
     setExecutionRuns(executionRunItems);
@@ -3289,10 +3322,10 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     if (streamEvent.type === "session.updated") {
       syncSessionSummary(streamEvent.session);
     }
-    if ((streamEvent.type === "tool.completed" && streamEvent.trace.name === "propose_connector_enable")
-      || (streamEvent.type === "run.status" && (streamEvent.status === "blocked" || streamEvent.status === "interrupted"))) {
-      void client.listConnectorConfigurationRequests(sessionId).then(({ items }) => {
-        if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) setConnectorConfigurationRequests(items);
+    if ((streamEvent.type === "tool.completed" && ["propose_connector_enable", "propose_configuration"].includes(streamEvent.trace.name))
+      || streamEvent.type === "run.status") {
+      void client.listConfigurationRequests(sessionId).then(({ items }) => {
+        if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) receiveConfigurationRequests(items);
       }).catch(() => undefined);
     }
     const routing = routeRunStreamEvent(streamEvent, {
@@ -4208,6 +4241,26 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     connectorConfigurationRequests, sessionRuns, session?.messages ?? [], session?.id,
   );
   const connectorConfigurationRequestById = new Map(connectorConfigurationRequests.map((request) => [request.id, request]));
+  const { byNoticeId: genericConfigurationByNoticeId, suppressedNoticeIds: suppressedConfigurationNoticeIds, visibleRequests: visibleConfigurationRequests } = genericConfigurationPresentation(
+    configurationRequests, session?.messages ?? [], continuationByNoticeId, session?.id,
+  );
+  function renderConfigurationRequest(request: ConfigurationRequestView) {
+    return <ConfigurationRequestCard
+      key={`${request.id}:${request.revision}`}
+      request={request}
+      readOnly={sessionArchived}
+      runActive={sessionRuns.some((run) => run.id === request.runId && run.status !== "blocked" && isActiveRunStatus(run.status))}
+      onUpdate={receiveConfigurationRequest}
+      onUnavailable={() => setConfigurationRequests((items) => items.filter((item) => item.id !== request.id))}
+      actions={{
+        preview: (input, key) => client.previewConfigurationRequest(request.sessionId, request.id, input, key),
+        credential: (input, key) => client.submitConfigurationCredential(request.sessionId, request.id, input, key),
+        decide: (input, key) => client.decideConfigurationRequest(request.sessionId, request.id, input, key),
+        query: () => client.getConfigurationRequest(request.sessionId, request.id),
+        continue: (key) => client.continueConfigurationRequest(request.sessionId, request.id, key),
+        reversal: (key) => client.reverseConfigurationRequest(request.sessionId, request.id, key),
+      }} />;
+  }
   const composerTrigger = getComposerTrigger(message, composerTextarea.current?.selectionStart ?? message.length);
   const selectedComposerCommands = selectedSkillAuthoringCommands(message);
   const composerSuggestions: ComposerSuggestion[] = !composerTrigger ? [] : composerTrigger.symbol === "@"
@@ -4641,7 +4694,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                           toolCallId={block.message.reviewerCheckpoint.toolCallId}
                         />
                       ) : block.message.kind === "configuration_notice" ? (
-                        <ConversationalConnectorReceipt
+                        suppressedConfigurationNoticeIds.has(block.message.id) ? null : genericConfigurationByNoticeId.has(block.message.id)
+                          ? renderConfigurationRequest(genericConfigurationByNoticeId.get(block.message.id)!) : <ConversationalConnectorReceipt
                           connectorName={continuationByNoticeId.get(block.message.id)?.connectorName}
                           request={connectorConfigurationRequestById.get(continuationByNoticeId.get(block.message.id)?.requestId ?? "")}
                         />
@@ -4776,6 +4830,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                     runActive={sessionRuns.some((run) => run.id === connectorConfigurationRequest.runId
                       && run.status !== "blocked" && isActiveRunStatus(run.status))}
                     onDecision={(decision) => decideConversationalConnector(connectorConfigurationRequest, decision)} />)}
+                  {visibleConfigurationRequests.map(renderConfigurationRequest)}
                   {configurationReceipt?.sessionId === session.id ? <div className="conversation-configuration-receipt" role="status">
                     <strong>{t(configurationReceipt.globalDefault ? "configuration.card.savedGlobal" : "configuration.card.saved")}: {configurationReceipt.modelName}</strong>
                     <span> · {t(configurationReceipt.continuation === "not_requested" ? "configuration.card.notSubmitted"
@@ -4826,6 +4881,15 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       {...(activeThinkingSummary ? { thinkingSummary: activeThinkingSummary } : {})}
                     />
                     <span className="composer-hint" title={t("composer.keyboardHint")}>{t("composer.keyboardHint")}</span>
+                    <QuickConfigurationMenu key={session.id} disabled={isRunning || sessionArchived} onRequest={async (capabilityId, key) => {
+                      const modelId = session.modelId ?? models[0]?.id;
+                      const connectorId = connectors.find((item) => !session.enabledConnectorIds?.includes(item.id))?.id ?? connectors[0]?.id;
+                      const values: Record<string, string> = capabilityId === "model.select" || capabilityId === "model.repair_credential"
+                        ? (modelId ? { modelId } : {}) : capabilityId === "connector.enable" && connectorId ? { connectorId } : {};
+                      const request = await client.createConfigurationRequest(session.id, { capabilityId, values }, key);
+                      receiveConfigurationRequest(request);
+                      requestAnimationFrame(() => document.getElementById(`configuration-request-${request.id}`)?.scrollIntoView({ block: "nearest" }));
+                    }} />
                     <div className="orchestration-controls">
                       <ConnectorPicker
                         connectors={connectors}
