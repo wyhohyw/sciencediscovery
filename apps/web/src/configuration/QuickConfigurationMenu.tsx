@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import type { ConfigurationCapabilityId } from "@sciencediscovery/schema";
 import { useLocale } from "../i18n/index.js";
 import { configurationMessages } from "./messages.js";
+import { ApiRequestError } from "../api/auth.js";
 
 /** Explicit lightweight entry; opening a session never creates a proposal. */
 export function QuickConfigurationMenu({ disabled, onRequest }: {
@@ -29,7 +30,10 @@ export function QuickConfigurationMenu({ disabled, onRequest }: {
       await onRequest(capability, key);
       keys.current.delete(capability);
       if (disclosure.current) disclosure.current.open = false;
-    } catch { setError(m.requestFailed); }
+    } catch (reason) {
+      setError(reason instanceof ApiRequestError && reason.code === "THINKING_CONTROL_UNSUPPORTED" ? m.thinkingUnsupported
+        : reason instanceof ApiRequestError && reason.code === "CONFIGURATION_BACKEND_UNSUPPORTED" ? m.backendUnsupported : m.requestFailed);
+    }
     finally { busyRef.current = false; setBusy(false); }
   }
   return <details className="configuration-quick-menu" ref={disclosure} onKeyDown={(event) => {

@@ -48,6 +48,57 @@ async function provider<T>(handler: (request: IncomingMessage, response: ServerR
 }
 function completion(response: ServerResponse) { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] })); }
 
+test("CFG-T32: a dismissed need ignores unrelated edits, permits relevant re-evaluation and cannot resurrect a terminal task", async context => {
+  const h = await harness(context);
+  const run = await h.store.createSessionRun({ sessionId: h.session.id, prompt: "Find PubMed literature", settingsSnapshot: h.store.resolveRuntimeSettings(h.session.id).effective });
+  await h.store.updateSessionRun(h.session.id, run.id, { status: "running" });
+  const proposal = { protocolVersion: 3 as const, capabilityId: "connector.enable" as const, values: { connectorId: "pubmed" }, runId: run.id };
+  const initial = await h.framework.propose(h.session.id, proposal);
+  const dismissal = await h.framework.preview(h.session.id, initial.id, { expectedRevision: initial.revision, values: { connectorId: "pubmed" }, selectedOptionId: "dismiss" });
+  await h.framework.decide(h.session.id, dismissal.id, { revision: dismissal.revision, previewDigest: dismissal.previewDigest!, selectedOptionId: "dismiss", decision: "dismiss" });
+  await assert.rejects(h.framework.propose(h.session.id, proposal), { code: "CONFIGURATION_NEED_ALREADY_DECIDED" });
+  await h.store.replaceSessionSettings(h.session.id, { thinkingMode: "enabled" });
+  await assert.rejects(h.framework.propose(h.session.id, proposal), { code: "CONFIGURATION_NEED_ALREADY_DECIDED" });
+  h.store.setConfigurationConnectorRevisionSource(() => "a-new-relevant-connector-catalog");
+  const reEvaluated = await h.framework.propose(h.session.id, proposal);
+  assert.notEqual(reEvaluated.id, initial.id); assert.notEqual(reEvaluated.needKey, initial.needKey);
+  assert.equal(reEvaluated.state, "awaiting_confirmation");
+  await h.store.updateSessionRun(h.session.id, run.id, { status: "cancelled" });
+  await assert.rejects(h.framework.propose(h.session.id, proposal), { code: "CONFIGURATION_TASK_UNAVAILABLE" });
+});
+
+test("CFG-T28/31: a saved generic companion cannot bypass failed activation through the legacy continuation entry", async context => {
+  const h = await harness(context);
+  h.framework.options.activate = async () => { throw new Error("The target tool factory is temporarily unavailable"); };
+  const run = await h.store.createSessionRun({ sessionId: h.session.id, prompt: "Research using PubMed", settingsSnapshot: h.store.resolveRuntimeSettings(h.session.id).effective });
+  const view = await h.framework.propose(h.session.id, { protocolVersion: 3, capabilityId: "connector.enable", values: { connectorId: "pubmed" }, runId: run.id });
+  await h.store.updateSessionRun(h.session.id, run.id, { status: "blocked", configurationWait: true, configurationCheckpoint: {
+    requestId: view.id, history: [{ role: "user", content: run.prompt }], stopGeneration: h.store.notifications.generation(h.session.id), committedAt: new Date().toISOString(),
+  } });
+  const saved = await h.framework.decide(h.session.id, view.id, { revision: view.revision, previewDigest: view.previewDigest!, selectedOptionId: view.selectedOptionId, decision: "apply" });
+  assert.equal(saved.state, "applied"); assert.equal(saved.activation.state, "failed");
+  assert.equal(h.store.getConnectorConfigurationRequest(h.session.id, view.id)?.state, "applied");
+  assert.equal(await h.store.ensureConnectorContinuationRun({ sessionId: h.session.id, requestId: view.id }), undefined);
+  const stillPaused = await h.store.getSessionRun(h.session.id, run.id);
+  assert.equal(stillPaused?.status, "blocked"); assert.equal(stillPaused?.configurationWait, true);
+  assert.equal(stillPaused?.configurationResume, undefined);
+  assert.deepEqual(stillPaused?.settingsSnapshot, run.settingsSnapshot);
+});
+
+test("CFG-T31: connector approval versions survive an unrelated legacy model-provider migration on reopen", async context => {
+  const h = await harness(context);
+  await h.store.createModel({ name: "Durable version fixture", model: "durable-fixture", baseUrl: "https://models.example.test/v1", apiToken: "fixture-token" });
+  const before = h.store.configurationSnapshot(h.session.id, "connector.enable", "pubmed");
+  const reopened = await h.reopen();
+  const after = reopened.configurationSnapshot(h.session.id, "connector.enable", "pubmed");
+  const oldModel = (before.data.models as Array<Record<string, unknown>>)[0]!;
+  const migratedModel = (after.data.models as Array<Record<string, unknown>>)[0]!;
+  assert.equal(oldModel.providerId, undefined); assert.equal(typeof migratedModel.providerId, "string", "Exercise the real startup migration");
+  for (const field of ["id", "baseUrl", "model", "apiProtocol", "apiVariant", "hasApiToken"]) assert.equal(migratedModel[field], oldModel[field]);
+  assert.equal(Object.hasOwn(before.resourceVersions, "models"), false);
+  assert.deepEqual(after.resourceVersions, before.resourceVersions, "Equivalent settings must retain their approved versions across a crash");
+});
+
 async function dueAutomaticProposal(h: Awaited<ReturnType<typeof harness>>) {
   await h.store.updateSession(h.session.id, { autoApplyLowRiskConfiguration: true });
   const run = await h.store.createSessionRun({ sessionId: h.session.id, prompt: "Enable PubMed for this task", settingsSnapshot: h.store.resolveRuntimeSettings(h.session.id).effective });
@@ -182,7 +233,7 @@ test("CFG-T20/21: revoking automatic authorization during verification prevents 
 
 test("CFG-01/02/14: finite adapters preserve inherited connectors, unrelated fields, and reversal restores absence", async context => {
   const h = await harness(context);
-  assert.deepEqual(h.framework.service.registry.list().map(adapter => adapter.id).sort(), ["connector.enable", "model.connect", "model.repair_credential", "model.select"]);
+  assert.deepEqual(h.framework.service.registry.list().map(adapter => adapter.id).sort(), ["connector.enable", "model.connect", "model.repair_credential", "model.select", "review.configure", "skill.select", "thinking.configure"]);
   await h.store.replaceGlobalSettings({ enabledConnectorIds: ["uniprot"], semanticReviewEnabled: false });
   const view = await h.framework.propose(h.session.id, { capabilityId: "connector.enable", values: { connectorId: "pubmed" } });
   assert.deepEqual(h.store.getSessionSettings(h.session.id).effective.enabledConnectorIds, ["uniprot"]);

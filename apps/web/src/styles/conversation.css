@@ -147,6 +147,16 @@ button.session-bar-project:hover { color: var(--accent-strong); }
 .configuration-impact dt { color: var(--muted); }
 .configuration-impact dd { margin: 0; overflow-wrap: anywhere; }
 .configuration-fields { display: grid; gap: 12px; }
+.configuration-choice-options { display: grid; gap: 8px; margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: 9px; min-width: 0; }
+.configuration-choice-options legend { padding: 0 5px; font-size: 13px; font-weight: 650; }
+.configuration-choice-option { display: flex; align-items: flex-start; gap: 9px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.configuration-choice-option.is-selected { border-color: var(--border-strong); background: var(--surface-subtle); }
+.configuration-choice-option input { margin: 4px 0 0; flex: 0 0 auto; }
+.configuration-choice-option strong, .configuration-choice-option small { display: block; overflow-wrap: anywhere; }
+.configuration-choice-option strong { font-size: 13px; }
+.configuration-choice-option small { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.configuration-close { flex: 0 0 auto; font-size: 18px; line-height: 1; }
+.configuration-field select[multiple] { min-height: 104px; }
 .configuration-field { display: grid; gap: 6px; min-width: 0; }
 .configuration-field label { font-size: 12px; font-weight: 650; }
 .configuration-field input:not([type=checkbox]), .configuration-field select { width: 100%; min-width: 0; min-height: 36px; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); color: var(--text); padding: 7px 9px; }

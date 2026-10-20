@@ -9,11 +9,14 @@ import { ConfigurationRepository } from "./repository.js";
 import { ConfigurationRequestService } from "./request-service.js";
 import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
+import { createP1ConfigurationAdapters } from "./p1-adapters.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
 import type { ConfigurationApplyReceipt, ConfigurationOutboxRecord, ConfigurationProposalInput, ConfigurationRecord } from "./types.js";
 import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
 import { randomUUID } from "node:crypto";
-import { canonical, ConfigurationError, digest, integer, object, string } from "./validation.js";
+import { canonical, ConfigurationError, integer, object, string } from "./validation.js";
+import { applyNativeRunOverlay, nativeConnectorChoiceOptions, validateNativeChoice } from "./native-choices.js";
+import { configurationNeedKey } from "./need-key.js";
 
 export interface ConfigurationFrameworkOptions {
   connector(sessionId: string, connectorId: string): { name: string; ready: boolean } | undefined;
@@ -43,8 +46,8 @@ export class ConversationalConfigurationFramework {
     this.repository = new ConfigurationRepository(database);
     this.credentials = new ConfigurationCredentialBridge(database, store.configurationSecretCipher());
     const registry = new ConfigurationRegistry();
-    for (const adapter of createConfigurationDomainAdapters({ store, credentials: this.credentials,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) })) {
+    for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials,
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply!;
         adapter.apply = context => {
@@ -61,6 +64,25 @@ export class ConversationalConfigurationFramework {
     this.service = new ConfigurationRequestService({ repository: this.repository, registry,
       host: { runInTransaction: (sessionId, action) => store.runConfigurationTransaction(sessionId, action),
         snapshot: (sessionId, capabilityId, target) => store.configurationSnapshot(sessionId, capabilityId, target),
+        choiceOptions: input => input.capabilityId === "connector.enable" && input.runId && this.options.nativeExecutor
+          ? nativeConnectorChoiceOptions({ store, sessionId: input.sessionId, runId: input.runId,
+            ready: this.options.connector(input.sessionId, String(input.input.connectorId))?.ready === true }) : [
+              { id: "persist", kind: "persisted_apply", label: "Apply configuration", description: "Save the reviewed configuration using its declared scope and activation mode.", available: true },
+              { id: "dismiss", kind: "dismiss", label: "Not now", description: "Do not change this configuration.", available: true },
+            ],
+        validateChoice: context => {
+          const record = this.repository.get(context.requestId, context.sessionId);
+          if (record) validateNativeChoice(store, { ...record, input: context.input, plan: context.plan,
+            target: this.service.registry.get(record.view.capabilityId).target(context.input),
+            view: { ...record.view, revision: context.revision, selectedOptionId: context.selectedOption?.id } }, context.selectedOption);
+        },
+        applyRunOverlay: context => {
+          const record = this.repository.get(context.requestId, context.sessionId);
+          if (!record) throw new ConfigurationError("CONFIGURATION_REQUEST_NOT_FOUND", "Configuration request not found", 404);
+          if (!this.options.nativeExecutor || !this.options.connector(context.sessionId, String(context.input.connectorId))?.ready)
+            throw new ConfigurationError("CONFIGURATION_OVERLAY_UNAVAILABLE", "This connector is not ready for task-only Native use", 409);
+          return applyNativeRunOverlay(store, record, context);
+        },
         resolvePreviewCredential: input => {
           try {
             this.credentials.read(input.credentialHandle, { sessionId: input.sessionId, requestId: input.requestId, revision: input.revision, target: input.target, fieldId: "apiToken" });
@@ -84,6 +106,8 @@ export class ConversationalConfigurationFramework {
 
   async propose(sessionId: string, input: ConfigurationProposalInput, key?: string): Promise<ConfigurationRequestView> {
     const session = this.store.assertSessionWritable(sessionId);
+    if (["skill.select", "thinking.configure", "review.configure"].includes(input.capabilityId) && !this.options.nativeExecutor)
+      throw new ConfigurationError("CONFIGURATION_BACKEND_UNSUPPORTED", "These scoped settings have only been integrated with the Native executor. JiuwenSwarm host activation is not verified.", 409);
     await this.reconcileLifecycle(sessionId);
     if (Object.keys(input.values).some(name => name.startsWith("restore"))) throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "Restoration fields are reserved for receipt-based reversal", 400);
     const scope = input.scope ?? (input.capabilityId === "model.repair_credential" ||
@@ -91,6 +115,18 @@ export class ConversationalConfigurationFramework {
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {
       const bound = await this.store.getSessionRun(sessionId, input.runId);
+      if (input.protocolVersion === 3) {
+        if (!bound || ["completed", "cancelled", "failed", "interrupted"].includes(bound.status) || !this.store.notifications.canWake(sessionId))
+          throw new ConfigurationError("CONFIGURATION_TASK_UNAVAILABLE", "This configuration need no longer belongs to an active task", 409);
+        const adapter = this.service.registry.get(input.capabilityId);
+        const normalized = adapter.normalize(input.values);
+        const target = adapter.target(normalized);
+        const baseline = this.store.configurationSnapshot(sessionId, input.capabilityId, target);
+        const needKey = configurationNeedKey({ runId: input.runId, capabilityId: input.capabilityId, target, snapshot: baseline });
+        const prior = this.repository.list(sessionId).find(record => record.view.runId === input.runId && record.view.needKey === needKey
+          && record.view.state === "dismissed" && ["dismiss", "alternative"].includes(record.view.choiceReceipt?.kind ?? ""));
+        if (prior) throw new ConfigurationError("CONFIGURATION_NEED_ALREADY_DECIDED", "This task already received a decision for the same configuration need. Continue using that choice instead of asking again.", 409);
+      }
       if (bound?.configurationWait && bound.configurationCheckpoint && this.repository.get(bound.configurationCheckpoint.requestId, sessionId)?.view.state === "expired")
         throw new ConfigurationError("CONFIGURATION_REPLAN_UNAVAILABLE", "The original task remains paused after its proposal expired. Stop it before retrying; rebinding this checkpoint is not available yet.", 409);
       if (!this.options.nativeExecutor || input.capabilityId !== "connector.enable") {
@@ -102,12 +138,14 @@ export class ConversationalConfigurationFramework {
       const connector = this.options.connector(sessionId, connectorId);
       if (!connector?.ready) throw new ConfigurationError("CONNECTOR_NOT_READY", "The installed connector is not ready for this session", 409);
       const companion = this.store.proposeConnectorConfiguration({ sessionId, runId: input.runId,
-        connectorId, connectorName: connector.name, reason: "CONNECTOR_REQUIRED_FOR_TASK" });
+        connectorId, connectorName: connector.name, reason: "CONNECTOR_REQUIRED_FOR_TASK",
+        ...(input.protocolVersion === 3 ? { configurationProtocolVersion: 3 as const } : {}) });
       try {
         const view = await this.service.propose(sessionId, { ...input, scope, requestId: companion.id }, key);
-        if (companion.autoApplyAt && view.state === "awaiting_confirmation" && !view.autoApplyAt) {
+        if (input.protocolVersion !== 3 && companion.autoApplyAt && view.state === "awaiting_confirmation" && !view.autoApplyAt) {
           await this.update(view.id, row => { row.view.autoApplyAt = companion.autoApplyAt; });
         }
+        if (input.protocolVersion === 3) this.store.withdrawConnectorAutoApply(sessionId, companion.id);
         return this.service.get(sessionId, view.id);
       }
       catch (error) {
@@ -149,7 +187,7 @@ export class ConversationalConfigurationFramework {
 
   private assertAutoAuthorized(record: ConfigurationRecord): void {
     const session = this.store.assertSessionWritable(record.view.sessionId);
-    if (record.view.capabilityId !== "connector.enable" || !session.autoApplyLowRiskConfiguration
+    if (record.view.protocolVersion === 3 || record.view.capabilityId !== "connector.enable" || !session.autoApplyLowRiskConfiguration
       || !isAutoApplicableConnector(String(record.input.connectorId)) || !record.view.autoApplyAt
       || Date.parse(record.view.autoApplyAt) > Date.now() || record.stopGeneration !== this.store.notifications.generation(session.id))
       throw new ConfigurationError("CONFIGURATION_AUTO_NOT_AUTHORIZED", "Automatic configuration is not authorized or no longer eligible", 409);
@@ -164,11 +202,17 @@ export class ConversationalConfigurationFramework {
   }
 
   private async decideSerial(sessionId: string, id: string, input: ConfigurationDecisionInput, key?: string, source: "user" | "auto" = "user"): Promise<ConfigurationRequestView> {
-    object(input, ["revision", "previewDigest", "decision"], "decision");
+    object(input, ["revision", "previewDigest", "decision", "selectedOptionId"], "decision");
     integer(input.revision, "revision"); string(input.previewDigest, "previewDigest", 100);
     if (input.decision !== "apply" && input.decision !== "dismiss") throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "Invalid configuration decision", 400);
     await this.reconcileLifecycle(sessionId, id);
     if (source === "auto") this.assertAutoAuthorized(this.service.getRecord(sessionId, id));
+    const deciding = this.service.getRecord(sessionId, id);
+    if (deciding.view.protocolVersion === 3) {
+      const option = deciding.view.options?.find(item => item.id === deciding.view.selectedOptionId);
+      if (!option || input.selectedOptionId !== option.id) throw new ConfigurationError("CONFIGURATION_OPTION_REQUIRED", "Confirm the selected option from the latest preview", 409);
+      if ((input.decision === "dismiss") !== (option.kind === "dismiss")) throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "The decision does not match the selected option", 400);
+    } else if (input.selectedOptionId !== undefined) throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "A v2 proposal does not accept selected options", 400);
     await this.update(id, record => {
       if (record.view.revision !== input.revision || record.view.previewDigest !== input.previewDigest)
         throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "Confirm the latest configuration preview", 409);
@@ -241,7 +285,9 @@ export class ConversationalConfigurationFramework {
     const now = new Date().toISOString();
     this.repository.enqueueOutbox({ id: `${record.view.id}:${record.view.revision}:resume`, requestId: record.view.id,
       revision: record.view.revision, sessionId: record.view.sessionId, kind: "resume", state: "pending",
-      payload: { runId: record.view.runId, stopGeneration: record.stopGeneration, previewDigest: record.approvedDigest }, createdAt: now, updatedAt: now });
+      payload: { runId: record.view.runId, stopGeneration: record.stopGeneration, previewDigest: record.approvedDigest,
+        ...(record.view.choiceReceipt ? { selectedOptionId: record.view.choiceReceipt.optionId, choiceKind: record.view.choiceReceipt.kind,
+          needKey: record.view.needKey, ...(record.view.choiceReceipt.alternativeId ? { alternativeId: record.view.choiceReceipt.alternativeId } : {}) } : {}) }, createdAt: now, updatedAt: now });
   }
 
   private async settleSerial(sessionId: string, id: string): Promise<ConfigurationRequestView> {

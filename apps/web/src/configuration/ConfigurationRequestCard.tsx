@@ -4,7 +4,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { DEFAULT_MODEL_API_VARIANT, MODEL_API_VARIANTS, type ModelApiProtocol } from "@sciencediscovery/schema";
 import type { ConfigurationAction, ConfigurationCredentialDraftView, ConfigurationCredentialInput, ConfigurationDecisionInput,
-  ConfigurationFieldView, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScalar } from "@sciencediscovery/schema";
+  ConfigurationFieldView, ConfigurationPreviewInput, ConfigurationRequestView, ConfigurationScalar, ConfigurationValues } from "@sciencediscovery/schema";
 import { ApiRequestError } from "../api/auth.js";
 import { useLocale } from "../i18n/index.js";
 import { ProcessRecord } from "../ProcessRecord.js";
@@ -19,7 +19,7 @@ export interface ConfigurationRequestActions {
   reversal(key: string): Promise<ConfigurationRequestView>;
 }
 
-function fieldValues(request: ConfigurationRequestView): Record<string, ConfigurationScalar> {
+function fieldValues(request: ConfigurationRequestView): ConfigurationValues {
   return Object.fromEntries(request.fields.flatMap((field) => field.kind !== "credential" && field.value !== undefined
     ? [[field.id, field.value]] : []));
 }
@@ -42,6 +42,7 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
   const m = configurationMessages(locale);
   const id = useId();
   const [values, setValues] = useState(() => fieldValues(request));
+  const [selectedOptionId, setSelectedOptionId] = useState(request.selectedOptionId);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -58,6 +59,7 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; credentialDraft.current = undefined; }; }, []);
   useEffect(() => {
     setValues(fieldValues(request));
+    setSelectedOptionId(request.selectedOptionId);
     setSecrets({});
     setDirty(false);
     setRefreshRequired(false);
@@ -74,12 +76,17 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
     return () => clearInterval(timer);
   }, [request.autoApplyAt, request.state]);
   const hasAction = (action: ConfigurationAction) => request.allowedActions.includes(action);
+  const choices = request.protocolVersion === 3 ? request.options ?? [] : [];
+  const selectedOption = choices.find(option => option.id === selectedOptionId && option.available);
+  const dismissOption = choices.find(option => option.kind === "dismiss" && option.available);
+  const canDismiss = hasAction("dismiss") && (request.protocolVersion !== 3 || Boolean(dismissOption));
   const terminal = ["applied", "dismissed", "cancelled", "expired"].includes(request.state);
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
     && !(request.state === "awaiting_confirmation" && request.autoApplyAt);
   const canApply = hasAction("apply") && request.state === "awaiting_confirmation"
     && Boolean(request.previewDigest) && !dirty && !refreshRequired && !runActive && !readOnly && !mutationsBlocked
-    && (!submittedPreview.current || (submittedPreview.current.revision === request.revision && submittedPreview.current.digest === request.previewDigest));
+    && (!submittedPreview.current || (submittedPreview.current.revision === request.revision && submittedPreview.current.digest === request.previewDigest))
+    && (request.protocolVersion !== 3 || (selectedOption && selectedOption.id === request.selectedOptionId));
   const scheduledAt = !readOnly && !mutationsBlocked && request.state === "awaiting_confirmation" && request.autoApplyAt && Number.isFinite(Date.parse(request.autoApplyAt))
     ? request.autoApplyAt : undefined;
   const remainingSeconds = scheduledAt ? Math.max(0, Math.ceil((Date.parse(scheduledAt) - now) / 1_000)) : undefined;
@@ -91,7 +98,7 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
     if (!key) { key = crypto.randomUUID(); operationKeys.current.set(operation, key); }
     return key;
   }
-  function edit(field: ConfigurationFieldView, value: ConfigurationScalar) {
+  function edit(field: ConfigurationFieldView, value: ConfigurationScalar | string[]) {
     setDirty(true);
     setError(undefined);
     setErrorField(undefined);
@@ -102,6 +109,28 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
     } else setValues((current) => ({ ...current, [field.id]: value,
       ...(request.capabilityId === "model.connect" && field.id === "apiProtocol" && typeof value === "string" && value in MODEL_API_VARIANTS
         ? { apiVariant: DEFAULT_MODEL_API_VARIANT[value as ModelApiProtocol] } : {}) }));
+  }
+  async function selectOption(optionId: string) {
+    if (!editable || runActive || busyRef.current || !choices.some(option => option.id === optionId && option.available)) return;
+    setSelectedOptionId(optionId);
+    setDirty(true);
+    credentialDraft.current = undefined;
+    operationKeys.current.clear();
+    await perform(async () => {
+      const next = await actions.preview({ expectedRevision: request.revision, values, selectedOptionId: optionId }, operationKey(`option:${optionId}`));
+      submittedPreview.current = { revision: next.revision, digest: next.previewDigest };
+      return next;
+    });
+  }
+  function dismiss() {
+    if (!canDismiss || busyRef.current || readOnly || mutationsBlocked || runActive) return;
+    void perform(async () => {
+      const target = request.protocolVersion === 3 && request.selectedOptionId !== dismissOption!.id
+        ? await actions.preview({ expectedRevision: request.revision, values: fieldValues(request), selectedOptionId: dismissOption!.id }, operationKey("dismiss-preview"))
+        : request;
+      return actions.decide({ revision: target.revision, previewDigest: target.previewDigest ?? "", decision: "dismiss",
+        ...(request.protocolVersion === 3 ? { selectedOptionId: dismissOption!.id } : {}) }, operationKey(`dismiss:${target.revision}`));
+    });
   }
   async function perform(work: () => Promise<ConfigurationRequestView>) {
     if (busyRef.current) return;
@@ -163,7 +192,8 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
         const fieldId = credentialFields[0].id;
         // Bind the isolated draft to the normalized target, including changes to
         // the endpoint/model in this form. This preview has no network effects.
-        const target = await actions.preview({ expectedRevision: request.revision, values }, operationKey("target-preview"));
+        const target = await actions.preview({ expectedRevision: request.revision, values,
+          ...(request.protocolVersion === 3 ? { selectedOptionId } : {}) }, operationKey("target-preview"));
         if (!mounted.current) return target;
         const uploaded = await actions.credential({ expectedRevision: target.revision, fieldId, secret: secrets[fieldId]! }, operationKey(`credential:${target.revision}`));
         if (!mounted.current) return target;
@@ -173,6 +203,7 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
       const draft = credentialDraft.current;
       if (draft && Date.parse(draft.expiresAt) <= Date.now()) { credentialDraft.current = undefined; throw new ApiRequestError("", 410); }
       const next = await actions.preview({ expectedRevision: draft?.revision ?? request.revision, values,
+        ...(request.protocolVersion === 3 ? { selectedOptionId } : {}),
         ...(draft ? { credentialHandle: draft.handle } : {}) }, operationKey("preview"));
       submittedPreview.current = { revision: next.revision, digest: next.previewDigest };
       credentialDraft.current = undefined;
@@ -180,11 +211,20 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
       return next;
     });
   }
-  const title = m.capability[request.capabilityId];
+  const title = m.capability[request.capabilityId] ?? request.capabilityId;
   const scope = `${m.scope[request.scope.kind]}${request.scope.kind !== "global" ? ` · ${request.scope.id}` : ""}`;
-  const summary = `${title} · ${m.state[request.state]}${request.state === "applied" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
+  const choiceLabel = request.choiceReceipt ? m.choiceKind[request.choiceReceipt.kind] : undefined;
+  const reasonText = request.reason.message === "CONNECTOR_REQUIRED_FOR_TASK" ? m.connectorNeeded : request.reason.message;
+  const resumptionLabel = request.runId && !terminal && request.resumption.state === "not_requested" ? m.waitingChoice : m.resumption[request.resumption.state];
+  const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
+  const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const summary = savedForNextRun ? `${title} · ${m.state.applied} · ${m.mode.next_run}`
+    : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
+  const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
+    ? m.waitingNextRun : m.activation[request.activation.state];
   const details = <>
-    <p>{request.reason.message}</p>
+    <p>{reasonText}</p>
     <dl className="configuration-impact">
       <dt>{m.resource}</dt><dd>{request.impact.resourceLocation}</dd>
       <dt>{m.scopeLabel}</dt><dd>{request.impact.effectiveScope || scope}</dd>
@@ -202,9 +242,10 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
       {request.verificationPlan.mayCharge ? <p className="configuration-charge">{m.mayCharge}</p> : null}
     </section>
     <dl className="configuration-impact configuration-stages" aria-label={m.progress}>
-      <dt>{m.saved}</dt><dd>{m.state[request.state]}</dd>
-      <dt>{m.activationLabel}</dt><dd>{m.activation[request.activation.state]}</dd>
-      <dt>{m.resumptionLabel}</dt><dd>{m.resumption[request.resumption.state]}</dd>
+      <dt>{m.saved}</dt><dd>{request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.noConfigurationWritten : m.state[request.state]}</dd>
+      {choiceLabel ? <><dt>{m.selectedChoice}</dt><dd>{choiceLabel}</dd></> : null}
+      <dt>{m.activationLabel}</dt><dd>{activationLabel}</dd>
+      <dt>{m.resumptionLabel}</dt><dd>{resumptionLabel}</dd>
       {request.decisionSource ? <><dt>{m.decisionSourceLabel}</dt><dd>{m.decisionSource[request.decisionSource]}</dd></> : null}
       <dt>{m.updatedAt}</dt><dd><time dateTime={request.updatedAt}>{formattedTime(request.updatedAt)}</time></dd>
     </dl>
@@ -234,6 +275,8 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
     <div className="conversation-configuration-heading">
       <div><span className="eyebrow">{m.eyebrow}</span><h3>{title}</h3></div>
       <span className="conversation-configuration-status" role="status">{m.state[request.state]}</span>
+      {request.protocolVersion === 3 && canDismiss ? <button type="button" className="secondary-button configuration-close" aria-label={m.closeAndReturn}
+        title={m.closeAndReturn} disabled={busy || runActive || readOnly || mutationsBlocked} onClick={dismiss}>×</button> : null}
     </div>
     {details}
     {scheduledAt && remainingSeconds !== undefined ? <div className="configuration-auto-apply" role="status">
@@ -241,6 +284,15 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
       <p>{m.scheduledAt}: <time dateTime={scheduledAt}>{formattedTime(scheduledAt)}</time></p>
     </div> : null}
     <form className="configuration-fields" onSubmit={(event) => void preview(event)}>
+      {request.protocolVersion === 3 ? <fieldset className="configuration-choice-options" disabled={!editable || runActive}>
+        <legend>{m.choosePath}</legend>
+        {choices.map(option => <label className={`configuration-choice-option${selectedOptionId === option.id ? " is-selected" : ""}`} key={option.id}>
+          <input type="radio" name={`${id}-option`} value={option.id} checked={selectedOptionId === option.id} disabled={!option.available || !editable || runActive}
+            onChange={() => void selectOption(option.id)} />
+          <span><strong>{locale.startsWith("zh") ? m.choiceKind[option.kind] : option.label}</strong><small>{option.description}</small>
+            {!option.available ? <small>{option.unavailableReason ?? m.choiceUnavailable}</small> : null}</span>
+        </label>)}
+      </fieldset> : null}
       {request.fields.map((field) => {
         const inputId = `${id}-${field.id}`;
         const descriptionId = `${inputId}-help`;
@@ -255,7 +307,10 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
               placeholder={field.status === "provided" ? m.providedPlaceholder : field.placeholder}
               onChange={(event) => edit(field, event.target.value)} />
             <p id={descriptionId}>{m.credential[field.status]} · {m.credentialNote}{field.description ? ` ${field.description}` : ""}</p>
-          </> : field.kind === "enum" ? <select {...common} value={String(values[field.id] ?? "")} onChange={(event) => edit(field, event.target.value)}>
+          </> : field.kind === "multiselect" ? <select {...common} multiple value={Array.isArray(values[field.id]) ? values[field.id] as string[] : []}
+            onChange={(event) => edit(field, Array.from(event.target.selectedOptions, option => option.value))}>
+            {field.choices?.map(choice => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+          </select> : field.kind === "enum" ? <select {...common} value={String(values[field.id] ?? "")} onChange={(event) => edit(field, event.target.value)}>
             <option value="">{m.choose}</option>
             {(request.capabilityId === "model.connect" && field.id === "apiVariant" && typeof values.apiProtocol === "string" && values.apiProtocol in MODEL_API_VARIANTS
               ? MODEL_API_VARIANTS[values.apiProtocol as ModelApiProtocol].map((variant) => ({ id: variant, label: variant })) : field.choices)
@@ -271,8 +326,9 @@ export function ConfigurationRequestCard({ request, actions, runActive = false, 
       {dirty ? <p role="status">{m.previewRequired}</p> : null}
       <div className="conversation-configuration-actions">
         {hasAction("preview") && !scheduledAt ? <button type="submit" className="secondary-button" disabled={busy || runActive || refreshRequired || readOnly || mutationsBlocked}>{m.preview}</button> : null}
-        {hasAction("apply") ? <button type="button" className="primary-button" disabled={busy || !canApply} onClick={() => { if (canApply) void perform(() => actions.decide({ revision: request.revision, previewDigest: request.previewDigest!, decision: "apply" }, operationKey("apply"))); }}>{m.confirm}</button> : null}
-        {hasAction("dismiss") ? <button type="button" className="secondary-button" disabled={busy || readOnly || mutationsBlocked} onClick={() => void perform(() => actions.decide({ revision: request.revision, previewDigest: request.previewDigest ?? "", decision: "dismiss" }, operationKey("dismiss")))}>{scheduledAt ? m.cancelChange : m.dismiss}</button> : null}
+        {hasAction("apply") ? <button type="button" className="primary-button" disabled={busy || !canApply} onClick={() => { if (canApply) void perform(() => actions.decide({ revision: request.revision, previewDigest: request.previewDigest!, decision: selectedOption?.kind === "dismiss" ? "dismiss" : "apply",
+          ...(request.protocolVersion === 3 ? { selectedOptionId } : {}) }, operationKey("apply"))); }}>{request.protocolVersion === 3 ? m.confirmChoice : m.confirm}</button> : null}
+        {canDismiss ? <button type="button" className="secondary-button" disabled={busy || readOnly || mutationsBlocked || runActive} onClick={dismiss}>{scheduledAt ? m.cancelChange : request.protocolVersion === 3 ? m.declineAndReturn : m.dismiss}</button> : null}
         {secondaryActions}
       </div>
     </form>

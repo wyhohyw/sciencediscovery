@@ -167,10 +167,100 @@ test("CFG quick configuration entry never creates a request until explicitly cho
     assert.ok(key.length > 10); choices.push(capability);
   } })); });
   assert.deepEqual(choices, []);
-  assert.equal(renderer!.root.findAllByType("button").length, 4);
+  assert.equal(renderer!.root.findAllByType("button").length, 7);
   await act(async () => { button(renderer!, "Repair model credentials").props.onClick(); });
   assert.deepEqual(choices, ["model.repair_credential"]);
   await act(async () => { renderer!.unmount(); });
+});
+
+function choiceRequest(overrides: Partial<ConfigurationRequestView> = {}): ConfigurationRequestView {
+  return request({ protocolVersion: 3, capabilityId: "connector.enable", selectedOptionId: "save", fields: [], options: [
+    { id: "save", kind: "persisted_apply", label: "Save for this session", description: "Future tasks can use PubMed.", available: true },
+    { id: "once", kind: "run_overlay", label: "Use for this task", description: "Session settings stay unchanged.", available: true },
+    { id: "web", kind: "alternative", label: "Use Web search", description: "Use the existing Web tool.", available: true },
+    { id: "dismiss", kind: "dismiss", label: "Do not configure", description: "Return the choice to the task.", available: true },
+  ], ...overrides });
+}
+
+test("CFG-T30 option changes preview on the server before allowing the exact selected choice", async () => {
+  const previews: unknown[] = [];
+  const decisions: unknown[] = [];
+  const updates: ConfigurationRequestView[] = [];
+  const next = choiceRequest({ revision: 3, selectedOptionId: "once", previewDigest: "sha256:once" });
+  const api = actions({ preview: async input => { previews.push(input); return next; }, decide: async input => { decisions.push(input); return choiceRequest({ state: "applied" }); } });
+  const renderer = await mount(choiceRequest(), api, value => updates.push(value));
+  const once = renderer.root.findAllByType("input").find(input => input.props.type === "radio" && input.props.value === "once")!;
+  await act(async () => { once.props.onChange(); });
+  assert.deepEqual(previews, [{ expectedRevision: 2, values: {}, selectedOptionId: "once" }]);
+  assert.equal(button(renderer, "Confirm choice and continue").props.disabled, true);
+  assert.equal(updates[0]?.selectedOptionId, "once");
+  await act(async () => renderer.update(createElement(ConfigurationRequestCard, { request: next, actions: api, onUpdate() {} })));
+  await act(async () => { button(renderer, "Confirm choice and continue").props.onClick(); });
+  assert.deepEqual(decisions, [{ revision: 3, previewDigest: "sha256:once", decision: "apply", selectedOptionId: "once" }]);
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-T32 explicit close previews refusal and returns it; unmount does not decide", async () => {
+  const calls: unknown[] = [];
+  const api = actions({ preview: async input => { calls.push(input); return choiceRequest({ revision: 3, selectedOptionId: "dismiss", previewDigest: "sha256:dismiss" }); },
+    decide: async input => { calls.push(input); return choiceRequest({ state: "dismissed" }); } });
+  const renderer = await mount(choiceRequest(), api);
+  await act(async () => { renderer.root.findAllByType("button").find(button => button.props["aria-label"] === "Close without configuring and return to the task")!.props.onClick(); });
+  assert.deepEqual(calls, [
+    { expectedRevision: 2, values: {}, selectedOptionId: "dismiss" },
+    { revision: 3, previewDigest: "sha256:dismiss", decision: "dismiss", selectedOptionId: "dismiss" },
+  ]);
+  await act(async () => renderer.unmount());
+  const idle = await mount(choiceRequest(), api);
+  await act(async () => idle.unmount());
+  assert.equal(calls.length, 2);
+});
+
+test("CFG-T31/32 collapsed receipts distinguish temporary use and alternatives from saved settings", async () => {
+  for (const kind of ["run_overlay", "alternative"] as const) {
+    const renderer = await mount(choiceRequest({ state: kind === "alternative" ? "dismissed" : "applied", allowedActions: [],
+      choiceReceipt: { optionId: kind, kind, label: kind, configurationWritten: false, scope: kind === "run_overlay" ? "run" : "none" },
+      resumption: { state: "started", runId: "r1" } }));
+    const summary = renderer.root.findByType("summary");
+    assert.doesNotMatch(summary.children.join(""), /Saved/);
+    assert.match(JSON.stringify(renderer.toJSON()), /No persistent settings changed/);
+    assert.equal(renderer.root.findAllByType("input").length, 0);
+    await act(async () => renderer.unmount());
+  }
+});
+
+test("CFG P1 saved next-run receipts describe future activation without implying an unfinished original task", async () => {
+  const saved = choiceRequest({ capabilityId: "thinking.configure", state: "applied", runId: undefined, allowedActions: [],
+    choiceReceipt: { optionId: "save", kind: "persisted_apply", label: "Save configuration", configurationWritten: true, scope: "session" },
+    activation: { mode: "next_run", state: "needs_user_action" }, resumption: { state: "not_requested" } });
+  const renderer = await mount(saved, actions(), () => undefined, "zh");
+  const label = () => renderer.root.findByProps({ className: "record-label" }).children.join("");
+  assert.equal(label(), "调整思考配置 · 已保存 · 后续运行生效");
+  assert.equal(renderer.root.findByType("details").props.open, false);
+  assert.match(JSON.stringify(renderer.toJSON()), /等待后续运行/);
+  assert.doesNotMatch(JSON.stringify(renderer.toJSON()), /需要用户处理/);
+  await act(async () => renderer.update(createElement(LocaleProvider, { initialLocale: "zh" }, createElement(ConfigurationRequestCard, {
+    request: { ...saved, activation: { mode: "requires_restart", state: "needs_user_action" } }, actions: actions(), onUpdate() {},
+  }))));
+  assert.match(JSON.stringify(renderer.toJSON()), /需要重启/);
+  assert.match(JSON.stringify(renderer.toJSON()), /需要用户处理/);
+  assert.doesNotMatch(label(), /后续运行生效/);
+  await act(async () => renderer.update(createElement(LocaleProvider, { initialLocale: "zh" }, createElement(ConfigurationRequestCard, {
+    request: { ...saved, runId: "r1", activation: { mode: "same_run", state: "active" }, resumption: { state: "started", runId: "r1" } },
+    actions: actions(), onUpdate() {},
+  }))));
+  assert.equal(label(), "调整思考配置 · 保存配置后继续 · 原任务继续运行中");
+  await act(async () => renderer.unmount());
+});
+
+test("CFG-T33 multiselect fields send only selected IDs through the preview values", async () => {
+  const previews: unknown[] = [];
+  const renderer = await mount(request({ capabilityId: "skill.select", fields: [{ id: "enabledSkillIds", label: "Skills", kind: "multiselect", required: false,
+    value: ["skill-a"], choices: [{ id: "skill-a", label: "A" }, { id: "skill-b", label: "B" }] }] }), actions({ preview: async input => { previews.push(input); return request(); } }));
+  await act(async () => renderer.root.findByType("select").props.onChange({ target: { selectedOptions: [{ value: "skill-b" }] } }));
+  await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  assert.deepEqual(previews, [{ expectedRevision: 2, values: { enabledSkillIds: ["skill-b"] } }]);
+  await act(async () => renderer.unmount());
 });
 
 test("CFG stopped and archived decisions block mutations rather than suggesting a stale-preview retry", async () => {

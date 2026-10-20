@@ -5,11 +5,14 @@ const { test } = createTest(import.meta.url, { tags: ["category:st", "os:linux",
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { fork, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve, sep } from "node:path";
-import type { McpTransportClient } from "@sciencediscovery/data-source";
+import { NativeWebProviderClient, type McpTransportClient } from "@sciencediscovery/data-source";
 import { createPublicBiomedSources } from "@sciencediscovery/mcp-sources";
 import type { ConfigurationRequestView, McpCatalog, McpInvocation, McpInvokeResponse, ModelProfile, Project, Session, SessionDetail, SessionRun, SessionRunEvent } from "@sciencediscovery/schema";
 import { createApiServer, closeApiServer } from "../http/index.js";
@@ -26,11 +29,12 @@ async function body(request: IncomingMessage): Promise<ModelRequest> {
   const parts: Buffer[] = []; for await (const part of request) parts.push(Buffer.from(part));
   return parts.length ? JSON.parse(Buffer.concat(parts).toString("utf8")) as ModelRequest : {};
 }
-async function fixture(context: TestContext, decision: "apply" | "dismiss", automatic = false) {
+async function fixture(context: TestContext, decision: "apply" | "dismiss", automatic = false,
+  choiceOptions: { choice?: "run-only" | "use-web"; web?: boolean; repeatNeed?: boolean; crashBeforeActivation?: boolean } = {}) {
   const tmp = resolve(process.cwd(), ".tmp"); await mkdir(tmp, { recursive: true });
   const root = await mkdtemp(resolve(tmp, "configuration-agent-"));
   const oldExecutor = process.env.SCIENCE_AGENT_EXECUTOR; process.env.SCIENCE_AGENT_EXECUTOR = "native";
-  const modelRequests: ModelRequest[] = []; const issued: string[] = []; let invocations = 0;
+  const modelRequests: ModelRequest[] = []; const issued: string[] = []; let invocations = 0, webInvocations = 0;
   const provider = createServer(async (request, response) => {
     const input = await body(request); const task = Boolean(input.tools?.length);
     if (task) modelRequests.push(input);
@@ -40,7 +44,10 @@ async function fixture(context: TestContext, decision: "apply" | "dismiss", auto
     if (task && queued) text = "QUEUED_TASK_DONE";
     else if (task && !results.has("cfg-inspect")) { name = "inspect_configuration"; id = "cfg-inspect"; args = {}; }
     else if (task && !results.has("cfg-propose")) { name = "propose_configuration"; id = "cfg-propose"; args = { capabilityId: "connector.enable", values: { connectorId: "pubmed" } }; }
+    else if (task && choiceOptions.repeatNeed && !results.has("cfg-repeat")) { name = "propose_configuration"; id = "cfg-repeat"; args = { capabilityId: "connector.enable", values: { connectorId: "pubmed" } }; }
     else if (task && decision === "dismiss") text = "CONFIGURATION_DECLINED_CONTINUED";
+    else if (task && choiceOptions.choice === "use-web" && !results.has("cfg-web")) { name = "web_search"; id = "cfg-web"; args = { query: "diabetes systematic review" }; }
+    else if (task && choiceOptions.choice === "use-web") text = "CONFIGURATION_WEB_ALTERNATIVE_COMPLETE";
     else if (task && !results.has("cfg-discover")) { name = "tool_search"; id = "cfg-discover"; args = { query: "select:mcp__pubmed__search" }; }
     else if (task && !results.has("cfg-pubmed")) { name = "mcp__pubmed__search"; id = "cfg-pubmed"; args = { query: "diabetes systematic review", limit: 1 }; }
     else if (task) text = "CONFIGURATION_TASK_COMPLETE: the offline PubMed search completed.";
@@ -77,15 +84,45 @@ async function fixture(context: TestContext, decision: "apply" | "dismiss", auto
     runnerExecTimeoutMs: 0, runnerMaxOutputBytes: 1_000_000, runnerMaxWorkspaceBytes: 10_737_418_240, runnerToken: "runner-token", runnerUrl: runnerOrigin,
     sshConfigPath: resolve(root, "ssh-config"), staticDir: resolve(root, "no-web"), workspaceUpload: { maxFileBytes: 1_000_000, maxRequestBytes: 10_000_000, maxWorkspaceBytes: 10_737_418_240 },
     memoryGraph: { url: "", internalToken: "" }, evolve: { url: "", internalToken: "" } };
-  let api: Server | undefined;
+  let api: Server | undefined, child: ChildProcess | undefined, childOutput = "";
+  let committed!: (value: { requestId: string; receiptId: string }) => void;
+  const activationCommitted = new Promise<{ requestId: string; receiptId: string }>(done => { committed = done; });
+  async function killChild() {
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    const exit = once(child, "exit"); child.kill("SIGKILL"); await exit;
+  }
+  async function startChild(pauseActivation: boolean): Promise<string> {
+    childOutput = "";
+    child = fork(fileURLToPath(new URL("./runtime-crash.fixture.ts", import.meta.url)), [], { execArgv: ["--import", "tsx"], stdio: ["ignore", "pipe", "pipe", "ipc"] });
+    child.stdout?.on("data", part => { childOutput = (childOutput + String(part)).slice(-4000); });
+    child.stderr?.on("data", part => { childOutput = (childOutput + String(part)).slice(-4000); });
+    const ready = new Promise<string>((done, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`Crash fixture did not start: ${childOutput}`)), 60_000);
+      child!.once("error", error => { clearTimeout(timeout); reject(error); });
+      child!.once("exit", (code, signal) => { clearTimeout(timeout); reject(new Error(`Crash fixture exited ${code}/${signal}: ${childOutput}`)); });
+      child!.on("message", (message: { type: string; origin?: string; requestId?: string; receiptId?: string; toolCallId?: string; event?: string; fields?: unknown }) => {
+        if (message.type === "ready") { clearTimeout(timeout); done(message.origin!); }
+        else if (message.type === "committed") committed({ requestId: message.requestId!, receiptId: message.receiptId! });
+        else if (message.type === "invocation") { assert.equal(message.toolCallId, "cfg-pubmed"); invocations++; }
+        else if (message.type === "diagnostic") childOutput = (childOutput + JSON.stringify({ event: message.event, fields: message.fields })).slice(-4000);
+      });
+    });
+    child.send({ type: "start", config, pauseActivation });
+    return ready;
+  }
   context.after(async () => {
-    try { if (api) await closeApiServer(api); } finally {
+    try { if (api) await closeApiServer(api); await killChild(); } finally {
       await close(provider); await close(runner);
       if (oldExecutor === undefined) delete process.env.SCIENCE_AGENT_EXECUTOR; else process.env.SCIENCE_AGENT_EXECUTOR = oldExecutor;
       assert.ok(root.startsWith(tmp + sep)); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
-  api = createApiServer(config, { mcpTransport }); const origin = await listen(api);
+  const webProvider = new NativeWebProviderClient();
+  webProvider.invoke = async input => { webInvocations++; assert.equal(input.operation, "search");
+    return { content: JSON.stringify({ results: [{ title: "Offline web literature", url: "https://example.org/paper", content: "Offline source" }] }), durationMs: 1, isError: false }; };
+  let origin: string;
+  if (choiceOptions.crashBeforeActivation) origin = await startChild(true);
+  else { api = createApiServer(config, { mcpTransport, webProvider }); origin = await listen(api); }
   async function call<T>(path: string, input?: unknown, method = input === undefined ? "GET" : "POST") {
     let response: Response;
     try { response = await fetch(origin + path, { method, headers: { authorization: "Bearer configuration-agent-token", "content-type": "application/json", "Idempotency-Key": randomUUID() },
@@ -97,28 +134,33 @@ async function fixture(context: TestContext, decision: "apply" | "dismiss", auto
     const result = await call<T>(path, input, method); assert.equal(result.status, status, `${path}: ${result.text}`); return result.value;
   }
   const model = await ok<ModelProfile>("/api/models", { name: "Configuration agent fixture", model: "configuration-agent-fixture", baseUrl: `${providerOrigin}/v1`, apiToken: "fixture-token" });
-  await ok("/api/settings", { modelId: model.id, enabledConnectorIds: [], semanticReviewEnabled: false }, "PUT", 200);
+  await ok("/api/settings", { modelId: model.id, enabledConnectorIds: choiceOptions.web ? ["web"] : [], semanticReviewEnabled: false }, "PUT", 200);
   const project = await ok<Project>("/api/projects", { name: "Configuration agent runtime", settingsOverrides: { enabledSkillIds: [], skillSelectionMode: "selected" } });
   const session = await ok<Session>(`/api/projects/${project.id}/sessions`, { title: "Configuration runtime fixture", approvalMode: "always_allow", autoApplyLowRiskConfiguration: automatic });
   const path = `/api/sessions/${session.id}`;
-  async function waitRun(id: string, status: SessionRun["status"]): Promise<SessionRun> {
+  async function waitRun(id: string, status: SessionRun["status"], timeoutMs = 60_000): Promise<SessionRun> {
     let last: SessionRun | undefined;
-    for (let attempt = 0; attempt < 300; attempt++) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
       last = (await ok<SessionRun[]>(`${path}/runs`)).find(item => item.id === id);
       if (last?.status === status) return last;
-      if (last && ["failed", "cancelled", "completed"].includes(last.status)) throw new Error(`Run ended as ${last.status} instead of ${status}: ${last.error ?? ""}; issued=${issued.join(",")}`);
+      if (last && ["failed", "cancelled", "completed"].includes(last.status)) throw new Error(`Run ended as ${last.status} instead of ${status}: ${last.error ?? ""}; issued=${issued.join(",")}${choiceOptions.crashBeforeActivation ? `; child=${childOutput}` : ""}`);
+      if (choiceOptions.crashBeforeActivation && last?.configurationCheckpoint) {
+        const phase = await ok<ConfigurationRequestView>(`${path}/configuration-requests/${last.configurationCheckpoint.requestId}`);
+        if (["suppressed", "failed"].includes(phase.activation.state)) throw new Error(`Crash recovery activation ${phase.activation.state}; error=${phase.error?.code}; child=${childOutput}`);
+      }
       await new Promise(done => setTimeout(done, 50));
     }
     throw new Error(`Timed out waiting for ${status}; latest=${JSON.stringify(last)}; issued=${issued.join(",")}`);
   }
   async function start() {
-    // Avoid the separate explicit-connector preflight: the actual model must discover and propose it.
-    const prompt = "Find a literature result using an installed source that is currently disabled. Choose a source yourself, configure it if needed, and finish the original lookup without delegating.";
+    // A research request, with no instruction to open a card or resume after confirmation.
+    const prompt = "Find recent systematic reviews of diabetes in PubMed and summarize their evidence. Work in the main Agent without delegating.";
     const run = await ok<SessionRun>(`${path}/runs`, { content: prompt });
     const blocked = await waitRun(run.id, "blocked"); assert.equal(blocked.configurationWait, true); assert.ok(blocked.configurationCheckpoint?.historyRef);
     const cards = await ok<{ items: ConfigurationRequestView[] }>(`${path}/configuration-requests`);
     const card = cards.items.find(item => item.runId === run.id && item.capabilityId === "connector.enable");
-    assert.ok(card, "The model's generic proposal must expose a V2 card after checkpoint commit");
+    assert.ok(card, "The model's generic proposal must expose a card after checkpoint commit");
     assert.equal(card.state, "awaiting_confirmation"); assert.ok(card.previewDigest); assert.ok(card.revision);
     if (!automatic) assert.equal(card.autoApplyAt, undefined, "Tool Always Allow does not authorize configuration changes");
     const events = await ok<SessionRunEvent[]>(`${path}/runs/${run.id}/events`);
@@ -126,8 +168,20 @@ async function fixture(context: TestContext, decision: "apply" | "dismiss", auto
     assert.equal(blocked.finishedAt, undefined);
     return { run: blocked, card, prompt };
   }
-  const decide = (card: ConfigurationRequestView) => call<ConfigurationRequestView>(`${path}/configuration-requests/${card.id}/decision`, { revision: card.revision, previewDigest: card.previewDigest, decision });
-  return { root, path, session, origin, modelRequests, issued, ok, call, start, decide, waitRun, invocations: () => invocations };
+  const select = async (card: ConfigurationRequestView, optionId: string) => ok<ConfigurationRequestView>(`${path}/configuration-requests/${card.id}/preview`,
+    { expectedRevision: card.revision, values: { connectorId: "pubmed" }, selectedOptionId: optionId }, "POST", 200);
+  const decide = async (card: ConfigurationRequestView) => {
+    const selected = decision === "dismiss" ? "dismiss" : choiceOptions.choice;
+    if (selected && card.protocolVersion === 3 && card.selectedOptionId !== selected) card = await select(card, selected);
+    return call<ConfigurationRequestView>(`${path}/configuration-requests/${card.id}/decision`, { revision: card.revision, previewDigest: card.previewDigest, decision,
+      ...(card.protocolVersion === 3 ? { selectedOptionId: card.selectedOptionId } : {}) });
+  };
+  const restart = async () => {
+    if (choiceOptions.crashBeforeActivation) { await killChild(); origin = await startChild(false); }
+    else { await closeApiServer(api!); api = createApiServer(config, { mcpTransport, webProvider }); origin = await listen(api); }
+  };
+  return { root, path, session, origin, modelRequests, issued, ok, call, start, select, decide, waitRun, restart,
+    activationCommitted, invocations: () => invocations, webInvocations: () => webInvocations };
 }
 
 test("CFG Agent runtime: generic proposal blocks, approval resumes the same run, real MCP search executes once, queue follows", async context => {
@@ -152,7 +206,7 @@ test("CFG Agent runtime: generic proposal blocks, approval resumes the same run,
   assert.ok(f.modelRequests.some(request => JSON.stringify(request.messages).includes("The user approved enabling")), "The actual resumed model receives the committed decision");
 });
 
-test("CFG Agent runtime: refusing the V2 card continues original history without enabling or replaying tools", async context => {
+test("CFG Agent runtime: refusing the selected option continues original history without enabling or replaying tools", async context => {
   const f = await fixture(context, "dismiss"); const original = await f.start();
   assert.equal((await f.decide(original.card)).status, 200);
   const completed = await f.waitRun(original.run.id, "completed"); assert.equal(completed.userMessageId, original.run.userMessageId);
@@ -162,7 +216,7 @@ test("CFG Agent runtime: refusing the V2 card continues original history without
   assert.ok(f.modelRequests.some(request => JSON.stringify(request.messages).includes("The user declined enabling")));
 });
 
-test("CFG Agent runtime: Stop invalidates a pending V2 card and never resumes the stopped source run", async context => {
+test("CFG Agent runtime: Stop invalidates a pending card and never resumes the stopped source run", async context => {
   const f = await fixture(context, "apply"); const original = await f.start();
   const stop = await f.call(`${f.path}/run/cancel`, {}, "POST"); assert.ok([200, 202].includes(stop.status), stop.text);
   await f.waitRun(original.run.id, "cancelled");
@@ -173,31 +227,99 @@ test("CFG Agent runtime: Stop invalidates a pending V2 card and never resumes th
   assert.equal(f.invocations(), 0); assert.equal(f.issued.length, 2);
 });
 
-test("CFG Agent runtime: separate low-risk authorization waits for the real server deadline and auto-resumes the same run", async context => {
+test("CFG-T36: a v3 choice cannot inherit the previous PubMed thirty-second authorization", async context => {
   const f = await fixture(context, "apply", true); const original = await f.start();
-  assert.ok(original.card.autoApplyAt, "The generic card must show its server-owned automatic deadline");
-  const deadline = Date.parse(original.card.autoApplyAt);
-  const created = Date.parse(original.card.createdAt);
-  assert.ok(deadline - created >= 29_000 && deadline - created <= 31_000, "The configured grace period is approximately thirty seconds");
-  assert.equal(f.invocations(), 0, "No dependent MCP action can run before the configuration deadline");
+  assert.equal(original.card.protocolVersion, 3); assert.equal(original.card.autoApplyAt, undefined);
+  const invalid = await f.call(`${f.path}/configuration-requests/${original.card.id}/decision`, {
+    revision: original.card.revision, previewDigest: original.card.previewDigest, decision: "apply" });
+  assert.equal(invalid.status, 409, invalid.text);
+  await new Promise(done => setTimeout(done, 31_000));
   const during = (await f.ok<SessionRun[]>(`${f.path}/runs`)).find(item => item.id === original.run.id)!;
   assert.equal(during.status, "blocked"); assert.equal(during.configurationWait, true);
-  // No decision/continue/browser request: the real API timer owns the entire transition.
-  let completed: SessionRun | undefined;
-  for (let attempt = 0; attempt < 160; attempt++) {
-    const current = (await f.ok<SessionRun[]>(`${f.path}/runs`)).find(item => item.id === original.run.id)!;
-    if (current.status === "completed") { completed = current; break; }
-    assert.ok(!["failed", "cancelled", "interrupted"].includes(current.status), `Automatic continuation failed: ${JSON.stringify(current)}`);
-    if (Date.now() < deadline - 1_000) assert.equal(f.invocations(), 0, "Grace period must not invoke the connector early");
-    await new Promise(done => setTimeout(done, 500));
-  }
-  assert.ok(completed, "The real server timer must resume and complete without a user decision");
+  assert.equal(f.invocations(), 0, "No v3 option may be chosen by the old server timer");
+  assert.equal((await f.decide(original.card)).status, 200);
+  const completed = await f.waitRun(original.run.id, "completed");
   assert.equal(completed.id, original.run.id); assert.equal(completed.userMessageId, original.run.userMessageId);
   assert.equal(f.invocations(), 1); assert.equal(f.issued.filter(name => name === "propose_configuration").length, 1);
   const saved = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
-  assert.equal(saved.state, "applied"); assert.equal(saved.decisionSource, "auto"); assert.equal(saved.activation.state, "active");
+  assert.equal(saved.state, "applied"); assert.equal(saved.decisionSource, "user"); assert.equal(saved.activation.state, "active");
   const events = await f.ok<SessionRunEvent[]>(`${f.path}/runs/${original.run.id}/events`);
   assert.equal(events.filter(item => item.event.type === "run.completed").length, 1);
   const detail = await f.ok<SessionDetail>(f.path);
   assert.equal(detail.messages.filter(message => message.role === "assistant" && message.content.includes("CONFIGURATION_TASK_COMPLETE")).length, 1);
+});
+
+test("CFG-T31: run-only uses real MCP tools after restart without changing session, frozen run or queued/later tasks", async context => {
+  const f = await fixture(context, "apply", false, { choice: "run-only" }); const original = await f.start();
+  assert.equal(original.card.protocolVersion, 3); assert.ok(original.card.options?.some(option => option.id === "run-only"));
+  assert.equal(original.card.options?.some(option => option.id === "use-web"), false, "No Web alternative may be fabricated when Web is absent");
+  const before = await f.ok(`${f.path}/settings`);
+  const later = await f.ok<SessionRun>(`${f.path}/runs`, { content: "QUEUE_MARKER: finish after the original task." });
+  // Browser reload is read-only, and API restart must retain the paused task and its available choices.
+  await f.restart();
+  const reloaded = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
+  assert.equal(reloaded.state, "awaiting_confirmation");
+  const decided = await f.decide(reloaded); assert.equal(decided.status, 200, decided.text);
+  const completed = await f.waitRun(original.run.id, "completed"); await f.waitRun(later.id, "completed");
+  assert.equal(completed.id, original.run.id); assert.equal(completed.userMessageId, original.run.userMessageId); assert.equal(f.invocations(), 1);
+  assert.deepEqual(completed.settingsSnapshot, original.run.settingsSnapshot, "Historical base snapshot is immutable");
+  assert.deepEqual(await f.ok(`${f.path}/settings`), before, "No temporary session write and rollback is allowed");
+  const queued = (await f.ok<SessionRun[]>(`${f.path}/runs`)).find(run => run.id === later.id)!;
+  assert.equal(queued.settingsSnapshot.enabledConnectorIds.includes("pubmed"), false);
+  const next = await f.ok<SessionRun>(`${f.path}/runs`, { content: "QUEUE_MARKER: ordinary later task." }); await f.waitRun(next.id, "completed");
+  assert.equal(next.settingsSnapshot.enabledConnectorIds.includes("pubmed"), false);
+  const saved = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
+  assert.equal(saved.choiceReceipt?.kind, "run_overlay"); assert.equal(saved.choiceReceipt?.configurationWritten, false);
+  assert.equal(saved.activation.state, "active"); assert.equal(saved.resumption.state === "completed" || saved.resumption.state === "started", true);
+});
+
+test("CFG-T32: verified Web alternative resumes the original task and invokes existing Web without enabling PubMed", async context => {
+  const f = await fixture(context, "apply", false, { choice: "use-web", web: true }); const original = await f.start();
+  assert.ok(original.card.options?.some(option => option.id === "use-web" && option.available));
+  const before = await f.ok(`${f.path}/settings`);
+  const decision = await f.decide(original.card); assert.equal(decision.status, 200, decision.text);
+  const completed = await f.waitRun(original.run.id, "completed");
+  assert.equal(completed.userMessageId, original.run.userMessageId); assert.equal(f.invocations(), 0); assert.equal(f.webInvocations(), 1);
+  assert.deepEqual(await f.ok(`${f.path}/settings`), before);
+  const saved = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
+  assert.equal(saved.state, "dismissed"); assert.equal(saved.choiceReceipt?.kind, "alternative");
+  assert.ok(f.modelRequests.some(request => JSON.stringify(request.messages).includes("verified existing Web search alternative")));
+});
+
+test("CFG-T32: same task and unchanged need cannot repeatedly prompt after dismissal", async context => {
+  const f = await fixture(context, "dismiss", false, { repeatNeed: true }); const original = await f.start();
+  assert.equal((await f.decide(original.card)).status, 200);
+  await f.waitRun(original.run.id, "completed");
+  const cards = await f.ok<{ items: ConfigurationRequestView[] }>(`${f.path}/configuration-requests`);
+  assert.equal(cards.items.length, 1); assert.equal(cards.items[0]!.state, "dismissed");
+  assert.ok(f.modelRequests.some(request => JSON.stringify(request.messages).includes("CONFIGURATION_NEED_ALREADY_DECIDED")));
+  assert.equal(f.invocations(), 0);
+});
+
+test("CFG-T31: SIGKILL after durable run-only approval recovers activation and the same original run exactly once", async context => {
+  const f = await fixture(context, "apply", false, { choice: "run-only", crashBeforeActivation: true });
+  const original = await f.start();
+  const before = await f.ok(`${f.path}/settings`);
+  const pendingDecision = f.decide(original.card).catch(error => error as Error);
+  const committed = await new Promise<{ requestId: string; receiptId: string }>((done, reject) => {
+    const timeout = setTimeout(() => reject(new Error("The fixture did not reach its post-commit crash boundary")), 60_000);
+    f.activationCommitted.then(value => { clearTimeout(timeout); done(value); }, error => { clearTimeout(timeout); reject(error); });
+  });
+  assert.equal(committed.requestId, original.card.id); assert.ok(committed.receiptId);
+  const durable = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
+  assert.equal(durable.state, "applied"); assert.equal(durable.activation.state, "pending");
+  assert.equal(durable.choiceReceipt?.kind, "run_overlay"); assert.equal(f.invocations(), 0);
+  const paused = (await f.ok<SessionRun[]>(`${f.path}/runs`)).find(run => run.id === original.run.id)!;
+  assert.equal(paused.status, "blocked"); assert.equal(paused.configurationWait, true);
+  await f.restart(); await pendingDecision;
+  const completed = await f.waitRun(original.run.id, "completed", 80_000);
+  assert.equal(completed.id, original.run.id); assert.equal(completed.userMessageId, original.run.userMessageId);
+  assert.deepEqual(completed.settingsSnapshot, original.run.settingsSnapshot);
+  assert.deepEqual(await f.ok(`${f.path}/settings`), before);
+  assert.equal(f.invocations(), 1); assert.equal(f.issued.filter(name => name === "propose_configuration").length, 1);
+  const runs = await f.ok<SessionRun[]>(`${f.path}/runs`); assert.equal(runs.length, 1);
+  const events = await f.ok<SessionRunEvent[]>(`${f.path}/runs/${original.run.id}/events`);
+  assert.equal(events.filter(event => event.event.type === "run.completed").length, 1);
+  const saved = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
+  assert.equal(saved.activation.state, "active"); assert.equal(saved.choiceReceipt?.configurationWritten, false);
 });

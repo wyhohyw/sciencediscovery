@@ -14,7 +14,9 @@
 
 import { materializeArtifact } from "../artifacts/materialize.js";
 import { persistNativeConfigurationWait } from "../configuration/runtime-bridge.js";
-import { verifyNativeConfigurationToolAssembly } from "../configuration/native-activation.js";
+import { nativeToolFingerprint, verifyNativeConfigurationToolAssembly } from "../configuration/native-activation.js";
+import { nativeApprovedRunConnectorIds, nativeConfigurationChoiceRecord, nativeRunOverlay, recordNativeChoiceCheckpoint, recordNativeRunChoiceContext } from "../configuration/native-choices.js";
+import { configurationFramework } from "../configuration/framework.js";
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
@@ -562,6 +564,18 @@ export function skillAuthoringCommandPrompt(content: string): string | undefined
   ].join("\n\n");
 }
 
+function nativeConfigurationDecisionPrompt(store: SessionStore, sessionId: string, run: SessionRun): string {
+  const resume = run.configurationResume!;
+  const record = nativeConfigurationChoiceRecord(store, sessionId, resume.requestId);
+  const choice = record?.view.choiceReceipt;
+  const result = choice?.kind === "alternative"
+    ? `The user selected the verified existing Web search alternative (${choice.alternativeId}). Do not enable ${resume.connectorName}. Continue the original research using Web search, preserving the original goal and constraints; disclose source and coverage differences. This choice grants no network, tool or installation permissions.`
+    : resume.decision === "apply"
+      ? `The user approved enabling ${resume.connectorName} ${choice?.kind === "run_overlay" ? "only for this original task; session settings were not changed" : "in this Session"}, and the connector is now available to this task. Use the connector where the original task requires it.`
+      : `The user declined enabling ${resume.connectorName} and did not select another source. Do not silently replace the requested source. Continue independent work if possible, otherwise explain the limitation.`;
+  return `${result} Any earlier tool result saying it is awaiting confirmation describes the past and is no longer current. Resume the original task from its committed checkpoint. Do not ask for this configuration need again (needKey=${record?.view.needKey ?? resume.requestId}) or repeat completed actions. If an external outcome is uncertain, ask the user. This is not a new user request.`;
+}
+
 async function executeAgentRun(
   store: SessionStore,
   runnerClient: RunnerClient,
@@ -615,6 +629,7 @@ async function executeAgentRun(
     throw new ApiStatusError(404, "Session not found");
   }
   const persistedRun = await store.getSessionRun(sessionId, runId);
+  if (persistedRun) settingsSnapshot = { ...settingsSnapshot, enabledConnectorIds: nativeApprovedRunConnectorIds(store, persistedRun) };
   const configurationResume = persistedRun?.configurationResume;
   const storedCheckpoint = persistedRun?.configurationCheckpoint;
   let checkpointHistory: AgentHistoryMessage[] = [];
@@ -759,10 +774,9 @@ async function executeAgentRun(
       if (!connector || mcpCatalog.getStatus(connector.id).status !== "ready") {
         throw new Error("Connector is not available for configuration");
       }
-      const proposal = store.proposeConnectorConfiguration({
-        sessionId, runId, connectorId: connector.id, connectorName: connector.name,
-        reason: "CONNECTOR_REQUIRED_FOR_TASK",
-      });
+      const proposal = await configurationFramework(store).propose(sessionId, { protocolVersion: 3,
+        capabilityId: "connector.enable", values: { connectorId: connector.id }, runId,
+        reason: "CONNECTOR_REQUIRED_FOR_TASK" });
       return { content: [{ type: "text", text: JSON.stringify({ requestId: proposal.id, state: proposal.state,
         instruction: "Stop at a safe point while configuration is pending. The system will resume this task after confirmation." }) }] };
     },
@@ -1139,7 +1153,7 @@ async function executeAgentRun(
     responseSink,
   });
   const reviewerSpecialistSettings = store.getReviewerSpecialistSettings();
-  const sessionReviewerSpecialistSettings = store.getSessionReviewerSpecialistSettings(sessionId);
+  const sessionReviewerSpecialistSettings = settingsSnapshot.sessionReviewer ?? store.getSessionReviewerSpecialistSettings(sessionId);
   const subagentPool = new SubagentPool(maxConcurrentSubagents);
   let launchedSubagentCalls = 0;
   const reserveSubagentSlot = async (description: string, signal: AbortSignal): Promise<() => void> => {
@@ -2146,7 +2160,14 @@ async function executeAgentRun(
     workspaceRoot: store.workspacePath(sessionId),
   };
   if (configurationResume) verifyNativeConfigurationToolAssembly({ store, sessionId, runId,
-    requestId: configurationResume.requestId, enabledConnectorIds: settingsSnapshot.enabledConnectorIds, tools: agentOptions.mcpTools ?? [] });
+    requestId: configurationResume.requestId, enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
+    tools: agentOptions.mcpTools ?? [], webSearchAvailable: typeof agentOptions.webSearch === "function" });
+  const choiceWebSettings = store.getWebSettings();
+  const choiceWebReady = Object.values(choiceWebSettings.freeSearchEngines).some(Boolean)
+    || choiceWebSettings.paidSearchProviders.some(provider => choiceWebSettings.providers.some(item => item.provider === provider && item.hasApiKey));
+  recordNativeRunChoiceContext({ store, sessionId, runId, enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
+    webSearchAvailable: typeof agentOptions.webSearch === "function" && choiceWebReady,
+    toolCatalogFingerprint: nativeToolFingerprint(agentOptions.mcpTools ?? []) });
   const mainProfile = createMainAgentProfile({
     connectorIds: settingsSnapshot.enabledConnectorIds,
     gatewayThreadId: sessionId,
@@ -2304,6 +2325,8 @@ async function executeAgentRun(
               committedAt: binding.committedAt,
             },
           });
+          recordNativeChoiceCheckpoint({ store, sessionId, runId, requestId: binding.requestId,
+            stopGeneration: binding.stopGeneration, historyRef: binding.checkpointRef, committedAt: binding.committedAt });
         },
       });
       return "blocked";
@@ -3176,14 +3199,24 @@ export function scheduleSessionRuns(
         }
         if (next.configurationResume) {
           const request = store.getConnectorConfigurationRequest(sessionId, next.configurationResume.requestId);
+          const choice = nativeConfigurationChoiceRecord(store, sessionId, next.configurationResume.requestId);
+          const overlay = choice?.view.choiceReceipt?.kind === "run_overlay" ? nativeRunOverlay(store, sessionId, next.id, request?.id ?? "") : undefined;
+          const approvedIds = nativeApprovedRunConnectorIds(store, next);
           const valid = request?.state === (next.configurationResume.decision === "apply" ? "applied" : "dismissed")
             && next.configurationCheckpoint?.requestId === request.id
             && next.configurationCheckpoint.stopGeneration === store.notifications.generation(sessionId)
             && store.notifications.canWake(sessionId)
-            && (request.state !== "applied" || (next.settingsSnapshot.enabledConnectorIds.includes(request.connectorId)
-              && store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId)
+            && (request.state !== "applied" || (approvedIds.includes(request.connectorId)
+              && (overlay || store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId))
               && (request.connectorId === "web" || mcpCatalog.getStatus(request.connectorId).status === "ready")));
           if (!valid) {
+            runLog.warn("configuration_resume_rejected", { runId: next.id, requestId: next.configurationResume.requestId,
+              requestState: request?.state, activationState: choice?.view.activation.state,
+              checkpointMatches: next.configurationCheckpoint?.requestId === request?.id,
+              checkpointGeneration: next.configurationCheckpoint?.stopGeneration, currentGeneration: store.notifications.generation(sessionId),
+              canWake: store.notifications.canWake(sessionId), approvedConnector: request ? approvedIds.includes(request.connectorId) : false,
+              runOverlay: Boolean(overlay), savedConnector: request ? store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId) : false,
+              connectorReady: request ? request.connectorId === "web" || mcpCatalog.getStatus(request.connectorId).status === "ready" : false });
             await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
             continue;
           }
@@ -3264,9 +3297,7 @@ export function scheduleSessionRuns(
             delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery))
               : next.configurationResume ? {
                 executions: 0, timers: 0,
-                prompt: next.configurationResume.decision === "apply"
-                  ? `The user approved enabling ${next.configurationResume.connectorName} in this Session, and the connector is now enabled. Any earlier tool result saying it is awaiting confirmation describes the past and is no longer current. Resume the original task from its committed checkpoint and use the connector where the task requires it. Do not ask for confirmation again or repeat completed actions. If an external outcome is uncertain, ask the user. This is not a new user request.`
-                  : `The user declined enabling ${next.configurationResume.connectorName}. Any earlier tool result saying it is awaiting confirmation describes the past and is no longer current. Resume the original task from its committed checkpoint. Use a safe alternative if one exists; otherwise explain the limitation. Do not ask for confirmation again or repeat completed actions. This is not a new user request.`,
+                prompt: nativeConfigurationDecisionPrompt(store, sessionId, next),
               } : next.configurationContinuation ? {
                 executions: 0, timers: 0,
                 prompt: `The user approved enabling ${next.configurationContinuation.connectorName} for this Session. Continue the existing task from the previous run. Its completed tool calls and artifacts are already in the conversation history. Do not repeat a side-effecting action unless you can verify that it is safe; if its outcome is unknown, ask the user. The user has not submitted a new task.`,

@@ -66,6 +66,8 @@ export class McpOAuthManager {
   private readonly errors = new Map<string, string>();
   private queue: Promise<unknown> = Promise.resolve();
   private key?: Buffer;
+  /** A ciphertext generation, never an unkeyed fingerprint of an access token. */
+  private vaultRevision = "empty";
   private readonly path: string;
 
   constructor(dataDir: string, private readonly config: (id: string) => CustomMcpServerConfig | undefined) {
@@ -74,7 +76,11 @@ export class McpOAuthManager {
 
   async load(key: Buffer): Promise<void> {
     this.key = key;
-    try { this.saved = JSON.parse(decryptSecretValue(key, "mcp-oauth", await readFile(this.path, "utf8"))) as Record<string, Credentials>; }
+    try {
+      const encrypted = await readFile(this.path, "utf8");
+      this.saved = JSON.parse(decryptSecretValue(key, "mcp-oauth", encrypted)) as Record<string, Credentials>;
+      this.vaultRevision = createHash("sha256").update(encrypted).digest("hex");
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     for (const id of Object.keys(this.saved)) if (!this.current(id)) delete this.saved[id];
   }
@@ -82,8 +88,10 @@ export class McpOAuthManager {
   private persist(): Promise<void> {
     const operation = this.queue.then(async () => {
       if (!this.key) throw new Error("MCP OAuth storage is not initialized");
-      await writeFile(`${this.path}.tmp`, encryptSecretValue(this.key, "mcp-oauth", JSON.stringify(this.saved)), { mode: 0o600 });
+      const encrypted = encryptSecretValue(this.key, "mcp-oauth", JSON.stringify(this.saved));
+      await writeFile(`${this.path}.tmp`, encrypted, { mode: 0o600 });
       await rename(`${this.path}.tmp`, this.path);
+      this.vaultRevision = createHash("sha256").update(encrypted).digest("hex");
     });
     this.queue = operation.catch(() => undefined);
     return operation;
@@ -116,6 +124,12 @@ export class McpOAuthManager {
       ...(entry?.tokens?.scope ? { scope: entry.tokens.scope } : {}),
       ...(error ? { error } : {}),
     };
+  }
+
+  /** Server-only generation used by configuration CAS; contains no credential values. */
+  configurationRevision(): string {
+    const ids = [...new Set([...Object.keys(this.saved), ...this.pending.keys()])].sort();
+    return createHash("sha256").update(JSON.stringify([this.vaultRevision, ids.map(id => [id, this.status(id)?.state])])).digest("hex");
   }
 
   cancel(id: string): void {

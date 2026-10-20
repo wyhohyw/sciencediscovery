@@ -139,7 +139,7 @@ async function assertNoPlaintext(root: string, forbidden: string[]) {
 test("CFG HTTP: first connection is preview-only until confirmation, applies once, and establishes the global default", async (context) => {
   const f = await fixture(context);
   const capabilities = await f.ok<{ items: Array<{ id: string }>; executor: string }>(`/api/sessions/${f.session.id}/configuration/capabilities`);
-  assert.deepEqual(capabilities.items.map((item) => item.id).sort(), ["connector.enable", "model.connect", "model.repair_credential", "model.select"]);
+  assert.deepEqual(capabilities.items.map((item) => item.id).sort(), ["connector.enable", "model.connect", "model.repair_credential", "model.select", "review.configure", "skill.select", "thinking.configure"]);
   assert.equal(capabilities.executor, "native");
   const initial = await f.proposal("model.connect");
   assert.equal(initial.state, "collecting_input");
@@ -180,6 +180,25 @@ test("CFG HTTP: first connection is preview-only until confirmation, applies onc
   assert.equal(mismatch.status, 409);
   assert.equal(mismatch.body.code, "IDEMPOTENCY_MISMATCH");
   await assertNoPlaintext(f.root, ["good-first-credential"]);
+});
+
+test("CFG HTTP v3: credentials are unnecessary to close an incomplete proposal; unselected legacy apply is rejected", async (context) => {
+  const f = await fixture(context);
+  const proposed = await f.ok<ConfigurationRequestView>(f.path(), { capabilityId: "model.connect", values: {}, protocolVersion: 3 });
+  assert.equal(proposed.protocolVersion, 3); assert.equal(proposed.state, "collecting_input");
+  const legacy = await f.call(f.path(proposed, "decision"), { revision: proposed.revision, previewDigest: proposed.previewDigest, decision: "apply" });
+  assert.equal(legacy.status, 409); assert.equal(legacy.body.code, "CONFIGURATION_OPTION_REQUIRED");
+  const dismissedOption = proposed.options!.find(option => option.kind === "dismiss")!;
+  const selected = await f.ok<ConfigurationRequestView>(f.path(proposed, "preview"), { expectedRevision: proposed.revision, values: {}, selectedOptionId: dismissedOption.id }, "POST", 200);
+  assert.equal(selected.revision, proposed.revision + 1); assert.deepEqual(selected.fields, []);
+  const result = await f.ok<ConfigurationRequestView>(f.path(selected, "decision"), { revision: selected.revision, previewDigest: selected.previewDigest, selectedOptionId: dismissedOption.id, decision: "dismiss" }, "POST", 200);
+  assert.equal(result.state, "dismissed"); assert.equal(result.choiceReceipt?.configurationWritten, false);
+  assert.equal(result.choiceReceipt?.kind, "dismiss"); assert.equal(f.probes.length, 0);
+  assert.deepEqual(await f.ok<ModelProfile[]>("/api/models"), []);
+  const reloaded = await f.ok<ConfigurationRequestView>(f.path(result));
+  assert.equal(reloaded.selectedOptionId, dismissedOption.id); assert.deepEqual(reloaded.choiceReceipt, result.choiceReceipt);
+  const sibling = await f.call(f.path(result, undefined, f.sibling.id));
+  assert.equal(sibling.status, 404);
 });
 
 test("CFG HTTP: failed isolated repair preserves a shared provider credential; successful repair affects only the selected model", async (context) => {

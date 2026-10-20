@@ -63,7 +63,7 @@ export async function handleConfigurationHttp(input: {
     const key = typeof request.headers["idempotency-key"] === "string" ? request.headers["idempotency-key"] : undefined;
     if (!requestId) {
       if (await input.hasActiveRun(sessionId)) throw new ConfigurationError("CONFIGURATION_RUN_ACTIVE", "Wait for the current task before changing its model or settings", 409);
-      const body = object(await readJson(request), ["capabilityId", "values", "scope", "reason"], "proposal");
+      const body = object(await readJson(request), ["capabilityId", "values", "scope", "reason", "protocolVersion"], "proposal");
       object(body.values, Object.keys((body.values as object) ?? {}), "values");
       sendJson(response, 201, await framework.propose(sessionId, body as unknown as ConfigurationProposalInput, key));
       return true;

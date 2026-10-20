@@ -52,9 +52,12 @@ import type { SkillLibraryCatalog } from "../skill-library-catalog.js";
 import { SkillCatalog } from "@sciencediscovery/specialist";
 import { SessionStore } from "../store.js";
 import { NativeWebProviderClient, WebBroker } from "@sciencediscovery/data-source";
+import { nativeConfigurationChoiceRecord } from "../configuration/native-choices.js";
 import type { ServerConfig } from "./config.js";
 
 export interface ApiServerDependencies {
+  /** Embedding/test seam: exercise governed Web tools without contacting a live search engine. */
+  webProvider?: NativeWebProviderClient;
   disabledConnectorPlugins?: readonly string[];
   connectorFetch?: typeof fetch;
   /** Test seam: resolve the model catalog from a fixture instead of models.dev. */
@@ -196,7 +199,7 @@ export function createPlatformServices(
   // nodes by URL); the registry's ``toolGraphType(...)`` gates the emit. The
   // sink is the same instance used by the MCP broker — fire-and-forget in
   // both paths.
-  const webBroker = new WebBroker(config.dataDir, store, new NativeWebProviderClient(), { memoryGraphSink });
+  const webBroker = new WebBroker(config.dataDir, store, dependencies.webProvider ?? new NativeWebProviderClient(), { memoryGraphSink });
   const mcpBroker = new McpGovernanceBroker(
     config.dataDir,
     store,
@@ -528,6 +531,10 @@ export async function initializePlatformServices(
       for (const request of store.listConnectorConfigurationRequests(session.id)) {
         if ((request.state !== "applied" && request.state !== "dismissed")
           || request.runId.startsWith("user-request:")) continue;
+        // Generic companions only identify the original checkpoint. Their saved
+        // decision is not proof that the approved tool increment is active.
+        // The configuration activation/resume outbox owns their crash recovery.
+        if (nativeConfigurationChoiceRecord(store, session.id, request.id)) continue;
         await ensureConnectorContinuation(store, session.id, request.id).catch((error) => {
           apiLog.warn("configuration_continuation_recovery_failed", {
             requestId: request.id, sessionId: session.id, errorMessage: shortErrorMessage(error),

@@ -25,17 +25,38 @@ export interface ConnectorConfigurationRequest {
 
 export type ConnectorConfigurationPreflightResult =
   | { status: "not_applicable" }
-  | { status: "proposal"; request: ConnectorConfigurationRequest }
+  | { status: "proposal"; request: ConnectorConfigurationRequest | ConfigurationRequestView }
   | { status: "already_enabled"; connectorName: string }
   | { status: "unavailable"; connectorName: string };
 
 /** Public v2 contracts. Secrets and executable adapter plans never belong in these views. */
-export type ConfigurationCapabilityId = "model.select" | "model.connect" | "model.repair_credential" | "connector.enable";
+export type ConfigurationCapabilityId = "model.select" | "model.connect" | "model.repair_credential" | "connector.enable" | "skill.select" | "thinking.configure" | "review.configure";
 export type ConfigurationScope = { kind: "session" | "project"; id: string } | { kind: "global" };
 export type ConfigurationScalar = string | number | boolean;
-export type ConfigurationValues = Record<string, ConfigurationScalar>;
+export type ConfigurationValue = ConfigurationScalar | string[];
+export type ConfigurationValues = Record<string, ConfigurationValue>;
 export type ConfigurationRequestState = "collecting_input" | "awaiting_confirmation" | "validating" | "applying" | "applied" | "needs_fix" | "stale" | "failed" | "dismissed" | "cancelled" | "expired";
 export type ConfigurationAction = "preview" | "apply" | "dismiss" | "continue" | "reversal" | "query" | "cancel";
+export type ConfigurationChoiceKind = "persisted_apply" | "run_overlay" | "alternative" | "dismiss";
+export interface ConfigurationChoiceOptionView {
+  id: string;
+  kind: ConfigurationChoiceKind;
+  label: string;
+  description: string;
+  available: boolean;
+  unavailableReason?: string;
+  /** Registered, finite path identifier; never executable instructions. */
+  alternativeId?: string;
+}
+export interface ConfigurationChoiceReceipt {
+  optionId: string;
+  kind: ConfigurationChoiceKind;
+  label: string;
+  configurationWritten: boolean;
+  scope: "run" | "session" | "project" | "global" | "none";
+  runId?: string;
+  alternativeId?: string;
+}
 export type ConfigurationFieldView = {
   id: string;
   label: string;
@@ -45,9 +66,16 @@ export type ConfigurationFieldView = {
   help?: { label: string; url: string };
 } & (
   | { kind: "credential"; status: "missing" | "provided" | "expired" }
+  | { kind: "multiselect"; value?: string[]; choices: Array<{ id: string; label: string }> }
   | { kind: "text" | "url" | "number" | "boolean" | "enum"; value?: ConfigurationScalar; choices?: Array<{ id: string; label: string }> }
 );
 export interface ConfigurationRequestView {
+  /** Missing means the historical v2 apply/dismiss protocol. */
+  protocolVersion?: 3;
+  options?: ConfigurationChoiceOptionView[];
+  selectedOptionId?: string;
+  choiceReceipt?: ConfigurationChoiceReceipt;
+  needKey?: string;
   id: string;
   sessionId: string;
   projectId: string;
@@ -85,11 +113,13 @@ export interface ConfigurationPreviewInput {
   values: ConfigurationValues;
   scope?: ConfigurationScope;
   credentialHandle?: string;
+  selectedOptionId?: string;
 }
 export interface ConfigurationDecisionInput {
   revision: number;
   previewDigest: string;
   decision: "apply" | "dismiss";
+  selectedOptionId?: string;
 }
 export interface ConfigurationCredentialInput {
   expectedRevision: number;

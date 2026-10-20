@@ -3512,7 +3512,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
       const preflight = await client.preflightConnectorConfiguration(submittedSessionId, requestedContent);
       if (!shouldApplySessionScopedUpdate(submittedSessionId, activeSessionIdRef.current)) return;
       if (preflight.status === "proposal") {
-        setConnectorConfigurationRequests((current) => [preflight.request, ...current.filter((item) => item.id !== preflight.request.id)]);
+        if (isConfigurationRequestView(preflight.request)) receiveConfigurationRequest(preflight.request);
+        else setConnectorConfigurationRequests((current) => [preflight.request as ConnectorConfigurationRequest, ...current.filter((item) => item.id !== preflight.request.id)]);
         setMessage((current) => current.trim() === requestedContent ? "" : current);
         setError(undefined);
         requestAnimationFrame(scrollToLatest);
@@ -4886,7 +4887,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       const connectorId = connectors.find((item) => !session.enabledConnectorIds?.includes(item.id))?.id ?? connectors[0]?.id;
                       const values: Record<string, string> = capabilityId === "model.select" || capabilityId === "model.repair_credential"
                         ? (modelId ? { modelId } : {}) : capabilityId === "connector.enable" && connectorId ? { connectorId } : {};
-                      const request = await client.createConfigurationRequest(session.id, { capabilityId, values }, key);
+                      const request = await client.createConfigurationRequest(session.id, { protocolVersion: 3, capabilityId, values }, key);
                       receiveConfigurationRequest(request);
                       requestAnimationFrame(() => document.getElementById(`configuration-request-${request.id}`)?.scrollIntoView({ block: "nearest" }));
                     }} />
@@ -4904,12 +4905,13 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       mode={session.approvalMode}
                       onChange={(approvalMode) => void updateSessionSettings({ approvalMode })}
                     />
-                    <label className="composer-auto-config-policy" title={t("configuration.autoPolicyDetail")}>
+                    {(connectorConfigurationRequests.some(request => request.sessionId === session.id && request.state === "awaiting_confirmation")
+                      || configurationRequests.some(request => request.sessionId === session.id && request.protocolVersion !== 3 && request.state === "awaiting_confirmation")) ? <label className="composer-auto-config-policy" title={t("configuration.autoPolicyDetail")}>
                       <input checked={session.autoApplyLowRiskConfiguration === true} disabled={sessionArchived}
                         onChange={(event) => void updateSessionSettings({ autoApplyLowRiskConfiguration: event.target.checked })}
                         type="checkbox" />
                       <span>{t("configuration.autoPolicy")}</span>
-                    </label>
+                    </label> : null}
                     <ComposerRunButton action={composerRunAction} onStop={() => void stopRun()} />
                   </div>
                 </form>

@@ -46,7 +46,8 @@ export class ConfigurationRepository {
   save(record: ConfigurationRecord, expectedStateVersion?: number): void {
     const view = record.view;
     // Revision contents are immutable; phase progress updates only the current request.
-    const content = { adapterVersion: record.adapterVersion, schemaVersion: record.schemaVersion, input: record.input, target: record.target, plan: record.plan, resourceVersions: record.resourceVersions, stopGeneration: record.stopGeneration, credentialHandle: record.credentialHandle, scope: view.scope, runId: view.runId };
+    const content = { adapterVersion: record.adapterVersion, schemaVersion: record.schemaVersion, input: record.input, target: record.target, plan: record.plan, resourceVersions: record.resourceVersions, stopGeneration: record.stopGeneration, credentialHandle: record.credentialHandle, scope: view.scope, runId: view.runId,
+      ...(view.protocolVersion === 3 ? { protocolVersion: 3, options: view.options, selectedOptionId: view.selectedOptionId, needKey: view.needKey } : {}) };
     const hash = digest(content);
     const previousRevision = this.database.prepare("SELECT content_hash FROM configuration_revisions_v2 WHERE request_id = ? AND revision = ?").get(view.id, view.revision) as { content_hash: string } | undefined;
     if (previousRevision && previousRevision.content_hash !== hash) throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "A configuration revision cannot be edited", 409);

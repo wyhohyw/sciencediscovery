@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { CustomMcpServerConfig, CustomMcpServerDetails, McpCatalog, McpCatalogTool } from "@sciencediscovery/schema";
@@ -163,6 +163,15 @@ export class CustomMcpServers {
     const servers = { ...base.servers };
     for (const [id, config] of Object.entries(this.configs)) servers[id] = entry(config);
     return { ...base, servers, signature: createHash("sha256").update(JSON.stringify(servers)).digest("hex") };
+  }
+
+  /** Opaque server-only transport/auth binding. A key prevents offline guessing
+   * of header/environment secrets; OAuth uses its encrypted vault generation. */
+  configurationRevision(): string {
+    if (!this.key) return "not_loaded";
+    return createHmac("sha256", this.key).update(JSON.stringify([
+      this.transportConfig().signature, this.oauth.configurationRevision(),
+    ])).digest("hex");
   }
 
   applyCatalog(catalog: McpCatalog): void {

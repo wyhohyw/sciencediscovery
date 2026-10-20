@@ -61,13 +61,18 @@ export function normalizeConfigurationFields(source: unknown, policy: Configurat
       if (!["missing", "provided", "expired"].includes(String(candidate.status))) invalid("Invalid credential status", id);
       return { ...base, kind: "credential", status: candidate.status as "missing" | "provided" | "expired" };
     }
-    if (!["text", "url", "number", "boolean", "enum"].includes(String(candidate.kind)) || candidate.status !== undefined) invalid("Unsupported field kind", id);
-    const kind = candidate.kind as "text" | "url" | "number" | "boolean" | "enum";
+    if (!["text", "url", "number", "boolean", "enum", "multiselect"].includes(String(candidate.kind)) || candidate.status !== undefined) invalid("Unsupported field kind", id);
+    const kind = candidate.kind as "text" | "url" | "number" | "boolean" | "enum" | "multiselect";
     let choices: Array<{ id: string; label: string }> | undefined;
     if (candidate.choices !== undefined) {
-      if (kind !== "enum" || !Array.isArray(candidate.choices) || candidate.choices.length > 500) invalid("Invalid choices", id);
+      if (!["enum", "multiselect"].includes(kind) || !Array.isArray(candidate.choices) || candidate.choices.length > 500) invalid("Invalid choices", id);
       const seen = new Set<string>();
       choices = candidate.choices.map((entry) => { const item = object(entry, ["id", "label"], "choice"); const key = string(item.id, "choice.id", 500); if (seen.has(key)) invalid("Duplicate enum choice", id); seen.add(key); return { id: key, label: string(item.label, "choice.label", 500) }; });
+    }
+    if (kind === "multiselect") {
+      if (!choices) invalid("Multiselect requires finite choices", id);
+      if (candidate.value !== undefined) validateIds(candidate.value, choices, id);
+      return { ...base, kind, choices, ...(candidate.value !== undefined ? { value: [...candidate.value as string[]] } : {}) };
     }
     if (candidate.value !== undefined) {
       if (kind === "number" ? typeof candidate.value !== "number" || !Number.isFinite(candidate.value) : kind === "boolean" ? typeof candidate.value !== "boolean" : typeof candidate.value !== "string") invalid("Field value type mismatch", id);
@@ -84,10 +89,18 @@ export function normalizeConfigurationValues(input: unknown, fields: Configurati
     const field = fields.find((item) => item.id === key)!;
     if (field.kind === "credential") invalid("Use the dedicated credential channel", key);
     const kind = field.kind;
+    if (kind === "multiselect") {
+      validateIds(value, field.choices, key);
+      output[key] = [...value as string[]];
+      continue;
+    }
     if (kind === "number" ? typeof value !== "number" || !Number.isFinite(value) : kind === "boolean" ? typeof value !== "boolean" : typeof value !== "string") invalid("Invalid field value", key);
     if (typeof value === "string" && value.length > 8192) invalid("Field too long", key);
     if (kind === "enum" && !field.choices?.some((choice) => choice.id === value)) invalid("Unknown field choice", key);
     output[key] = value as string | number | boolean;
   }
   return output;
+}
+function validateIds(value: unknown, choices: Array<{ id: string }>, field: string): void {
+  if (!Array.isArray(value) || value.length > 500 || new Set(value).size !== value.length || value.some(id => typeof id !== "string" || !choices.some(choice => choice.id === id))) invalid("Invalid registered ID selection", field);
 }

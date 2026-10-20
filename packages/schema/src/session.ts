@@ -28,7 +28,7 @@ import type { PermissionRequest } from "./permission.js";
 import type { ApprovalMode, PlanSnapshot } from "./plan.js";
 import type { ArtifactReviewRun, PromptSkillLibraryRef } from "./provenance.js";
 import type { RemoteJob } from "./remote-job.js";
-import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
+import type { EffectiveRuntimeSettings, EnabledSkillLibrary, ReviewerSpecialistLevel, RuntimeSettingsOverrides, SessionReviewerSpecialistSettings, SkillSelectionMode, TimeoutKind } from "./runtime-settings.js";
 import type { Subagent, SubagentStep, SubagentUsage } from "./subagent.js";
 
 export const SESSION_TITLE_MAX_CHARACTERS = 24;
@@ -397,7 +397,10 @@ export interface SessionRun {
   references: ComposerReference[];
   retryOfRunId?: string;
   sessionId: string;
-  settingsSnapshot: EffectiveRuntimeSettings & IdeaTreeRunSettingsSnapshot;
+  settingsSnapshot: EffectiveRuntimeSettings & IdeaTreeRunSettingsSnapshot & {
+    /** Frozen when queued; absent only for legacy persisted runs. Global Reviewer enablement remains a live gate. */
+    sessionReviewer?: SessionReviewerSpecialistSettings;
+  };
   /** Version-pinned skill libraries declared as prompt sources for this run. */
   skillLibraryRefs?: PromptSkillLibraryRef[];
   startedAt?: string;

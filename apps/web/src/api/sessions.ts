@@ -65,7 +65,7 @@ export class SessionsApiClient extends ProjectsApiClient {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests`);
   }
 
-  createConfigurationRequest(sessionId: string, input: { capabilityId: ConfigurationCapabilityId; values: ConfigurationValues; scope?: ConfigurationScope }, idempotencyKey: string): Promise<ConfigurationRequestView> {
+  createConfigurationRequest(sessionId: string, input: { protocolVersion?: 3; capabilityId: ConfigurationCapabilityId; values: ConfigurationValues; scope?: ConfigurationScope }, idempotencyKey: string): Promise<ConfigurationRequestView> {
     return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/configuration-requests`, {
       method: "POST", body: JSON.stringify(input), headers: { "Idempotency-Key": idempotencyKey },
     });

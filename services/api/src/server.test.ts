@@ -208,11 +208,24 @@ function rootSseGolden(stream: string): string[] {
 
 function subagentSseGoldens(stream: string): string[][] {
   const lanes = new Map<string, string[]>();
+  const previousSnapshots = new Map<string, SubagentStep>();
   for (const event of parseSseEvents(stream)) {
     if (!event.type.startsWith("subagent.")) continue;
     const id = event.subagentId ?? event.subagent?.id;
     assert.ok(id, `subagent SSE event ${event.type} must carry an id`);
     const lane = lanes.get(id) ?? [];
+    const step = event.type === "subagent.step" ? event.step as SubagentStep | undefined : undefined;
+    const previous = previousSnapshots.get(id);
+    if (step && ["assistant", "thinking"].includes(step.kind)) {
+      previousSnapshots.set(id, step);
+      // Live message snapshots are transient, timing-dependent broadcasts.
+      // Collapse only adjacent monotonic updates of the same message; preserve
+      // distinct IDs, tool states and every update/usage ordering milestone.
+      if (previous?.id === step.id && previous.kind === step.kind && previous.status === step.status) {
+        assert.ok(step.content.startsWith(previous.content), "A streamed message snapshot must retain its previous content");
+        continue;
+      }
+    } else previousSnapshots.delete(id);
     lane.push(event.type);
     lanes.set(id, lane);
   }
@@ -2260,6 +2273,8 @@ test("runtime-status Kernel teardown is authenticated and proxied to the Runner"
 test("timeout settings drive live runs, runtime status, and persistent explainable timeout messages", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `timeout-runtime-status-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
+  const detachedReleasePath = resolve(tempRoot, "release-detached-shell");
+  context.after(() => writeFile(detachedReleasePath, "release").catch(() => undefined));
   context.after(() => removeTestRoot(tempRoot));
 
   const runner = createRunnerServer({
@@ -2326,7 +2341,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
         // Foreground timeout ends only the wait. The detached Shell must finish
         // normally and retain its result, rather than produce runner_exec.
         const code = gatewayMode === "tool-timeout"
-          ? "import time\ntime.sleep(2)"
+          ? `from pathlib import Path\nimport time\nrelease = Path(${JSON.stringify(detachedReleasePath)})\ndeadline = time.monotonic() + 60\nwhile not release.exists():\n    if time.monotonic() >= deadline:\n        raise RuntimeError('Detached Shell fixture gate was not released')\n    time.sleep(0.01)`
           : "print('A paper title says: Python execution timed out after 25 ms')";
         send({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call-${gatewayMode}`, type: "function", function: { name: "run_shell", arguments: JSON.stringify({ command: pythonCommand(code), wait_ms: gatewayMode === "tool-timeout" ? 25 : 10000 }) } }] } }] });
       }
@@ -2483,6 +2498,7 @@ test("timeout settings drive live runs, runtime status, and persistent explainab
   assert.equal(activity.body.executions.length, 1);
   const executionId = activity.body.executions[0]!.id;
   assert.ok(["queued", "running"].includes(activity.body.executions[0]!.state));
+  await writeFile(detachedReleasePath, "release");
   const deadline = Date.now() + 10000;
   while (activity.body.executions[0]?.state !== "completed" && Date.now() < deadline) {
     await new Promise((done) => setTimeout(done, 25));
@@ -4138,8 +4154,8 @@ test("API runs one observable subagent through task and keeps nested task denied
     "assistant.response.settled",
     "run.completed",
   ]);
-  // Two model deltas, one streamed step: message deltas are coalesced into a
-  // single step event instead of one cumulative snapshot per token.
+  // Two model deltas form one logical step; a live subscriber may also see
+  // monotonic transient snapshots before that same step is persisted.
   assert.deepEqual(subagentSseGoldens(stream), [[
     "subagent.updated",
     "subagent.updated",
@@ -4159,10 +4175,13 @@ test("API runs one observable subagent through task and keeps nested task denied
     const event = rawEvent as { step?: SubagentStep; type: string };
     return event.type === "subagent.step" && event.step?.kind === "assistant" ? [event.step] : [];
   });
-  assert.deepEqual(
-    streamedAssistantSteps.map((step) => step.content),
-    ["Subagent inspected the workspace and returned a concise result."],
-  );
+  assert.equal(new Set(streamedAssistantSteps.map((step) => step.id)).size, 1);
+  for (let index = 1; index < streamedAssistantSteps.length; index++) {
+    assert.ok(streamedAssistantSteps[index]!.content.startsWith(streamedAssistantSteps[index - 1]!.content),
+      "Snapshots of the assistant step must retain all previously streamed text");
+  }
+  assert.equal(streamedAssistantSteps.at(-1)?.content,
+    "Subagent inspected the workspace and returned a concise result.");
   const eventTypes = stream.split("\n\n").flatMap((frame) => {
     const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
     return data ? [(JSON.parse(data) as { type: string }).type] : [];
@@ -4193,6 +4212,7 @@ test("API runs one observable subagent through task and keeps nested task denied
   assert.equal(subagents.body[0]?.handoff?.manifestPath, `subagents/${subagents.body[0]?.id}/handoff.json`);
   const assistantSteps = subagents.body[0]?.steps.filter((step) => step.kind === "assistant") ?? [];
   assert.equal(assistantSteps.length, 1);
+  assert.equal(assistantSteps[0]?.id, streamedAssistantSteps[0]?.id);
   assert.equal(assistantSteps[0]?.content, "Subagent inspected the workspace and returned a concise result.");
   // The run stream stores one record per logical step. The snapshots streamed
   // while a message is still arriving are broadcast to live subscribers and
@@ -5491,14 +5511,32 @@ test("manual concurrent actions keep independent live waiters and resume indepen
   );
   assert.equal(firstDecision.response.status, 200);
 
-  let executions: ExecutionRun[] = [];
-  for (let attempt = 0; attempt < 40 && executions.length < 1; attempt += 1) {
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
-    executions = (await jsonRequest<ExecutionRun[]>(
-      `${origin}/api/sessions/${session.body.id}/execution-runs`,
-      { headers: authorization },
-    )).body;
+  let firstActionCompleted = false;
+  let firstActionWaitError: unknown;
+  const firstActionDeadline = Date.now() + 60_000;
+  try {
+    while (!firstActionCompleted) {
+      const remaining = firstActionDeadline - Date.now();
+      if (remaining <= 0) throw new Error("The first permitted action did not complete while its sibling remained undecided");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const chunk = await Promise.race([reader.read(), new Promise<never>((_done, reject) => {
+        timer = setTimeout(() => reject(new Error("Timed out waiting for the first permitted action event")), remaining);
+      })]).finally(() => { if (timer) clearTimeout(timer); });
+      assert.equal(chunk.done, false, "The run must remain live while the second action is undecided");
+      stream += decoder.decode(chunk.value, { stream: true });
+      const completed = stream.slice(0, Math.max(0, stream.lastIndexOf("\n\n") + 2));
+      firstActionCompleted = parseSseEvents(completed).some(event => event.type === "subagent.step"
+        && (event.step as SubagentStep | undefined)?.kind === "tool"
+        && (event.step as SubagentStep | undefined)?.status === "completed");
+    }
+  } catch (error) {
+    // Resolve the second waiter below even on failure, so teardown never leaves
+    // a live permission wait or a stream whose fixture directory was removed.
+    firstActionWaitError = error;
   }
+  let executions = (await jsonRequest<ExecutionRun[]>(
+    `${origin}/api/sessions/${session.body.id}/execution-runs`, { headers: authorization },
+  )).body;
   const stillPending = await jsonRequest<PermissionRequest[]>(
     `${origin}/api/permission-requests?sessionId=${encodeURIComponent(session.body.id)}`,
     { headers: authorization },
@@ -5527,6 +5565,8 @@ test("manual concurrent actions keep independent live waiters and resume indepen
   assert.equal(secondDecision.body.grant, undefined);
   assert.equal(firstDecision.body.resolvedRequests.length, 1);
   assert.equal(secondDecision.body.resolvedRequests.length, 1);
+  assert.equal(firstActionWaitError, undefined);
+  assert.equal(firstActionCompleted, true, "The first action must emit completion before the second permission is resolved");
   assert.equal(firstActionExecutionCount, 1, "the allowed action should run without waiting for the other decision");
   assert.equal(secondActionState, "pending", "the live sibling remains independently decidable");
   assert.match(stream, /"type":"run.completed"/);
@@ -5883,6 +5923,8 @@ test("API runs two task calls concurrently with independent persisted records", 
   assert.ok(subagents.body.every((subagent) => subagent.status === "completed"));
   assert.ok(subagents.body.every((subagent) =>
     subagent.steps.filter((step) => step.kind === "assistant").length === 1));
+  assert.ok(subagents.body.every(subagent => subagent.steps.find(step => step.kind === "assistant")?.content
+    === "Subagent inspected the workspace and returned a concise result."));
 
   const updatedIds = stream.split("\n\n").flatMap((frame) => {
     const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);

@@ -380,6 +380,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   const modelConnectivityTests = new ModelConnectivityTestCoordinator();
   const conversationalConfiguration = () => {
     store.setConfigurationConnectorRevisionSource(() => configurationDigest({
+      transportRevision: platform.customMcpServers.configurationRevision(),
       manifests: mcpRegistry.listManifests().map(manifest => ({ id: manifest.id, version: manifest.version,
         schemaVersion: manifest.schemaVersion, transport: manifest.transport, tools: manifest.tools,
         governance: manifest.governance, prompt: manifest.prompt })).sort((a, b) => a.id.localeCompare(b.id)),
@@ -413,6 +414,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     run: async (task, signal) => {
       const session = store.getSession(task.sessionId);
       if (!session) throw new Error("Session not found");
+      const sourceRun = task.sourceRunId ? await store.getSessionRun(task.sessionId, task.sourceRunId) : undefined;
+      if (task.sourceRunId && !sourceRun) return { skipped: true };
+      if (!store.getReviewerSpecialistSettings().enabled) return { skipped: true };
       const versions = task.artifactVersionIds
         .map((versionId) => store.getArtifactVersion(task.sessionId, versionId))
         .filter((version): version is NonNullable<typeof version> => {
@@ -427,7 +431,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const runnableTask = { ...task, artifactVersionIds: versions.map((version) => version.id) };
       let semanticReview: ReturnType<typeof createReviewAgentOptions> | undefined;
       if (task.reviewLevel === "deep") {
-        const runtimeSettings = store.resolveRuntimeSettings(task.sessionId).effective;
+        const runtimeSettings = sourceRun?.settingsSnapshot ?? store.resolveRuntimeSettings(task.sessionId).effective;
         // Reviewer Specialist is an internal quality role of this Session,
         // not a separately configured Agent. Deep review therefore reuses
         // the Session's effective main-Agent model and credentials.
@@ -464,8 +468,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             dataDir: store.dataDir,
             model: selectedModel.model,
             proxy: resolveProxyForUrl(store.resolveProxy(selectedModel.proxyPolicy), selectedModel.baseUrl),
-            thinkingEffort: selectedModel.thinkingEffort,
-            thinkingMode: selectedModel.thinkingMode,
+            thinkingEffort: runtimeSettings.thinkingEffort ?? selectedModel.thinkingEffort,
+            thinkingMode: runtimeSettings.thinkingMode ?? selectedModel.thinkingMode,
           },
           enabledConnectorIds: reviewerConnectorIds,
           executePython: async () => { throw new Error("Reviewer Specialist cannot execute code"); },
@@ -650,6 +654,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
   // would constrain them against an empty catalog.
   const ready = modelCatalog.load()
     .then(() => skillLibraryCatalog.load())
+    .then(() => store.setConfigurationSkillLibrarySource(() => skillLibraryCatalog.list()))
     .then(() => skillLibraryCatalog.seedBuiltInSkillLibrary(repositoryRoot))
     .then(() => initializePlatformServices(platform, config, skillLibraryCatalog))
     .then(() => conversationalConfiguration().service.recoverPendingVerifications())
@@ -2428,10 +2433,9 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           || !filterEnabledMcpSources([target.id], settings.plugins).includes(target.id)) {
           return sendJson(response, 200, { status: "unavailable", connectorName: target.name });
         }
-        const proposal = store.proposeConnectorConfiguration({
-          sessionId, runId: `user-request:${randomUUID()}`, connectorId: target.id,
-          connectorName: target.name, reason: "USER_REQUESTED_CONNECTOR",
-        });
+        const proposal = await conversationalConfiguration().propose(sessionId, { protocolVersion: 3,
+          capabilityId: "connector.enable", values: { connectorId: target.id },
+          reason: "USER_REQUESTED_CONNECTOR" });
         sendJson(response, 200, { status: "proposal", request: proposal });
         return;
       }

@@ -27,10 +27,12 @@ import { AgentNotifications } from "./agent-notifications.js";
 import { ShellExecutions } from "./shell-executions.js";
 import { WorkspaceTransfers } from "./workspace-transfers.js";
 import type { ConnectorConfigurationRequest } from "@sciencediscovery/schema";
-import type { ConfigurationCapabilityId, ConfigurationValues } from "@sciencediscovery/schema";
+import type { ConfigurationCapabilityId, ConfigurationValues, ConfigurationScope, SkillLibrary } from "@sciencediscovery/schema";
 import type { ConfigurationSnapshot } from "./configuration/types.js";
 import { ConfigurationRepository } from "./configuration/repository.js";
 import { ConfigurationCredentialBridge } from "./configuration/credential-bridge.js";
+import { canonical as canonicalConfiguration } from "./configuration/validation.js";
+import { nativeConfigurationChoiceRecord, nativeRunOverlay } from "./configuration/native-choices.js";
 
 // Explicitly reviewed public, read-only source. New connectors are never auto-authorized by default.
 export function isAutoApplicableConnector(connectorId: string): boolean {
@@ -457,6 +459,9 @@ export class SessionStore {
   private settingsMutationQueue: Promise<void> = Promise.resolve();
   private secretKey?: Buffer;
   private skillIds = new Set<string>(BUNDLED_SKILL_IDS);
+  private configurationSkillLibrarySource: () => SkillLibrary[] = () => [];
+
+  setConfigurationSkillLibrarySource(source: () => SkillLibrary[]): void { this.configurationSkillLibrarySource = source; }
   /** Every Session uses every installed skill, whatever its settings say (the JiuwenSwarm backend: its skills are one set). */
   private everySkillEverywhere = false;
   private connectorIds = knownConnectorIdSet();
@@ -1235,6 +1240,8 @@ export class SessionStore {
         this.database.prepare("DELETE FROM configuration_native_activation_v2 WHERE request_id=?").run(item.id);
       new ConfigurationRepository(this.database).deleteSession(sessionId);
     }
+    if (exists("configuration_native_overlays_v3")) this.database.prepare("DELETE FROM configuration_native_overlays_v3 WHERE session_id=?").run(sessionId);
+    if (exists("configuration_native_runs_v3")) this.database.prepare("DELETE FROM configuration_native_runs_v3 WHERE session_id=?").run(sessionId);
     if (exists("configuration_credential_drafts")) new ConfigurationCredentialBridge(this.database, this.configurationSecretCipher()).clearSession(sessionId);
   }
 
@@ -1278,28 +1285,98 @@ export class SessionStore {
     const project = this.getProject(session.projectId)!;
     const model = this.getModel(target);
     const provider = this.getProvider(model?.providerId);
-    const version = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    const version = (value: unknown) => createHash("sha256").update(canonicalConfiguration(value)).digest("hex");
     // Ciphertext generations, never plaintext token hashes, invalidate old approvals.
     const secretRows = this.getConfigurationDatabase().prepare("SELECT model_id,encrypted_token FROM model_secrets ORDER BY model_id").all();
+    const resourceVersions = {
+      settings: version([this.catalog.globalSettings, project.settingsOverrides, session.settingsOverrides]),
+      models: version([this.catalog.models, this.catalog.providers]), credentials: version(secretRows),
+      connectors: version([...this.connectorIds].sort()), connectorCatalog: this.configurationConnectorRevisionSource?.() ?? "not_attached",
+      policies: version([this.catalog.mcpProxyPolicies, this.catalog.proxyDefaultPolicy, this.catalog.proxyServers]),
+      autoConfigurationPolicy: version(session.autoApplyLowRiskConfiguration === true),
+      skills: version([[...this.skillIds].sort(), this.configurationSkillLibrarySource(), this.everySkillEverywhere]),
+      reviewer: version([this.getSessionReviewerSpecialistSettings(sessionId), this.catalog.reviewerSpecialistEnabled]),
+    };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
-      resourceVersions: {
-        settings: version([this.catalog.globalSettings, project.settingsOverrides, session.settingsOverrides]),
-        models: version([this.catalog.models, this.catalog.providers]),
-        credentials: version(secretRows),
-        connectors: version([...this.connectorIds].sort()),
-        connectorCatalog: this.configurationConnectorRevisionSource?.() ?? "not_attached",
-        policies: version([this.catalog.mcpProxyPolicies, this.catalog.proxyDefaultPolicy, this.catalog.proxyServers]),
-        autoConfigurationPolicy: version(session.autoApplyLowRiskConfiguration === true),
-      },
+      // A connector grant does not alter a model, credential, Skill or Reviewer.
+      // Binding those unrelated records made a harmless standalone-model to
+      // Provider grouping migration invalidate an already committed run overlay.
+      resourceVersions: capabilityId === "connector.enable" ? {
+        settings: resourceVersions.settings, connectors: resourceVersions.connectors,
+        connectorCatalog: resourceVersions.connectorCatalog, policies: resourceVersions.policies,
+        autoConfigurationPolicy: resourceVersions.autoConfigurationPolicy,
+      } : resourceVersions,
       data: {
         capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
         model: model ? structuredClone(model) : undefined, provider: provider ? structuredClone(provider) : undefined,
         tokenOptional: model ? this.modelAllowsMissingToken(model) : false,
         installedConnectorIds: [...this.connectorIds],
+        sources: structuredClone(settings.sources),
+        projectOverrides: structuredClone(project.settingsOverrides),
+        projectEffective: structuredClone(this.getProjectSettings(project.id).effective),
+        installedSkillIds: [...this.skillIds].sort(),
+        skillLibraries: structuredClone(this.configurationSkillLibrarySource()),
+        skillSelectionAvailable: !this.everySkillEverywhere,
+        effectiveModel: structuredClone(this.getModel(settings.effective.modelId)),
+        sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
+        reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
       },
     };
+  }
+
+  /** The same formal runtime settings and reviewer state as the settings pages, in the shared audit transaction. */
+  applyP1ConfigurationSync(sessionId: string, capabilityId: ConfigurationCapabilityId, values: ConfigurationValues, scope: ConfigurationScope): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    const session = this.assertSessionWritable(sessionId);
+    const project = this.getProject(session.projectId)!;
+    if (scope.kind === "global" || scope.kind === "project" && (capabilityId !== "skill.select" || scope.id !== project.id)
+      || scope.kind === "session" && scope.id !== sessionId) throw new Error("Unsupported P1 scope");
+    const current = scope.kind === "project" ? project.settingsOverrides : session.settingsOverrides;
+    const patch: RuntimeSettingsOverrides = {};
+    if (capabilityId === "skill.select") {
+      if (this.everySkillEverywhere) throw new Error("SKILL_SELECTION_UNAVAILABLE");
+      if (values.skillSelectionMode !== undefined) patch.skillSelectionMode = values.skillSelectionMode as SkillSelectionMode;
+      if (values.enabledSkillIds !== undefined) patch.enabledSkillIds = [...values.enabledSkillIds as string[]];
+      if (values.enabledSkillLibraryIds !== undefined) {
+        const libraries = this.configurationSkillLibrarySource();
+        const effectiveLibraries = (scope.kind === "project" ? this.getProjectSettings(project.id) : this.getSessionSettings(sessionId)).effective.enabledSkillLibraries;
+        patch.enabledSkillLibraries = (values.enabledSkillLibraryIds as string[]).map(id => {
+          const library = libraries.find(item => item.id === id);
+          if (!library?.headVersionId) throw new Error("SKILL_LIBRARY_UNAVAILABLE");
+          // Pin exactly the approved head. Preserve other selected library properties.
+          const previous = effectiveLibraries.find(item => item.libraryId === id);
+          return previous ?? { libraryId: id, versionId: library.headVersionId };
+        });
+      }
+    } else if (capabilityId === "thinking.configure") {
+      const effective = this.getSessionSettings(sessionId).effective;
+      const model = this.getModel(effective.modelId);
+      if (!model) throw new Error("MODEL_NOT_SELECTED");
+      const constrained = constrainCatalogThinking(model.model, values.thinkingMode as ModelThinkingMode | undefined,
+        values.thinkingEffort as ModelThinkingEffort | undefined, model.facts);
+      if (values.thinkingMode !== undefined) {
+        if (constrained.mode !== values.thinkingMode) throw new Error("THINKING_MODE_UNSUPPORTED");
+        patch.thinkingMode = constrained.mode;
+      }
+      if (values.thinkingEffort !== undefined) {
+        if (constrained.effort !== values.thinkingEffort) throw new Error("THINKING_EFFORT_UNSUPPORTED");
+        patch.thinkingEffort = constrained.effort;
+      }
+    } else if (capabilityId === "review.configure") {
+      if (values.reviewModelId !== undefined) patch.reviewModelId = String(values.reviewModelId);
+      if (values.semanticReviewEnabled !== undefined) patch.semanticReviewEnabled = values.semanticReviewEnabled as boolean;
+      const reviewer = this.getSessionReviewerSpecialistSettings(sessionId);
+      this.applySessionReviewerSpecialistSettingsSync(sessionId, {
+        automaticReviewEnabled: values.automaticReviewEnabled ?? reviewer.automaticReviewEnabled,
+        level: values.level ?? reviewer.level,
+      });
+    } else throw new Error("Unsupported P1 capability");
+    const next = this.normalizeSettings({ ...current, ...patch });
+    if (scope.kind === "project") { project.settingsOverrides = next; this.syncSessionCompatibilityForProject(project.id); }
+    else { session.settingsOverrides = next; this.syncSessionCompatibility(session); }
+    session.updatedAt = new Date().toISOString();
   }
 
   /** Finite domain operations, callable only from the configuration transaction. */
@@ -1984,6 +2061,12 @@ export class SessionStore {
     sessionId: string,
     value: unknown,
   ): Promise<SessionReviewerSpecialistSettings> {
+    this.applySessionReviewerSpecialistSettingsSync(sessionId, value);
+    await this.saveCatalog();
+    return this.getSessionReviewerSpecialistSettings(sessionId);
+  }
+
+  private applySessionReviewerSpecialistSettingsSync(sessionId: string, value: unknown): void {
     if (!isRecord(value) || typeof value.automaticReviewEnabled !== "boolean") {
       throw new Error("Reviewer Specialist automatic review must be a boolean");
     }
@@ -1994,8 +2077,6 @@ export class SessionStore {
     session.reviewerAutomaticReviewEnabled = value.automaticReviewEnabled;
     session.reviewerSpecialistLevel = value.level;
     session.updatedAt = new Date().toISOString();
-    await this.saveCatalog();
-    return this.getSessionReviewerSpecialistSettings(sessionId);
   }
 
   getWebSettings(): WebSettingsDetails {
@@ -2432,6 +2513,8 @@ export class SessionStore {
 
   proposeConnectorConfiguration(input: {
     sessionId: string; runId: string; connectorId: string; connectorName: string; reason: string;
+    /** Trusted v3 framework: its needKey guard decides whether a resolved need may be evaluated again. */
+    configurationProtocolVersion?: 3;
   }): ConnectorConfigurationRequest {
     const session = this.assertSessionWritable(input.sessionId);
     if (!this.database) throw new Error("Catalog database is not initialized");
@@ -2443,6 +2526,7 @@ export class SessionStore {
     if (pending) {
       const proposal = JSON.parse(pending.record_json) as ConnectorConfigurationRequest;
       if (JSON.stringify(proposal.baselineConnectorIds) === JSON.stringify(currentIds)
+        && (input.configurationProtocolVersion !== 3 || proposal.runId === input.runId)
         && (proposal.stopGeneration === undefined || proposal.stopGeneration === this.notifications.generation(session.id))) return proposal;
     }
     if (!input.runId.startsWith("user-request:")) {
@@ -2450,9 +2534,12 @@ export class SessionStore {
         .get(session.id, input.runId, input.connectorId);
       if (other) throw new Error("A connector configuration request is already pending for this run");
     }
-    const existing = this.database.prepare("SELECT record_json FROM connector_configuration_requests WHERE session_id = ? AND run_id = ? AND connector_id = ? LIMIT 1")
+    const existing = this.database.prepare("SELECT record_json FROM connector_configuration_requests WHERE session_id = ? AND run_id = ? AND connector_id = ? ORDER BY rowid DESC LIMIT 1")
       .get(session.id, input.runId, input.connectorId) as { record_json: string } | undefined;
-    if (existing) return JSON.parse(existing.record_json) as ConnectorConfigurationRequest;
+    if (existing) {
+      const prior = JSON.parse(existing.record_json) as ConnectorConfigurationRequest;
+      if (input.configurationProtocolVersion !== 3 || prior.state === "awaiting_confirmation") return prior;
+    }
     const now = new Date().toISOString();
     const proposal: ConnectorConfigurationRequest = {
       id: randomUUID(), sessionId: session.id, projectId: session.projectId, runId: input.runId,
@@ -2548,7 +2635,13 @@ export class SessionStore {
       || (proposal.stopGeneration !== undefined && proposal.stopGeneration !== this.notifications.generation(input.sessionId))) {
       throw new Error("Session was stopped before task continuation");
     }
-    if (proposal.state === "applied" && !this.getSessionSettings(input.sessionId).effective.enabledConnectorIds.includes(proposal.connectorId)) {
+    const choice = nativeConfigurationChoiceRecord(this, input.sessionId, proposal.id);
+    // A durable saved decision must never bypass the activation phase, including
+    // callers recovering legacy companions during API startup.
+    if (choice && (choice.view.runId !== proposal.runId || choice.view.state !== proposal.state
+      || proposal.state === "applied" && choice.view.activation.state !== "active")) return undefined;
+    const overlay = choice?.view.choiceReceipt?.kind === "run_overlay" ? nativeRunOverlay(this, input.sessionId, proposal.runId, proposal.id) : undefined;
+    if (proposal.state === "applied" && !overlay && !this.getSessionSettings(input.sessionId).effective.enabledConnectorIds.includes(proposal.connectorId)) {
       throw new Error("Approved connector is no longer enabled");
     }
     const paused = await this.getSessionRun(input.sessionId, proposal.runId);
@@ -2564,7 +2657,7 @@ export class SessionStore {
         source.configurationWait = false;
         source.configurationResume = { requestId: proposal.id,
           decision: proposal.state === "applied" ? "apply" : "dismiss", connectorName: proposal.connectorName };
-        if (proposal.state === "applied") source.settingsSnapshot.enabledConnectorIds =
+        if (proposal.state === "applied" && choice?.view.protocolVersion !== 3) source.settingsSnapshot.enabledConnectorIds =
           [...new Set([...source.settingsSnapshot.enabledConnectorIds, proposal.connectorId])];
         return structuredClone(source);
       });
@@ -5388,6 +5481,7 @@ export class SessionStore {
         settingsSnapshot: {
           ...structuredClone(input.settingsSnapshot),
           ideaTreeEnabled: input.settingsSnapshot.ideaTreeEnabled === true,
+          sessionReviewer: structuredClone(input.settingsSnapshot.sessionReviewer ?? this.getSessionReviewerSpecialistSettings(input.sessionId)),
         },
         ...(input.skillLibraryRefs?.length ? { skillLibraryRefs: structuredClone(input.skillLibraryRefs) } : {}),
         ...(input.webForceRefresh ? { webForceRefresh: true } : {}),

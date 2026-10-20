@@ -7,6 +7,8 @@ import { ConfigurationRepository } from "./repository.js";
 import { ConfigurationRegistry } from "./registry.js";
 import { normalizeConfigurationFields } from "./schema-normalizer.js";
 import { canonical, ConfigurationError, digest, displayText, integer, invalid, object, string } from "./validation.js";
+import { choosePlan, defaultChoices, makeChoiceReceipt, normalizeChoices, projectChoiceReceipt, selectedChoice } from "./choices.js";
+import { configurationNeedKey } from "./need-key.js";
 
 const editable = new Set(["collecting_input", "awaiting_confirmation", "needs_fix", "stale", "failed"]);
 export interface ConfigurationRequestServiceOptions {
@@ -144,20 +146,23 @@ export class ConfigurationRequestService {
       ...(source.data ? { data: structuredClone(source.data) } : {}) };
   }
   private refreshDigest(record: ConfigurationRecord): void {
-    record.view.previewDigest = digest({ id: record.view.id, revision: record.view.revision, adapterVersion: record.adapterVersion, schemaVersion: record.schemaVersion, input: record.input, scope: record.view.scope, target: record.target, plan: record.plan, resourceVersions: record.resourceVersions, stopGeneration: record.stopGeneration, credentialHandle: record.credentialHandle });
+    record.view.previewDigest = digest({ id: record.view.id, revision: record.view.revision, adapterVersion: record.adapterVersion, schemaVersion: record.schemaVersion, input: record.input, scope: record.view.scope, target: record.target, plan: record.plan, resourceVersions: record.resourceVersions, stopGeneration: record.stopGeneration, credentialHandle: record.credentialHandle,
+      ...(record.view.protocolVersion === 3 ? { protocolVersion: 3, options: record.view.options, selectedOptionId: record.view.selectedOptionId, needKey: record.view.needKey } : {}) });
   }
   private actions(record: ConfigurationRecord): ConfigurationRequestView["allowedActions"] {
     const view = record.view;
     if (view.state === "collecting_input" || view.state === "needs_fix" || view.state === "stale" || view.state === "failed") return ["preview", "dismiss"];
     if (view.state === "awaiting_confirmation") return ["preview", "apply", "dismiss"];
     if (view.state === "validating" || view.state === "applying") return ["query"];
-    if (view.state === "applied") return [...(this.registry.get(view.capabilityId).previewReversal ? ["reversal" as const] : []), ...(["pending", "failed", "needs_user_action"].includes(view.resumption.state) ? ["continue" as const] : [])];
+    if (view.state === "applied") return [...(this.registry.get(view.capabilityId).previewReversal && (!selectedChoice(record) || selectedChoice(record)?.kind === "persisted_apply") ? ["reversal" as const] : []), ...(["pending", "failed", "needs_user_action"].includes(view.resumption.state) ? ["continue" as const] : [])];
     return [];
   }
   /** Every field below is an explicit whitelist; internal record extensions stay server-only. */
   private project(record: ConfigurationRecord): ConfigurationRequestView {
     const view = record.view;
     return structuredClone({
+      ...(view.protocolVersion === 3 ? { protocolVersion: 3 as const, options: normalizeChoices(view.options ?? []), selectedOptionId: view.selectedOptionId, needKey: view.needKey,
+        ...(view.choiceReceipt ? { choiceReceipt: projectChoiceReceipt(view.choiceReceipt) } : {}) } : {}),
       id: view.id, sessionId: view.sessionId, projectId: view.projectId,
       ...(view.runId ? { runId: view.runId } : {}), revision: view.revision, stateVersion: view.stateVersion,
       capabilityId: view.capabilityId, adapterVersion: record.adapterVersion, schemaVersion: record.schemaVersion, state: view.state,
@@ -184,7 +189,10 @@ export class ConfigurationRequestService {
     return ["expired", "cancelled"].includes(current.state) ? current : previous.response ?? current;
   }
   async propose(sessionId: string, input: ConfigurationProposalInput, key?: string, expectedResourceVersions?: Record<string, string>): Promise<ConfigurationRequestView> {
-    const value = object(input, ["capabilityId", "values", "scope", "runId", "reason", "requestId"], "proposal");
+    const value = object(input, ["capabilityId", "values", "scope", "runId", "reason", "requestId", "protocolVersion"], "proposal");
+    if (input.protocolVersion !== undefined && input.protocolVersion !== 3) invalid("Unsupported configuration protocol version");
+    if (["skill.select", "thinking.configure", "review.configure"].includes(String(value.capabilityId)) && input.protocolVersion !== 3)
+      throw new ConfigurationError("CONFIGURATION_PROTOCOL_REQUIRED", "This configuration capability requires the v3 choice protocol. Upgrade the client before preparing a proposal.", 409);
     const adapter = this.registry.get(string(value.capabilityId, "capabilityId", 100));
     const normalized = adapter.normalize(value.values);
     const target = adapter.target(normalized);
@@ -202,18 +210,27 @@ export class ConfigurationRequestService {
       const fingerprint = digest({ capabilityId: adapter.id, target, scope, runId: input.runId });
       const existing = this.repository.findActive(sessionId, fingerprint);
       if (existing) {
+        if (existing.view.protocolVersion !== input.protocolVersion) throw new ConfigurationError("CONFIGURATION_PROTOCOL_CONFLICT", "The active proposal uses another protocol version", 409);
         if (canonical(existing.input) !== canonical(normalized)) throw new ConfigurationError("ACTIVE_CONFIGURATION_CONFLICT", "A proposal for this target already exists; edit its preview", 409);
         this.repository.reserveIdempotency(idempotencyScope, key, payload, existing.view.id); const view = this.project(existing); this.repository.finishIdempotency(idempotencyScope, key, view); return view;
       }
-      const plan = this.plan(adapter, normalized, snapshot, scope);
+      let plan = this.plan(adapter, normalized, snapshot, scope);
+      const options = input.protocolVersion === 3 ? normalizeChoices(this.host.choiceOptions?.({ sessionId, capabilityId: adapter.id, input: normalized, snapshot, scope, ...(input.runId ? { runId: input.runId } : {}) }) ?? defaultChoices()) : undefined;
+      const selected = options?.find(option => option.kind === "persisted_apply");
+      if (selected) plan = choosePlan(plan, selected);
       const now = this.now();
       const view: ConfigurationRequestView = { id: input.requestId ?? randomUUID(), sessionId, projectId: snapshot.projectId, ...(input.runId ? { runId: input.runId } : {}), revision: 1, stateVersion: 1, capabilityId: adapter.id, adapterVersion: adapter.version, schemaVersion: adapter.schemaVersion, state: plan.ready ? "awaiting_confirmation" : "collecting_input", reason: { code: "CONFIGURATION_REQUIRED", message: reason }, scope, fields: plan.fields, changes: plan.changes, impact: plan.impact, verificationPlan: plan.verificationPlan, activation: { mode: plan.activationMode, state: "not_requested" }, resumption: { state: "not_requested", ...(input.runId ? { runId: input.runId } : {}) }, allowedActions: [], createdAt: now, updatedAt: now, expiresAt: new Date(this.clock().getTime() + 24 * 60 * 60 * 1000).toISOString() };
       const record: ConfigurationRecord = { view, adapterVersion: adapter.version, schemaVersion: adapter.schemaVersion, input: normalized, target, plan, resourceVersions: snapshot.resourceVersions, stopGeneration: snapshot.stopGeneration, fingerprint, createdBy: "authenticated_client" };
+      if (options && selected) {
+        view.protocolVersion = 3; view.options = options; view.selectedOptionId = selected.id;
+        view.needKey = configurationNeedKey({ runId: input.runId, capabilityId: adapter.id, target, snapshot });
+      }
       this.refreshDigest(record); this.repository.save(record); this.repository.reserveIdempotency(idempotencyScope, key, payload, view.id); const result = this.project(record); this.repository.finishIdempotency(idempotencyScope, key, result); return result;
     });
   }
   async preview(sessionId: string, id: string, input: ConfigurationPreviewInput, key?: string): Promise<ConfigurationRequestView> {
-    object(input, ["expectedRevision", "values", "scope", "credentialHandle"], "preview"); integer(input.expectedRevision, "expectedRevision");
+    object(input, ["expectedRevision", "values", "scope", "credentialHandle", "selectedOptionId"], "preview"); integer(input.expectedRevision, "expectedRevision");
+    if (input.selectedOptionId !== undefined) string(input.selectedOptionId, "selectedOptionId", 100);
     if (input.credentialHandle !== undefined) string(input.credentialHandle, "credentialHandle", 500);
     const idempotencyScope = `${sessionId}:${id}:preview`;
     await this.reconcileLifecycle(sessionId, id);
@@ -222,17 +239,33 @@ export class ConfigurationRequestService {
       const record = this.getRecord(sessionId, id); const oldStateVersion = record.view.stateVersion;
       this.assertLifecycle(record);
       if (record.view.revision !== input.expectedRevision || !editable.has(record.view.state)) throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "This preview is no longer editable", 409);
-      const adapter = this.registry.get(record.view.capabilityId); const normalized = adapter.normalize(input.values); const target = adapter.target(normalized);
+      // Alternative/dismiss previews intentionally project no editable fields.
+      // A subsequent option switch (including after refresh) retains the server's
+      // non-sensitive candidate rather than requiring the browser to cache it.
+      const values = record.view.protocolVersion === 3 && input.selectedOptionId !== undefined && record.plan.fields.length === 0
+        && Object.keys(object(input.values, Object.keys(input.values ?? {}), "values")).length === 0 ? record.input : input.values;
+      const adapter = this.registry.get(record.view.capabilityId); const normalized = adapter.normalize(values); const target = adapter.target(normalized);
       const snapshot = this.snapshot(sessionId, adapter.id, target, record.view.runId); this.checkWritable(snapshot);
       if (snapshot.stopGeneration !== record.stopGeneration) throw new ConfigurationError("CONTINUATION_STOPPED", "The original task was stopped", 409);
       if (record.view.expiresAt && record.view.expiresAt <= this.now()) throw new ConfigurationError("CONFIGURATION_EXPIRED", "This proposal expired", 410);
       const scope = this.scope(input.scope ?? record.view.scope, adapter, sessionId, snapshot);
+      if (record.view.protocolVersion !== 3 && input.selectedOptionId !== undefined) invalid("A v2 proposal does not accept selected options");
+      const options = record.view.protocolVersion === 3 ? normalizeChoices(this.host.choiceOptions?.({ sessionId, capabilityId: adapter.id, input: normalized, snapshot, scope, ...(record.view.runId ? { runId: record.view.runId } : {}) }) ?? defaultChoices()) : undefined;
+      const selected = options?.find(option => option.id === (input.selectedOptionId ?? record.view.selectedOptionId));
+      if (options && !selected) throw new ConfigurationError("CONFIGURATION_OPTION_UNAVAILABLE", "Select an available option from the latest proposal", 409);
+      if (selected?.kind === "run_overlay" && (adapter.id !== "connector.enable" || adapter.persistence !== "local_transaction" || !record.view.runId || input.credentialHandle || record.credentialHandle))
+        throw new ConfigurationError("CONFIGURATION_OPTION_UNAVAILABLE", "Task overlays support ready connectors without temporary credentials only", 409);
       let credentialHandle = input.credentialHandle ?? (target === record.target ? record.credentialHandle : undefined);
       if (input.credentialHandle && target !== record.target) throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "Credentials must be provided again after changing the target", 400);
       if (credentialHandle && this.host.resolvePreviewCredential) credentialHandle = this.host.resolvePreviewCredential({ sessionId, requestId: id, revision: record.view.revision, target: String(record.plan.data?.credentialTarget ?? record.target), credentialHandle, explicit: input.credentialHandle !== undefined });
-      const plan = this.plan(adapter, normalized, snapshot, scope, credentialHandle);
+      let plan = this.plan(adapter, normalized, snapshot, scope, credentialHandle);
+      if (selected) plan = choosePlan(plan, selected);
       this.host.onPreviewRevision?.({ sessionId, requestId: id, fromRevision: record.view.revision, toRevision: record.view.revision + 1, oldTarget: record.target, newTarget: target, ...(credentialHandle ? { credentialHandle } : {}) });
       record.input = normalized; record.target = target; record.plan = plan; record.resourceVersions = snapshot.resourceVersions; record.adapterVersion = adapter.version; record.schemaVersion = adapter.schemaVersion;
+      if (options && selected) {
+        record.view.options = options; record.view.selectedOptionId = selected.id;
+        record.view.needKey = configurationNeedKey({ runId: record.view.runId, capabilityId: adapter.id, target, snapshot });
+      }
       record.view.scope = scope; record.view.revision++; record.view.stateVersion++; record.view.updatedAt = this.now(); record.view.state = plan.ready ? "awaiting_confirmation" : "collecting_input";
       record.view.fields = plan.fields; record.view.changes = plan.changes; record.view.impact = plan.impact; record.view.verificationPlan = plan.verificationPlan; record.view.activation = { mode: plan.activationMode, state: "not_requested" };
       record.credentialHandle = credentialHandle; delete record.approvedDigest; delete record.approvedRevision; delete record.view.error;
@@ -240,14 +273,18 @@ export class ConfigurationRequestService {
       const active = this.repository.findActive(sessionId, record.fingerprint);
       if (active && active.view.id !== id) throw new ConfigurationError("ACTIVE_CONFIGURATION_CONFLICT", "Another proposal already exists for this target", 409);
       record.view.adapterVersion = adapter.version; record.view.schemaVersion = adapter.schemaVersion; this.refreshDigest(record);
+      if (selected && selected.kind !== "dismiss") this.host.validateChoice?.(this.context(record, snapshot));
       this.repository.save(record, oldStateVersion); this.repository.reserveIdempotency(idempotencyScope, key, input, id); const result = this.project(record); this.repository.finishIdempotency(idempotencyScope, key, result); return result;
     });
   }
   private context(record: ConfigurationRecord, snapshot: ConfigurationSnapshot): ConfigurationAdapterContext {
-    return { sessionId: record.view.sessionId, requestId: record.view.id, revision: record.view.revision, input: record.input, plan: record.plan, snapshot, scope: record.view.scope, ...(record.credentialHandle ? { credentialHandle: record.credentialHandle } : {}) };
+    return { sessionId: record.view.sessionId, requestId: record.view.id, revision: record.view.revision, input: record.input, plan: record.plan, snapshot, scope: record.view.scope,
+      ...(record.view.runId ? { runId: record.view.runId } : {}), ...(record.view.previewDigest ? { previewDigest: record.view.previewDigest } : {}),
+      ...(selectedChoice(record) ? { selectedOption: selectedChoice(record) } : {}), ...(record.credentialHandle ? { credentialHandle: record.credentialHandle } : {}) };
   }
   async decide(sessionId: string, id: string, input: ConfigurationDecisionInput, key?: string): Promise<ConfigurationRequestView> {
-    object(input, ["revision", "previewDigest", "decision"], "decision"); integer(input.revision, "revision"); string(input.previewDigest, "previewDigest", 100);
+    object(input, ["revision", "previewDigest", "decision", "selectedOptionId"], "decision"); integer(input.revision, "revision"); string(input.previewDigest, "previewDigest", 100);
+    if (input.selectedOptionId !== undefined) string(input.selectedOptionId, "selectedOptionId", 100);
     if (input.decision !== "apply" && input.decision !== "dismiss") invalid("Unknown configuration decision");
     const idempotencyScope = `${sessionId}:${id}:decision`;
     await this.reconcileLifecycle(sessionId, id);
@@ -255,17 +292,29 @@ export class ConfigurationRequestService {
       const replay = this.replay(idempotencyScope, key, input, sessionId); if (replay) return { done: replay };
       const record = this.getRecord(sessionId, id); const version = record.view.stateVersion;
       this.assertLifecycle(record);
+      const option = selectedChoice(record);
+      if (record.view.protocolVersion === 3) {
+        if (!option || input.selectedOptionId !== option.id) throw new ConfigurationError("CONFIGURATION_OPTION_REQUIRED", "Confirm the selected option from the latest preview", 409);
+        if ((input.decision === "dismiss") !== (option.kind === "dismiss")) invalid("The decision does not match the selected option");
+      } else if (input.selectedOptionId !== undefined) invalid("A v2 proposal does not accept selected options");
       if (record.view.revision !== input.revision || record.view.previewDigest !== input.previewDigest) throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "Confirm the latest preview", 409);
-      if ((input.decision === "apply" && record.view.state === "applied") || (input.decision === "dismiss" && record.view.state === "dismissed")) return { done: this.project(record) };
+      const noWrite = input.decision === "dismiss" || option?.kind === "alternative";
+      if ((!noWrite && record.view.state === "applied") || (noWrite && record.view.state === "dismissed")) return { done: this.project(record) };
       if (input.decision === "apply" && ["validating", "applying"].includes(record.view.state)) return { done: this.project(record) };
       if (!editable.has(record.view.state)) throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "This request has already been resolved", 409);
-      const snapshot = this.snapshot(sessionId, record.view.capabilityId, record.target, record.view.runId); this.guard(record, snapshot, input.decision === "apply");
+      const snapshot = this.snapshot(sessionId, record.view.capabilityId, record.target, record.view.runId); this.guard(record, snapshot, option?.kind !== "dismiss" && input.decision === "apply");
+      if (option && option.kind !== "dismiss") {
+        const available = normalizeChoices(this.host.choiceOptions?.({ sessionId, capabilityId: record.view.capabilityId, input: record.input, snapshot, scope: record.view.scope, ...(record.view.runId ? { runId: record.view.runId } : {}) }) ?? defaultChoices()).find(item => item.id === option.id);
+        if (!available?.available || canonical(available) !== canonical(option)) throw new ConfigurationError("CONFIGURATION_OPTION_UNAVAILABLE", "The selected option changed. Refresh its preview.", 409);
+        this.host.validateChoice?.(this.context(record, snapshot));
+      }
       if (input.decision === "apply" && (!record.plan.ready || record.view.state !== "awaiting_confirmation")) invalid("Complete and preview all required fields first");
       record.view.stateVersion++; record.view.updatedAt = this.now(); record.approvedRevision = record.view.revision; record.approvedDigest = record.view.previewDigest;
-      record.view.state = input.decision === "dismiss" ? "dismissed" : "validating";
-      if (input.decision === "dismiss" && record.view.runId) { record.view.resumption.state = "pending"; this.enqueue(record, "resume", { decision: "dismiss" }); }
+      record.view.state = noWrite ? "dismissed" : "validating";
+      if (noWrite && option) record.view.choiceReceipt = makeChoiceReceipt(record);
+      if (noWrite && record.view.runId) { record.view.resumption.state = "pending"; this.enqueue(record, "resume", { decision: "dismiss" }); }
       this.repository.save(record, version); this.repository.reserveIdempotency(idempotencyScope, key, input, id);
-      if (input.decision === "dismiss") { const result = this.project(record); this.repository.finishIdempotency(idempotencyScope, key, result); return { done: result }; }
+      if (noWrite) { const result = this.project(record); this.repository.finishIdempotency(idempotencyScope, key, result); return { done: result }; }
       this.repository.saveVerificationAttempt({ id: `${id}:${input.revision}:verify`, requestId: id, sessionId, revision: input.revision, ownerId: this.ownerId, state: "started", startedAt: this.now() });
       return { record, snapshot };
     });
@@ -279,6 +328,7 @@ export class ConfigurationRequestService {
         const current = this.getRecord(sessionId, id);
         const latest = this.snapshot(sessionId, current.view.capabilityId, current.target, current.view.runId);
         this.guard(current, latest);
+        this.host.validateChoice?.(this.context(current, latest));
         return latest;
       });
       verification = await adapter.verify?.(this.context(prepared.record, snapshot)) ?? { ok: true };
@@ -306,11 +356,15 @@ export class ConfigurationRequestService {
       if (adapter.persistence === "external_control") {
         record.view.state = "applying"; record.view.stateVersion++; record.view.updatedAt = this.now(); this.enqueue(record, "external_submit", {}); this.repository.save(record, version);
       } else {
-        const result = adapter.apply!(this.context(record, snapshot));
+        this.host.validateChoice?.(this.context(record, snapshot));
+        const option = selectedChoice(record);
+        if (option?.kind === "run_overlay" && !this.host.applyRunOverlay) throw new ConfigurationError("CONFIGURATION_OPTION_UNAVAILABLE", "This executor cannot apply a task overlay", 409);
+        const result = option?.kind === "run_overlay" ? this.host.applyRunOverlay!(this.context(record, snapshot)) : adapter.apply!(this.context(record, snapshot));
         if (result && typeof (result as { then?: unknown }).then === "function") throw new Error("Configuration domain apply must be synchronous");
         const after = this.snapshot(sessionId, record.view.capabilityId, record.target, record.view.runId);
         const receipt: ConfigurationApplyReceipt = { id: randomUUID(), requestId: id, revision: input.revision, previewDigest: input.previewDigest, capabilityId: adapter.id, sessionId, stopGeneration: record.stopGeneration, result, resourceVersions: after.resourceVersions, createdAt: this.now() };
         this.repository.saveReceipt(receipt); record.view.state = "applied"; record.view.stateVersion++; record.view.updatedAt = this.now(); delete record.view.error;
+        if (option) record.view.choiceReceipt = makeChoiceReceipt(record);
         record.view.activation.state = "pending"; if (record.view.runId) record.view.resumption.state = "pending";
         this.enqueue(record, "activate", { receiptId: receipt.id, decision: "apply" }); this.repository.save(record, version);
       }
@@ -340,11 +394,13 @@ export class ConfigurationRequestService {
   }
   private enqueue(record: ConfigurationRecord, kind: "activate" | "resume" | "external_submit", extra: Record<string, unknown>): void {
     const now = this.now();
-    this.repository.enqueueOutbox({ id: `${record.view.id}:${record.view.revision}:${kind}`, requestId: record.view.id, revision: record.view.revision, sessionId: record.view.sessionId, kind, state: "pending", payload: { ...extra, activationMode: record.view.activation.mode, ...(record.view.runId ? { runId: record.view.runId } : {}), stopGeneration: record.stopGeneration, previewDigest: record.view.previewDigest }, createdAt: now, updatedAt: now });
+    const option = selectedChoice(record);
+    this.repository.enqueueOutbox({ id: `${record.view.id}:${record.view.revision}:${kind}`, requestId: record.view.id, revision: record.view.revision, sessionId: record.view.sessionId, kind, state: "pending", payload: { ...extra, activationMode: record.view.activation.mode, ...(record.view.runId ? { runId: record.view.runId } : {}), stopGeneration: record.stopGeneration, previewDigest: record.view.previewDigest,
+      ...(option ? { selectedOptionId: option.id, choiceKind: option.kind, ...(option.alternativeId ? { alternativeId: option.alternativeId } : {}), needKey: record.view.needKey } : {}) }, createdAt: now, updatedAt: now });
   }
   async reversal(sessionId: string, id: string, key?: string): Promise<ConfigurationRequestView> {
     const record = this.getRecord(sessionId, id); const adapter = this.registry.get(record.view.capabilityId); const receipt = this.repository.getReceipt(id, record.view.revision);
-    if (record.view.state !== "applied" || !receipt || !adapter.previewReversal) throw new ConfigurationError("CONFIGURATION_REVERSAL_UNAVAILABLE", "This configuration cannot be reversed automatically", 409);
+    if (record.view.state !== "applied" || !receipt || !adapter.previewReversal || selectedChoice(record) && selectedChoice(record)?.kind !== "persisted_apply") throw new ConfigurationError("CONFIGURATION_REVERSAL_UNAVAILABLE", "This configuration cannot be reversed automatically", 409);
     const values = await this.transact(sessionId, () => {
       const snapshot = this.snapshot(sessionId, record.view.capabilityId, record.target); this.checkWritable(snapshot);
       if (canonical(snapshot.resourceVersions) !== canonical(receipt.resourceVersions)) throw new ConfigurationError("RESOURCE_VERSION_CONFLICT", "Settings changed after this application; prepare a new proposal", 409);

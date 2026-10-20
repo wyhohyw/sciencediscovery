@@ -89,10 +89,13 @@ test('current documents expose the implemented local layer and distinguish block
   const page = await readFile(new URL('../docs/zh/explanation/conversational-settings.html', import.meta.url), 'utf8');
   const data = JSON.parse(page.split('<script type="application/json" id="document-data">')[1].split('</script>')[0]);
   const current = new Map(data.filter(doc => !doc.archived).map(doc => [doc.id, doc]));
-  assert.equal(current.get('design').filename, 'conversational-settings.v18.md');
-  assert.equal(current.get('development').filename, 'conversational-settings-development.v8.md');
-  assert.equal(current.get('status').filename, 'conversational-settings-status.v7.md');
+  assert.equal(current.get('design').filename, 'conversational-settings.v19.md');
+  assert.equal(current.get('development').filename, 'conversational-settings-development.v9.md');
+  assert.equal(current.get('status').filename, 'conversational-settings-status.v8.md');
   assert.equal(current.get('research').filename, 'conversational-settings-research.v2.md');
+  assert.equal(current.get('design').sections.length, 17);
+  assert.equal(current.get('development').sections.length, 21);
+  assert.equal(current.get('status').sections.length, 8);
   const implementation = current.get('development').sections.find(section => section.id === 'development-18');
   assert.ok(implementation);
   for (const id of ['DEV-CFG-01', 'DEV-CFG-08', 'DEV-CFG-09', 'DEV-CFG-10']) assert.ok(implementation.searchText.includes(id));
@@ -100,4 +103,19 @@ test('current documents expose the implemented local layer and distinguish block
   assert.match(current.get('status').raw, /历史真实模型用例/);
   assert.ok(current.get('status').raw.includes('同一通用 revision/previewDigest 决定服务'));
   assert.match(page, /href="#development-18"/);
+  const delivery = current.get('design').sections.find(section => section.id === 'design-16');
+  const matrix = current.get('development').sections.find(section => section.id === 'development-20');
+  const p1 = current.get('development').sections.find(section => section.id === 'development-19');
+  assert.ok(delivery && matrix && p1);
+  for (const capability of ['model.select', 'model.connect', 'model.repair_credential', 'connector.enable', 'skill.select', 'thinking.configure', 'review.configure']) {
+    assert.ok(matrix.searchText.includes(capability));
+  }
+  for (const field of ['providerApiKeys', 'runnerExecTimeoutMs', 'allowedDomains', 'privateKeyPath']) assert.ok(matrix.searchText.includes(field));
+  for (const id of ['DEV-CFG-11', 'DEV-CFG-12', 'DEV-CFG-13', 'DEV-CFG-14', 'DEV-CFG-15', 'DEV-CFG-16', 'DEV-CFG-17']) assert.ok(p1.searchText.includes(id));
+  assert.match(p1.searchText, /任意真实失败自动诊断仍未贯通/);
+  assert.match(delivery.searchText, /旧 PubMed 的 30 秒预授权不迁移/);
+  assert.match(page, /阅读页 v11/);
+  assert.match(page, /href="#design-16"/);
+  assert.match(page, /href="#development-20"/);
+  for (const old of ['conversational-settings.v18.md', 'conversational-settings-development.v8.md', 'conversational-settings-status.v7.md']) assert.ok(page.includes(`href="${old}"`));
 });

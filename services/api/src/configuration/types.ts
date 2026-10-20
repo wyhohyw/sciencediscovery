@@ -1,6 +1,6 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License");
-import type { ConfigurationCapabilityId, ConfigurationFieldView, ConfigurationScope, ConfigurationRequestView, ConfigurationValues } from "@sciencediscovery/schema";
+import type { ConfigurationCapabilityId, ConfigurationFieldView, ConfigurationScope, ConfigurationRequestView, ConfigurationValues, ConfigurationChoiceOptionView } from "@sciencediscovery/schema";
 import type { DatabaseSync } from "node:sqlite";
 
 export interface ConfigurationSnapshot {
@@ -23,6 +23,9 @@ export interface ConfigurationPlan {
   data?: Record<string, unknown>;
 }
 export interface ConfigurationAdapterContext {
+  selectedOption?: ConfigurationChoiceOptionView;
+  runId?: string;
+  previewDigest?: string;
   sessionId: string;
   requestId: string;
   revision: number;
@@ -63,6 +66,10 @@ export interface ConfigurationAdapter {
   previewReversal?(receipt: ConfigurationApplyReceipt, snapshot: ConfigurationSnapshot): ConfigurationValues;
 }
 export interface ConfigurationHost {
+  choiceOptions?(input: { sessionId: string; capabilityId: ConfigurationCapabilityId; input: ConfigurationValues; snapshot: ConfigurationSnapshot; scope: ConfigurationScope; runId?: string }): ConfigurationChoiceOptionView[];
+  validateChoice?(context: ConfigurationAdapterContext): void;
+  /** Run overlay writes only its isolated durable record, never shared settings. */
+  applyRunOverlay?(context: ConfigurationAdapterContext): ConfigurationApplyResult;
   runInTransaction<T>(sessionId: string, action: () => T): Promise<T>;
   snapshot(sessionId: string, capabilityId: ConfigurationCapabilityId, target: string): ConfigurationSnapshot;
   /** Validate the exact isolated draft while preparing a revision. An expired
@@ -110,6 +117,7 @@ export interface ConfigurationOutboxRecord {
   updatedAt: string;
 }
 export interface ConfigurationProposalInput {
+  protocolVersion?: 3;
   capabilityId: ConfigurationCapabilityId;
   values: ConfigurationValues;
   scope?: ConfigurationScope;

@@ -8,10 +8,11 @@ import type { SessionStore } from "../store.js";
 import type { ConfigurationApplyReceipt, ConfigurationRecord } from "./types.js";
 import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
 import { canonical, digest } from "./validation.js";
+import { nativeApprovedRunConnectorIds, nativeRunOverlay, validateNativeChoice } from "./native-choices.js";
 
 type ToolDescriptor = Omit<NonNullable<WorkspaceAgentOptions["mcpTools"]>[number], "execute">;
 interface NativeToolWitness { evidence: ConfigurationActivationEvidence; enabledConnectorIds: string[]; stopGeneration: number; }
-function toolFingerprint(tools: readonly ToolDescriptor[]): string {
+export function nativeToolFingerprint(tools: readonly ToolDescriptor[]): string {
   return digest(tools.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
     routing: tool.routing, sourceId: tool.sourceId, toolId: tool.toolId, displayName: tool.displayName })).sort((a, b) => a.name.localeCompare(b.name)));
 }
@@ -45,11 +46,20 @@ export async function prepareNativeConnectorActivation(input: { store: SessionSt
   if (!run || !run.configurationWait || run.status !== "blocked" || run.configurationCheckpoint?.requestId !== record.view.id
     || run.configurationCheckpoint.stopGeneration !== record.stopGeneration) throw new Error("The matching Native configuration checkpoint is not waiting");
   const connectorId = String(record.input.connectorId);
-  const enabledConnectorIds = [...new Set([...run.settingsSnapshot.enabledConnectorIds, connectorId])];
+  if (record.view.choiceReceipt?.kind === "run_overlay") {
+    const overlay = nativeRunOverlay(store, record.view.sessionId, run.id, record.view.id);
+    if (!overlay || overlay.revision !== record.view.revision || overlay.previewDigest !== record.approvedDigest
+      || overlay.optionId !== record.view.selectedOptionId || overlay.connectorId !== connectorId
+      || overlay.checkpoint.requestId !== run.configurationCheckpoint.requestId
+      || overlay.checkpoint.committedAt !== run.configurationCheckpoint.committedAt
+      || canonical(overlay.checkpoint.historyRef) !== canonical(run.configurationCheckpoint.historyRef))
+      throw new Error("The approved Native run overlay does not match the original checkpoint");
+  }
+  const enabledConnectorIds = [...new Set([...nativeApprovedRunConnectorIds(store, run), connectorId])];
   if (!filterEnabledMcpSources(enabledConnectorIds, run.settingsSnapshot.plugins).includes(connectorId)) throw new Error("The frozen run policy does not allow this connector");
   const descriptors = describeMcpWorkspaceTools({ registry: input.registry, catalog: input.catalog, enabledSourceIds: enabledConnectorIds });
   if (!descriptors.some(tool => tool.sourceId === connectorId)) throw new Error("The approved connector has no executable tool descriptors");
-  evidence.toolCatalogFingerprint = toolFingerprint(descriptors);
+  evidence.toolCatalogFingerprint = nativeToolFingerprint(descriptors);
   const witness: NativeToolWitness = { evidence, enabledConnectorIds, stopGeneration: record.stopGeneration };
   ensureTable(store);
   await store.runConfigurationTransaction(record.view.sessionId, () => {
@@ -71,7 +81,7 @@ export async function prepareNativeConnectorActivation(input: { store: SessionSt
 
 /** Called after real executable tools are rebuilt, before the resumed model can run. Legacy requests have no V2 witness. */
 export function verifyNativeConfigurationToolAssembly(input: { store: SessionStore; sessionId: string; runId: string;
-  requestId: string; enabledConnectorIds: readonly string[]; tools: NonNullable<WorkspaceAgentOptions["mcpTools"]> }): void {
+  requestId: string; enabledConnectorIds: readonly string[]; tools: NonNullable<WorkspaceAgentOptions["mcpTools"]>; webSearchAvailable?: boolean }): void {
   const db = input.store.getConfigurationDatabase();
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='configuration_native_activation_v2'").get();
   const row = hasTable ? db.prepare("SELECT record_json,revision FROM configuration_native_activation_v2 WHERE request_id=? AND run_id=? ORDER BY revision DESC LIMIT 1")
@@ -80,7 +90,13 @@ export function verifyNativeConfigurationToolAssembly(input: { store: SessionSto
   const v2 = hasRequests ? db.prepare("SELECT record_json FROM configuration_requests_v2 WHERE id=? AND session_id=?").get(input.requestId, input.sessionId) as { record_json: string } | undefined : undefined;
   if (!v2) return;
   const record = JSON.parse(v2.record_json) as ConfigurationRecord;
-  if (record.view.state === "dismissed") return;
+  if (record.view.state === "dismissed") {
+    if (record.view.choiceReceipt?.kind === "alternative") {
+      validateNativeChoice(input.store, record);
+      if (!input.webSearchAvailable || !input.enabledConnectorIds.includes("web")) throw new Error("The selected Native alternative has no executable Web search tool");
+    }
+    return;
+  }
   if (!row) throw new Error("The V2 configuration has no prepared Native activation witness");
   const witness = JSON.parse(row.record_json) as NativeToolWitness;
   const receiptRow = db.prepare("SELECT record_json FROM configuration_receipts_v2 WHERE request_id=? AND revision=?").get(input.requestId, row.revision) as { record_json: string } | undefined;
@@ -90,7 +106,12 @@ export function verifyNativeConfigurationToolAssembly(input: { store: SessionSto
     || !receipt || receipt.id !== witness.evidence.receiptId || canonical(receipt.resourceVersions) !== canonical(snapshot.resourceVersions)
     || canonical([...input.enabledConnectorIds].sort()) !== canonical([...witness.enabledConnectorIds].sort())
     || witness.stopGeneration !== input.store.notifications.generation(input.sessionId)
-    || toolFingerprint(input.tools) !== witness.evidence.toolCatalogFingerprint) throw new Error("The resumed Native tool assembly does not match the approved activation witness");
+    || nativeToolFingerprint(input.tools) !== witness.evidence.toolCatalogFingerprint) throw new Error("The resumed Native tool assembly does not match the approved activation witness");
+  if (record.view.choiceReceipt?.kind === "run_overlay") {
+    const overlay = nativeRunOverlay(input.store, input.sessionId, input.runId, input.requestId);
+    if (!overlay || overlay.revision !== record.view.revision || overlay.previewDigest !== record.approvedDigest)
+      throw new Error("The resumed Native overlay no longer matches its approval");
+  }
   db.prepare("UPDATE configuration_native_activation_v2 SET verified_at=? WHERE request_id=? AND revision=?")
     .run(new Date().toISOString(), input.requestId, row.revision);
 }

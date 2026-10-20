@@ -7,11 +7,13 @@ import { DatabaseSync } from "node:sqlite";
 import { ConfigurationRequestService } from "./request-service.js";
 import { ConfigurationRepository } from "./repository.js";
 import { ConfigurationRegistry } from "./registry.js";
-import type { ConfigurationAdapter, ConfigurationSnapshot } from "./types.js";
+import type { ConfigurationAdapter, ConfigurationSnapshot, ConfigurationHost } from "./types.js";
 import { ConfigurationError, object, string } from "./validation.js";
 import { normalizeConfigurationFields, normalizeTokenSchema } from "./schema-normalizer.js";
+import { normalizeChoices } from "./choices.js";
+import { configurationNeedKey } from "./need-key.js";
 
-function harness(options: { verify?: ConfigurationAdapter["verify"]; applyFails?: boolean; credential?: boolean } = {}) {
+function harness(options: { verify?: ConfigurationAdapter["verify"]; applyFails?: boolean; credential?: boolean; choiceOptions?: ConfigurationHost["choiceOptions"]; applyRunOverlay?: ConfigurationHost["applyRunOverlay"] } = {}) {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE domain_settings (id INTEGER PRIMARY KEY, value TEXT NOT NULL); INSERT INTO domain_settings VALUES (1, '[]')");
   const repo = new ConfigurationRepository(db);
@@ -21,7 +23,7 @@ function harness(options: { verify?: ConfigurationAdapter["verify"]; applyFails?
     id: "connector.enable", version: 1, schemaVersion: 1, scopes: ["session"], persistence: "local_transaction",
     normalize(input) { const value = object(input, ["connectorId"], "values"); return { connectorId: string(value.connectorId, "connectorId") }; },
     target(input) { return String(input.connectorId); },
-    preview(input, context) { return { ready: true, fields: [{ id: "connectorId", label: "Connector", required: true, kind: "text", value: input.connectorId }, ...(options.credential ? [{ id: "apiKey", label: "API key", required: true, kind: "credential" as const, status: "missing" as const }] : [])], changes: [{ field: "connectors", after: String(input.connectorId) }], impact: { resourceLocation: "Catalog", effectiveScope: "Session", message: "Keep other connectors" }, verificationPlan: { targets: [], actions: [], maxRequests: 0, mayCharge: false }, activationMode: context.runId ? "same_run" : "next_run", data: { privateRef: "do-not-project" } }; },
+    preview(input, context) { return { ready: true, fields: [{ id: "connectorId", label: "Connector", required: true, kind: "text", value: string(input.connectorId, "connectorId") }, ...(options.credential ? [{ id: "apiKey", label: "API key", required: true, kind: "credential" as const, status: "missing" as const }] : [])], changes: [{ field: "connectors", after: String(input.connectorId) }], impact: { resourceLocation: "Catalog", effectiveScope: "Session", message: "Keep other connectors" }, verificationPlan: { targets: [], actions: [], maxRequests: 0, mayCharge: false }, activationMode: context.runId ? "same_run" : "next_run", data: { privateRef: "do-not-project" } }; },
     verify: options.verify,
     apply(context) {
       db.prepare("UPDATE domain_settings SET value = ? WHERE id = 1").run(JSON.stringify(["existing", context.input.connectorId]));
@@ -31,7 +33,7 @@ function harness(options: { verify?: ConfigurationAdapter["verify"]; applyFails?
     previewReversal() { return { connectorId: "previous" }; },
   };
   let queue: Promise<unknown> = Promise.resolve();
-  const host = { snapshot, runInTransaction<T>(_sessionId: string, action: () => T): Promise<T> {
+  const host = { snapshot, choiceOptions: options.choiceOptions, applyRunOverlay: options.applyRunOverlay, runInTransaction<T>(_sessionId: string, action: () => T): Promise<T> {
     const operation = queue.then(() => { const oldVersion = version; const oldWrites = writes; try { return repo.transaction(action); } catch (error) { version = oldVersion; writes = oldWrites; throw error; } });
     queue = operation.then(() => undefined, () => undefined); return operation;
   } };
@@ -40,6 +42,123 @@ function harness(options: { verify?: ConfigurationAdapter["verify"]; applyFails?
   return { db, repo, service, registry, host, adapter, get writes() { return writes; }, stop() { generation++; }, changeVersion() { version++; }, archive() { writable = false; } };
 }
 const proposal = { capabilityId: "connector.enable" as const, values: { connectorId: "pubmed" }, runId: "run-1" };
+
+const choiceOptions = () => [
+  { id: "save", kind: "persisted_apply" as const, label: "Save for session", description: "Enable the installed connector for the session.", available: true },
+  { id: "run-only", kind: "run_overlay" as const, label: "Use for this task", description: "Leave all saved settings unchanged.", available: true },
+  { id: "use-web", kind: "alternative" as const, label: "Use Web search", description: "Use the available Web search source; results may differ from PubMed.", available: true, alternativeId: "web_search" },
+  { id: "dismiss", kind: "dismiss" as const, label: "Do not configure", description: "Continue without changing settings.", available: true },
+];
+
+test("CFG-T30: finite option metadata rejects duplicate IDs, executable extensions and missing alternative identity", () => {
+  assert.throws(() => normalizeChoices([...choiceOptions(), choiceOptions()[0]!]), { code: "INVALID_CONFIGURATION_INPUT" });
+  assert.throws(() => normalizeChoices(choiceOptions().map(option => ({ ...option, command: "untrusted executable" }))), { code: "INVALID_CONFIGURATION_INPUT" });
+  assert.throws(() => normalizeChoices(choiceOptions().map(option => option.kind === "alternative" ? { ...option, alternativeId: undefined } : option)), { code: "INVALID_CONFIGURATION_INPUT" });
+  assert.throws(() => normalizeChoices(choiceOptions().map(option => option.kind === "dismiss" ? { ...option, available: false } : option)), { code: "INVALID_CONFIGURATION_INPUT" });
+});
+
+test("CFG-T30/36: new P1 capabilities require the v3 choice protocol while historical connector requests retain v2", async () => {
+  const h = harness();
+  for (const capabilityId of ["skill.select", "thinking.configure", "review.configure"] as const)
+    await assert.rejects(h.service.propose("session", { capabilityId, values: {} }), { code: "CONFIGURATION_PROTOCOL_REQUIRED" });
+  assert.equal(h.service.list("session").length, 0);
+  const legacy = await h.service.propose("session", proposal);
+  assert.equal(legacy.protocolVersion, undefined);
+  assert.equal((await h.service.decide("session", legacy.id, { revision: 1, previewDigest: legacy.previewDigest!, decision: "apply" })).state, "applied");
+});
+
+test("CFG-T32: connector refusal identity survives unrelated settings edits but changes with relevant capability availability", () => {
+  const snapshot = { projectId: "project", stopGeneration: 1, writable: true,
+    resourceVersions: { settings: "before", models: "before", credentials: "before", skills: "before", reviewer: "before", autoConfigurationPolicy: "before", connectorCatalog: "catalog", policies: "policy" },
+    data: { effective: { enabledConnectorIds: [], plugins: {} }, installedConnectorIds: ["pubmed"] } } as unknown as ConfigurationSnapshot;
+  const key = configurationNeedKey({ runId: "run", capabilityId: "connector.enable", target: "pubmed", snapshot });
+  const unrelated = structuredClone(snapshot);
+  for (const field of ["settings", "models", "credentials", "skills", "reviewer", "autoConfigurationPolicy"]) unrelated.resourceVersions[field] = "after";
+  assert.equal(configurationNeedKey({ runId: "run", capabilityId: "connector.enable", target: "pubmed", snapshot: unrelated }), key);
+  assert.notEqual(configurationNeedKey({ runId: "another-run", capabilityId: "connector.enable", target: "pubmed", snapshot }), key);
+  unrelated.data.installedConnectorIds = [];
+  assert.notEqual(configurationNeedKey({ runId: "run", capabilityId: "connector.enable", target: "pubmed", snapshot: unrelated }), key);
+  unrelated.data.installedConnectorIds = ["pubmed"];
+  (unrelated.data.effective as { enabledConnectorIds: string[] }).enabledConnectorIds = ["pubmed"];
+  assert.notEqual(configurationNeedKey({ runId: "run", capabilityId: "connector.enable", target: "pubmed", snapshot: unrelated }), key);
+});
+
+test("CFG-T30/36: v3 selection is revision-bound, durable and cannot use the legacy decision shape", async () => {
+  const h = harness({ choiceOptions });
+  const initial = await h.service.propose("session", { ...proposal, protocolVersion: 3 });
+  assert.equal(initial.protocolVersion, 3); assert.equal(initial.selectedOptionId, "save");
+  await assert.rejects(h.service.decide("session", initial.id, { revision: 1, previewDigest: initial.previewDigest!, decision: "apply" }), { code: "CONFIGURATION_OPTION_REQUIRED" });
+  await assert.rejects(h.service.preview("session", initial.id, { expectedRevision: 1, values: proposal.values, selectedOptionId: "arbitrary-command" }), { code: "CONFIGURATION_OPTION_UNAVAILABLE" });
+  const selected = await h.service.preview("session", initial.id, { expectedRevision: 1, values: proposal.values, selectedOptionId: "dismiss" }, "choose-dismiss");
+  await assert.rejects(h.service.preview("session", initial.id, { expectedRevision: 1, values: proposal.values, selectedOptionId: "save" }, "choose-dismiss"), { code: "IDEMPOTENCY_MISMATCH" });
+  assert.equal(selected.revision, 2); assert.notEqual(selected.previewDigest, initial.previewDigest);
+  await assert.rejects(h.service.decide("session", initial.id, { revision: 1, previewDigest: initial.previewDigest!, selectedOptionId: "save", decision: "apply" }), { code: "CONFIGURATION_OPTION_REQUIRED" });
+  const input = { revision: selected.revision, previewDigest: selected.previewDigest!, selectedOptionId: "dismiss", decision: "dismiss" as const };
+  const result = await h.service.decide("session", initial.id, input, "dismiss-once");
+  assert.equal(result.state, "dismissed"); assert.equal(h.writes, 0);
+  assert.deepEqual(result.choiceReceipt, { optionId: "dismiss", kind: "dismiss", label: "Do not configure", configurationWritten: false, scope: "none", runId: "run-1" });
+  const restarted = new ConfigurationRequestService({ repository: new ConfigurationRepository(h.db), registry: h.registry, host: h.host });
+  assert.deepEqual(await restarted.decide("session", initial.id, input, "dismiss-once"), result);
+  assert.equal(h.repo.listOutbox().length, 1);
+  assert.equal(h.repo.listOutbox()[0]?.payload.choiceKind, "dismiss");
+  const row = h.service.getRecord("session", initial.id); row.view.selectedOptionId = "save";
+  assert.throws(() => h.repo.save(row, row.view.stateVersion), { code: "STALE_CONFIGURATION_PREVIEW" });
+});
+
+test("CFG-T31: task overlay uses its isolated writer and never the persistent domain adapter", async () => {
+  let overlays = 0;
+  const h = harness({ choiceOptions, applyRunOverlay: context => {
+    assert.equal(context.runId, "run-1"); assert.equal(context.selectedOption?.kind, "run_overlay");
+    assert.ok(context.previewDigest); overlays++; return { resourceRevision: "overlay-1" };
+  } });
+  const initial = await h.service.propose("session", { ...proposal, protocolVersion: 3 });
+  const selected = await h.service.preview("session", initial.id, { expectedRevision: 1, values: proposal.values, selectedOptionId: "run-only" });
+  assert.equal(selected.impact.effectiveScope, "This task only");
+  const result = await h.service.decide("session", initial.id, { revision: 2, previewDigest: selected.previewDigest!, decision: "apply", selectedOptionId: "run-only" });
+  assert.equal(result.state, "applied"); assert.equal(overlays, 1); assert.equal(h.writes, 0);
+  assert.equal(result.choiceReceipt?.configurationWritten, false); assert.equal(result.choiceReceipt?.scope, "run");
+  assert.equal(result.allowedActions.includes("reversal"), false);
+  assert.equal((h.db.prepare("SELECT value FROM domain_settings").get() as { value: string }).value, "[]");
+});
+
+test("CFG-T32: alternatives are revalidated, do not probe or save, and carry a finite path to the original run", async () => {
+  let ready = true; let probes = 0;
+  const h = harness({ choiceOptions: () => choiceOptions().map(option => option.kind === "alternative" ? { ...option, available: ready } : option), verify: async () => { probes++; return { ok: true }; } });
+  const initial = await h.service.propose("session", { ...proposal, protocolVersion: 3 });
+  const selected = await h.service.preview("session", initial.id, { expectedRevision: 1, values: proposal.values, selectedOptionId: "use-web" });
+  const input = { revision: 2, previewDigest: selected.previewDigest!, selectedOptionId: "use-web", decision: "apply" as const };
+  ready = false;
+  await assert.rejects(h.service.decide("session", initial.id, input), { code: "CONFIGURATION_OPTION_UNAVAILABLE" });
+  assert.equal(h.repo.listOutbox().length, 0);
+  ready = true;
+  const result = await h.service.decide("session", initial.id, input);
+  assert.equal(result.state, "dismissed"); assert.equal(result.choiceReceipt?.kind, "alternative");
+  assert.equal(probes, 0); assert.equal(h.writes, 0);
+  assert.equal(h.repo.listOutbox()[0]?.payload.alternativeId, "web_search");
+  assert.equal(h.repo.listOutbox()[0]?.payload.runId, "run-1");
+});
+
+test("CFG-T30/32: dismissal needs no credential and Stop still invalidates all choices", async () => {
+  const h = harness({ credential: true, choiceOptions });
+  const initial = await h.service.propose("session", { ...proposal, protocolVersion: 3 });
+  assert.equal(initial.state, "collecting_input");
+  const selected = await h.service.preview("session", initial.id, { expectedRevision: 1, values: proposal.values, selectedOptionId: "dismiss" });
+  assert.equal(selected.state, "awaiting_confirmation"); assert.deepEqual(selected.fields, []);
+  h.stop();
+  await assert.rejects(h.service.decide("session", initial.id, { revision: 2, previewDigest: selected.previewDigest!, selectedOptionId: "dismiss", decision: "dismiss" }), { code: "CONTINUATION_STOPPED" });
+  assert.equal(h.writes, 0); assert.equal(h.repo.listOutbox().length, 0);
+});
+
+test("CFG-T30: switching back from an alternative after refresh retains the server candidate", async () => {
+  const h = harness({ choiceOptions });
+  const initial = await h.service.propose("session", { ...proposal, protocolVersion: 3 });
+  const alternative = await h.service.preview("session", initial.id, { expectedRevision: 1, values: proposal.values, selectedOptionId: "use-web" });
+  assert.deepEqual(alternative.fields, []);
+  const refreshed = h.service.get("session", initial.id);
+  const persistent = await h.service.preview("session", initial.id, { expectedRevision: refreshed.revision, values: {}, selectedOptionId: "save" });
+  assert.equal(persistent.fields[0]?.kind === "text" ? persistent.fields[0].value : undefined, "pubmed");
+  assert.equal(persistent.revision, 3);
+});
 
 test("CFG-T23: finite schema rejects unknown keys, unsupported types, duplicate keys and mismatched credentials", () => {
   assert.throws(() => normalizeTokenSchema([{ key: "token", label: "Token", type: "text", evil: true }]));
