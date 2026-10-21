@@ -19,7 +19,13 @@ import { mainRuntimeConfigTool } from "../specialist-runtime/main-config.js";
 import { codexAgentFactory } from "../specialist-runtime/agent.js";
 import { createSessionTitleTool, sessionTitleInstructions } from "./session-title-tool.js";
 import { materializeArtifact } from "../artifacts/materialize.js";
+import { persistNativeConfigurationWait } from "../configuration/runtime-bridge.js";
+import { nativeToolFingerprint, verifyNativeConfigurationToolAssembly } from "../configuration/native-activation.js";
+import { nativeApprovedRunConnectorIds, nativeConfigurationChoiceRecord, nativeRunOverlay, recordNativeChoiceCheckpoint, recordNativeRunChoiceContext } from "../configuration/native-choices.js";
+import { configurationFramework } from "../configuration/framework.js";
 import { randomUUID } from "node:crypto";
+import { Type } from "typebox";
+import type { AgentTool } from "@sciencediscovery/tools";
 import { pluginEnabled } from "@sciencediscovery/plugin-sdk";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import { versioningAuthorities } from "../agent-run/versioning-authorities.js";
@@ -185,6 +191,7 @@ import { closedModelContext } from "./model-context.js";
 import { RemoteComputeClient } from "@sciencediscovery/executor";
 import { classifySubagentFailure } from "@sciencediscovery/specialist";
 import { jiuwenSwarmConfigFromEnv } from "../agent-run/jiuwenswarm-agent.js";
+import { createConfigurationAgentTools } from "../configuration/agent-tools.js";
 import { runMainRequestExecution, runSubagentTask } from "../agent-run/orchestrators.js";
 import { createAgentPermissionRuntime } from "@sciencediscovery/governance";
 import type { EvolveRunProposal } from "@sciencediscovery/schema";
@@ -583,6 +590,18 @@ export function skillAuthoringCommandPrompt(content: string): string | undefined
   ].join("\n\n");
 }
 
+function nativeConfigurationDecisionPrompt(store: SessionStore, sessionId: string, run: SessionRun): string {
+  const resume = run.configurationResume!;
+  const record = nativeConfigurationChoiceRecord(store, sessionId, resume.requestId);
+  const choice = record?.view.choiceReceipt;
+  const result = choice?.kind === "alternative"
+    ? `The user selected the verified existing Web search alternative (${choice.alternativeId}). Do not enable ${resume.connectorName}. Continue the original research using Web search, preserving the original goal and constraints; disclose source and coverage differences. This choice grants no network, tool or installation permissions.`
+    : resume.decision === "apply"
+      ? `The user approved enabling ${resume.connectorName} ${choice?.kind === "run_overlay" ? "only for this original task; session settings were not changed" : "in this Session"}, and the connector is now available to this task. Use the connector where the original task requires it.`
+      : `The user declined enabling ${resume.connectorName} and did not select another source. Do not silently replace the requested source. Continue independent work if possible, otherwise explain the limitation.`;
+  return `${result} Any earlier tool result saying it is awaiting confirmation describes the past and is no longer current. Resume the original task from its committed checkpoint. Do not ask for this configuration need again (needKey=${record?.view.needKey ?? resume.requestId}) or repeat completed actions. If an external outcome is uncertain, ask the user. This is not a new user request.`;
+}
+
 async function executeAgentRun(
   store: SessionStore,
   runnerClient: RunnerClient,
@@ -610,6 +629,7 @@ async function executeAgentRun(
   evolve: EvolveRuntimeFactory | undefined,
   notificationDelivery?: NotificationBatch,
   deliveredNotice?: RuntimeNotice,
+  configurationContinuation?: boolean,
 ): Promise<SessionRunStatus> {
   const continuation = notificationDelivery && notificationDelivery.agentId !== "main"
     ? store.listSubagents(sessionId).find((child) => `subagent:${child.id}` === notificationDelivery.agentId) : undefined;
@@ -633,6 +653,22 @@ async function executeAgentRun(
   const session = store.getSession(sessionId);
   if (!session) {
     throw new ApiStatusError(404, "Session not found");
+  }
+  const persistedRun = await store.getSessionRun(sessionId, runId);
+  if (persistedRun) settingsSnapshot = { ...settingsSnapshot, enabledConnectorIds: nativeApprovedRunConnectorIds(store, persistedRun) };
+  const configurationResume = persistedRun?.configurationResume;
+  const storedCheckpoint = persistedRun?.configurationCheckpoint;
+  let checkpointHistory: AgentHistoryMessage[] = [];
+  if (configurationResume && storedCheckpoint) {
+    if (storedCheckpoint.historyRef) {
+      const record = (await new VersionStore(store.dataDir).readRecord<{ requestId: string; stopGeneration: number;
+        history: AgentHistoryMessage[] }>(storedCheckpoint.historyRef, "ConfigurationCheckpoint")).value;
+      if (record.requestId !== storedCheckpoint.requestId || record.stopGeneration !== storedCheckpoint.stopGeneration) {
+        throw new Error("Configuration checkpoint does not match its source run");
+      }
+      checkpointHistory = record.history;
+    } else checkpointHistory = (storedCheckpoint.history ?? []) as AgentHistoryMessage[];
+    if (!checkpointHistory.length) throw new Error("Configuration checkpoint has no model history");
   }
   if (session.archivedAt) {
     throw new ApiStatusError(409, "Session is archived and read-only");
@@ -746,9 +782,36 @@ async function executeAgentRun(
         sessionId,
       }, ideaTreeExecutor)
     : [];
+  const configurableConnectors = mcpRegistry.listManifests()
+    .filter((manifest) => mcpCatalog.getStatus(manifest.id).status === "ready"
+      && !settingsSnapshot.enabledConnectorIds.includes(manifest.id)
+      && filterEnabledMcpSources([manifest.id], settingsSnapshot.plugins).includes(manifest.id))
+    .map((manifest) => ({ id: manifest.id, name: mcpConnectorManifest(manifest).displayName ?? manifest.id }));
+  const connectorProposalParameters = Type.Object({
+    connectorId: Type.String({ minLength: 1, maxLength: 100 }),
+  });
+  const proposeConnectorTool: AgentTool<typeof connectorProposalParameters> = {
+    name: "propose_connector_enable",
+    label: "Request connector configuration",
+    description: `If the user task needs an installed connector that is not enabled, request user confirmation before using it. Available connectors: ${configurableConnectors.map((item) => `${item.id} (${item.name})`).join(", ")}. Call this before taking actions that depend on the connector. This tool only proposes a change; it cannot approve it. After calling, stop at a safe point. The system will resume the task after confirmation.`,
+    parameters: connectorProposalParameters,
+    execute: async (_toolCallId, params) => {
+      const connector = configurableConnectors.find((item) => item.id === params.connectorId);
+      if (!connector || mcpCatalog.getStatus(connector.id).status !== "ready") {
+        throw new Error("Connector is not available for configuration");
+      }
+      const proposal = await configurationFramework(store).propose(sessionId, { protocolVersion: 3,
+        capabilityId: "connector.enable", values: { connectorId: connector.id }, runId,
+        reason: "CONNECTOR_REQUIRED_FOR_TASK" });
+      return { content: [{ type: "text", text: JSON.stringify({ requestId: proposal.id, state: proposal.state,
+        instruction: "Stop at a safe point while configuration is pending. The system will resume this task after confirmation." }) }] };
+    },
+  };
   const leadExtraTools = [
     ...ideaTreeTools,
     ...authorityTools,
+    ...createConfigurationAgentTools({ store, sessionId, runId }),
+    ...(configurableConnectors.length ? [proposeConnectorTool] : []),
     createSessionTitleTool(store, sessionId, async (updated) => {
       await emit({ session: updated, type: "session.updated" });
     }),
@@ -872,10 +935,14 @@ async function executeAgentRun(
   const quotaSettings = store.getQuotaSettings();
   // A turn the runtime woke on its own has no user-authored body, so it is
   // recorded as a wake notice rather than as something the researcher typed.
-  const userMessage = await store.appendMessage(sessionId, "user", visibleContent, undefined,
-    composerReferences, body.annotationIds, deliveredNotice && !visibleContent ? "wake_notice" : "message",
-    undefined, deliveredNotice);
-  if (await store.getSessionRun(sessionId, runId)) await store.updateSessionRun(sessionId, runId, { userMessageId: userMessage.id });
+  const userMessage = configurationResume
+    ? { id: persistedRun!.userMessageId!, role: "user" as const, content: "", createdAt: new Date().toISOString(),
+      kind: "configuration_notice" as const, runtimeNotice: deliveredNotice }
+    : await store.appendMessage(sessionId, "user", visibleContent, undefined,
+      composerReferences, body.annotationIds, configurationContinuation ? "configuration_notice"
+        : deliveredNotice && !visibleContent ? "wake_notice" : "message",
+      undefined, deliveredNotice);
+  if (!configurationResume && persistedRun) await store.updateSessionRun(sessionId, runId, { userMessageId: userMessage.id });
   // Re-send the session's first user-authored message on every run. The goal
   // id is deterministic, so this also backfills sessions whose first turn
   // occurred while ScienceMemory was disabled, without duplicating goals.
@@ -890,7 +957,9 @@ async function executeAgentRun(
       createdAt: goalMessage.createdAt,
     });
   }
-  const promptHistory: AgentHistoryMessage[] = previousMessages.flatMap((message) => {
+  const promptHistory: AgentHistoryMessage[] = configurationResume && storedCheckpoint
+    ? closedModelContext(checkpointHistory)
+    : previousMessages.flatMap((message) => {
     if (message.role === "assistant" && message.modelContext?.length) {
       return closedModelContext(message.modelContext as AgentHistoryMessage[]);
     }
@@ -1127,7 +1196,7 @@ async function executeAgentRun(
     responseSink,
   });
   const reviewerSpecialistSettings = store.getReviewerSpecialistSettings();
-  const sessionReviewerSpecialistSettings = store.getSessionReviewerSpecialistSettings(sessionId);
+  const sessionReviewerSpecialistSettings = settingsSnapshot.sessionReviewer ?? store.getSessionReviewerSpecialistSettings(sessionId);
   const subagentPool = new SubagentPool(maxConcurrentSubagents);
   let launchedSubagentCalls = 0;
   const reserveSubagentSlot = async (description: string, signal: AbortSignal): Promise<() => void> => {
@@ -2260,6 +2329,18 @@ async function executeAgentRun(
       })),
     workspaceRoot: store.workspacePath(sessionId),
   };
+  if (configurationResume) verifyNativeConfigurationToolAssembly({ store, sessionId, runId,
+    requestId: configurationResume.requestId, enabledConnectorIds: settingsSnapshot.enabledConnectorIds,
+    tools: agentOptions.mcpTools ?? [], webSearchAvailable: typeof agentOptions.webSearch === "function" });
+  const choiceWebSettings = store.getWebSettings();
+  const choiceWebReady = Object.values(choiceWebSettings.freeSearchEngines).some(Boolean)
+    || choiceWebSettings.paidSearchProviders.some(provider => choiceWebSettings.providers.some(item => item.provider === provider && item.hasApiKey));
+  recordNativeRunChoiceContext({ store, sessionId, runId, enabledConnectorIds: [...new Set([
+    ...(agentOptions.mcpTools ?? []).map(tool => tool.sourceId).filter((id): id is string => typeof id === "string"),
+    ...(typeof agentOptions.webSearch === "function" && choiceWebReady ? ["web"] : []),
+  ])],
+    webSearchAvailable: typeof agentOptions.webSearch === "function" && choiceWebReady,
+    toolCatalogFingerprint: nativeToolFingerprint(agentOptions.mcpTools ?? []), plugins: settingsSnapshot.plugins });
   const mainProfile = createMainAgentProfile({
     connectorIds: settingsSnapshot.enabledConnectorIds,
     gatewayThreadId: sessionId,
@@ -2350,6 +2431,8 @@ async function executeAgentRun(
         sessionId, executionId: requestExecution.identity.executionId,
       }),
       runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
+      suspendAfterTurn: () => store.listConnectorConfigurationRequests(sessionId).some((request) =>
+        request.runId === runId && request.state === "awaiting_confirmation"),
       workspace: agentOptions,
     },
     profile: mainProfile,
@@ -2394,18 +2477,51 @@ async function executeAgentRun(
       prompt: promptUserMessage.content,
       purpose: "initial",
     });
+    if (initialResult.suspended) {
+      const request = store.listConnectorConfigurationRequests(sessionId).find((item) =>
+        item.runId === runId && item.state === "awaiting_confirmation");
+      if (!request) throw new Error("Configuration suspension has no pending request");
+      await flushWorkspaceRefresh();
+      await persistNativeConfigurationWait({
+        sessionId, runId, requestId: request.id,
+        generation: () => store.notifications.generation(sessionId),
+        commitCheckpoint: (stopGeneration, committedAt) => new VersionStore(store.dataDir).putRecord("ConfigurationCheckpoint", {
+          requestId: request.id,
+          history: closedModelContext(initialResult.finalMessages),
+          stopGeneration,
+          committedAt,
+        }),
+        commitWait: async (binding) => {
+          await store.updateSessionRun(sessionId, runId, {
+            configurationWait: true,
+            configurationCheckpoint: {
+              requestId: binding.requestId,
+              historyRef: binding.checkpointRef,
+              stopGeneration: binding.stopGeneration,
+              committedAt: binding.committedAt,
+            },
+          });
+          recordNativeChoiceCheckpoint({ store, sessionId, runId, requestId: binding.requestId,
+            stopGeneration: binding.stopGeneration, historyRef: binding.checkpointRef, committedAt: binding.committedAt });
+        },
+      });
+      return "blocked";
+    }
     // Retain ready feedback across a failed run so the next user request can
     // retry delivery. Once the lead Agent has completed a turn with it in
     // context, mark the record consumed to prevent unrelated future turns
     // from receiving the same diagnostic again.
     await Promise.all(readyReviewFeedback.map((feedback) => store.consumeReviewFeedback(sessionId, feedback.id)))
       .catch(() => undefined);
-    const promptIndex = initialResult.finalMessages.findLastIndex((message) => (
-      message.role === "user" && message.content === promptUserMessage.content
-    ));
+    const promptIndex = configurationResume && storedCheckpoint
+      ? initialResult.finalMessages.findLastIndex((message) => message.role === "user"
+        && message.content === checkpointHistory.findLast((entry) => entry.role === "user")?.content)
+      : initialResult.finalMessages.findLastIndex((message) => (
+        message.role === "user" && message.content === promptUserMessage.content
+      ));
     assistantModelContext = promptIndex >= 0
       ? closedModelContext(initialResult.finalMessages.slice(promptIndex + 1))
-      : [];
+      : configurationResume ? closedModelContext(initialResult.finalMessages) : [];
     const taskUsage = lastAgentUsage;
     assertRunActive();
     await flushWorkspaceRefresh();
@@ -2476,7 +2592,11 @@ async function executeAgentRun(
       message: (await store.readMessages(sessionId)).find((entry) => entry.id === message.id) ?? message,
       type: "run.completed",
     });
-    return "completed";
+    // The optional JiuwenSwarm executor does not yet expose the committed
+    // suspension boundary. Preserve its legacy continuation rather than claim
+    // the task finished while a configuration request remains pending.
+    return store.listConnectorConfigurationRequests(sessionId).some((request) =>
+      request.runId === runId && request.state === "awaiting_confirmation") ? "interrupted" : "completed";
   } catch (error) {
     if (cancelledRuns.has(runId)) {
       if (!promptManifest && taskInvocationAttempted) {
@@ -2616,6 +2736,15 @@ export async function sessionHasActiveRun(store: SessionStore, sessionId: string
   return (await store.listSessionRuns(sessionId)).some((run) => !isTerminalRunStatus(run.status));
 }
 
+export async function sessionHasActiveRunExceptConfigurationWait(
+  store: SessionStore, sessionId: string, requestId: string,
+): Promise<boolean> {
+  if (activeSessions.has(sessionId)) return true;
+  return (await store.listSessionRuns(sessionId)).some((run) =>
+    (run.status === "running" || run.status === "blocked") && !(run.status === "blocked"
+      && run.configurationWait && run.configurationCheckpoint?.requestId === requestId));
+}
+
 async function findCurrentCancelableRun(store: SessionStore, sessionId: string): Promise<SessionRun | undefined> {
   const runs = await store.listSessionRuns(sessionId);
   return runs.find((run) => run.status === "running" || run.status === "blocked")
@@ -2650,6 +2779,7 @@ export async function cancelCurrentSessionRun(
   // Current Stop owns the lead-Agent wake gate. Reviewer work has a dedicated
   // endpoint and must not be stopped as a side effect of cancelling a run.
   store.notifications.stop(sessionId);
+  store.invalidateConnectorConfigurationRequestsForStop(sessionId);
   const active = await findCurrentCancelableRun(store, sessionId);
   if (!active) {
     sendJson(response, legacyResponse ? 202 : 200, { cancelled: true, sessionId } satisfies CancelRunResult);
@@ -2659,6 +2789,15 @@ export async function cancelCurrentSessionRun(
   runLog.info("run_cancel_requested", { reason: "user_cancelled", runId: active.id, sessionId });
   const controller = activeRunAbortControllers.get(active.id);
   if (controller) controller.abort();
+  else if (active.status === "blocked" && active.configurationWait) {
+    const cancelled = await store.updateSessionRunStatusIfCurrent(sessionId, active.id, "blocked", "cancelled", {
+      finishedAt: new Date().toISOString(),
+    });
+    if (cancelled) {
+      await publishRunEvent(store, sessionId, active.id, { reason: "Configuration wait cancelled", runId: active.id, type: "run.cancelled" });
+      await publishRunEvent(store, sessionId, active.id, { reason: "Configuration wait cancelled", run: cancelled, status: "cancelled", type: "run.status" });
+    }
+  }
   else if (active.status === "queued") {
     const cancelled = await cancelQueuedRunBeforeExecution(store, sessionId, active.id);
     if (!cancelled) {
@@ -2977,6 +3116,20 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
   return snapshot;
 }
 
+/** Recovery-safe handoff for an applied connector request from an Agent task. */
+export async function ensureConnectorContinuation(
+  store: SessionStore, sessionId: string, requestId: string,
+): Promise<SessionRun | undefined> {
+  const request = store.getConnectorConfigurationRequest(sessionId, requestId);
+  if (!request || (request.state !== "applied" && request.state !== "dismissed")
+    || request.runId.startsWith("user-request:")) return undefined;
+  const run = await store.ensureConnectorContinuationRun({
+    sessionId, requestId,
+  });
+  if (run?.status === "queued") await publishRunEvent(store, sessionId, run.id, { run, type: "run.queued" });
+  return run;
+}
+
 async function computeQueuedSettingsSnapshot(
   store: SessionStore,
   _skillCatalog: SkillCatalog,
@@ -3055,7 +3208,13 @@ export async function createQueuedRun(
     webForceRefresh: body.webForceRefresh === true || slashRefresh,
   });
   // A Stop received while validating/enqueuing this request wins over the earlier request.
-  store.notifications.resume(sessionId, wakeGeneration);
+  // A later user message may queue behind a parked run. It must not rotate the
+  // Stop generation belonging to that run's still-actionable configuration card.
+  const pendingConfiguration = store.listConnectorConfigurationRequests(sessionId).some((request) =>
+    request.state === "awaiting_confirmation" && !request.runId.startsWith("user-request:"));
+  const resumingConfiguration = (await store.listSessionRuns(sessionId)).some((candidate) =>
+    !isTerminalRunStatus(candidate.status) && (candidate.configurationWait || candidate.configurationResume));
+  if (!pendingConfiguration && !resumingConfiguration) store.notifications.resume(sessionId, wakeGeneration);
   const unread = store.notifications.prepareDelivery({ sessionId, agentId: "main" });
   if (unread) run = await store.updateSessionRun(sessionId, run.id, { notificationDelivery: unread });
   const renamedSession = await applyInitialSessionTitle(store, run);
@@ -3198,8 +3357,47 @@ export function scheduleSessionRuns(
   void (async () => {
     try {
       while (true) {
-        const next = (await store.listSessionRuns(sessionId)).find((run) => run.status === "queued");
+        const runs = await store.listSessionRuns(sessionId);
+        if (runs.some((run) => run.status === "blocked" && run.configurationWait)) return;
+        const next = runs.find((run) => run.status === "queued");
         if (!next) return;
+        if (next.configurationContinuation) {
+          const request = store.getConnectorConfigurationRequest(sessionId, next.configurationContinuation.requestId);
+          const source = await store.getSessionRun(sessionId, next.configurationContinuation.sourceRunId);
+          if (request?.state !== "applied" || !source || !["completed", "interrupted"].includes(source.status)
+            || !store.notifications.canWake(sessionId)
+            || (request.stopGeneration !== undefined && request.stopGeneration !== store.notifications.generation(sessionId))
+            || !next.settingsSnapshot.enabledConnectorIds.includes(request.connectorId)
+            || !store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId)
+            || (request.connectorId !== "web" && mcpCatalog.getStatus(request.connectorId).status !== "ready")) {
+            await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
+            continue;
+          }
+        }
+        if (next.configurationResume) {
+          const request = store.getConnectorConfigurationRequest(sessionId, next.configurationResume.requestId);
+          const choice = nativeConfigurationChoiceRecord(store, sessionId, next.configurationResume.requestId);
+          const overlay = choice?.view.choiceReceipt?.kind === "run_overlay" ? nativeRunOverlay(store, sessionId, next.id, request?.id ?? "") : undefined;
+          const approvedIds = nativeApprovedRunConnectorIds(store, next);
+          const valid = request?.state === (next.configurationResume.decision === "apply" ? "applied" : "dismissed")
+            && next.configurationCheckpoint?.requestId === request.id
+            && next.configurationCheckpoint.stopGeneration === store.notifications.generation(sessionId)
+            && store.notifications.canWake(sessionId)
+            && (request.state !== "applied" || (approvedIds.includes(request.connectorId)
+              && (overlay || store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId))
+              && (request.connectorId === "web" || mcpCatalog.getStatus(request.connectorId).status === "ready")));
+          if (!valid) {
+            runLog.warn("configuration_resume_rejected", { runId: next.id, requestId: next.configurationResume.requestId,
+              requestState: request?.state, activationState: choice?.view.activation.state,
+              checkpointMatches: next.configurationCheckpoint?.requestId === request?.id,
+              checkpointGeneration: next.configurationCheckpoint?.stopGeneration, currentGeneration: store.notifications.generation(sessionId),
+              canWake: store.notifications.canWake(sessionId), approvedConnector: request ? approvedIds.includes(request.connectorId) : false,
+              runOverlay: Boolean(overlay), savedConnector: request ? store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId) : false,
+              connectorReady: request ? request.connectorId === "web" || mcpCatalog.getStatus(request.connectorId).status === "ready" : false });
+            await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
+            continue;
+          }
+        }
         if (next.automaticWake && (!next.notificationDelivery || !store.notifications.deliveryAllowed(next.notificationDelivery))) {
           await cancelQueuedRunBeforeExecution(store, sessionId, next.id);
           continue;
@@ -3261,7 +3459,7 @@ export function scheduleSessionRuns(
               annotationIds: next.annotationIds,
               // An automatic wake contributes no user-authored text; a delivery
               // riding along with a real request must not be glued onto it.
-              content: next.automaticWake ? "" : next.prompt,
+              content: next.automaticWake || next.configurationContinuation || next.configurationResume ? "" : next.prompt,
               references: next.references,
               skillLibraryRefs: next.skillLibraryRefs,
               webForceRefresh: next.webForceRefresh,
@@ -3273,7 +3471,15 @@ export function scheduleSessionRuns(
             memoryGraphClient,
             evolve,
             delivery && delivery.agentId !== "main" ? delivery : undefined,
-            delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery)) : undefined,
+            delivery ? runtimeNotice(delivery, store.shellExecutions.list(delivery))
+              : next.configurationResume ? {
+                executions: 0, timers: 0,
+                prompt: nativeConfigurationDecisionPrompt(store, sessionId, next),
+              } : next.configurationContinuation ? {
+                executions: 0, timers: 0,
+                prompt: `The user approved enabling ${next.configurationContinuation.connectorName} for this Session. Continue the existing task from the previous run. Its completed tool calls and artifacts are already in the conversation history. Do not repeat a side-effecting action unless you can verify that it is safe; if its outcome is unknown, ask the user. The user has not submitted a new task.`,
+              } : undefined,
+            Boolean(next.configurationContinuation || next.configurationResume),
           );
         } catch (reason) {
           error = runFailureMessage(reason);
@@ -3287,12 +3493,14 @@ export function scheduleSessionRuns(
           cancelledRuns.delete(next.id);
           const finished = await store.updateSessionRunStatus(sessionId, next.id, status, {
             ...(error && status === "failed" ? { error } : {}),
-            finishedAt: new Date().toISOString(),
+            ...(status === "blocked" ? {} : { finishedAt: new Date().toISOString() }),
           });
           await publishRunEvent(store, sessionId, next.id, { run: finished, status, type: "run.status" });
           const durationMs = Math.max(0, Date.now() - Date.parse(startedAt));
           if (status === "completed") {
             runLog.info("run_completed", { durationMs, runId: next.id, sessionId });
+          } else if (status === "blocked" || status === "interrupted") {
+            runLog.info("run_waiting_for_configuration", { durationMs, runId: next.id, sessionId });
           } else if (status === "cancelled") {
             runLog.info("run_cancelled", { durationMs, reason: "user_cancelled", runId: next.id, sessionId });
           } else {
@@ -3307,7 +3515,9 @@ export function scheduleSessionRuns(
       }
     } finally {
       scheduledSessions.delete(sessionId);
-      const stillQueued = (await store.listSessionRuns(sessionId)).some((run) => run.status === "queued");
+      const remaining = await store.listSessionRuns(sessionId);
+      const stillQueued = remaining.some((run) => run.status === "queued")
+        && !remaining.some((run) => run.status === "blocked" && run.configurationWait);
       if (stillQueued) scheduleSessionRuns(
         store,
         runnerClient,
@@ -3361,6 +3571,23 @@ export async function recoverSessionRuns(store: SessionStore, memoryGraphClient:
       }
       for (const run of await store.listSessionRuns(session.id)) {
         if (run.status !== "running" && run.status !== "blocked") continue;
+        const pendingConfiguration = run.configurationWait && run.configurationCheckpoint
+          ? store.getConnectorConfigurationRequest(session.id, run.configurationCheckpoint.requestId)
+          : undefined;
+        if (run.status === "running" && pendingConfiguration?.state === "awaiting_confirmation") {
+          const blocked = await store.updateSessionRunStatusIfCurrent(session.id, run.id, "running", "blocked");
+          if (blocked) await publishRunEvent(store, session.id, run.id, {
+            reason: "Waiting for configuration decision", run: blocked, status: "blocked", type: "run.status",
+          });
+          continue;
+        }
+        if (run.status === "blocked" && run.configurationWait
+          && ["awaiting_confirmation", "applied", "dismissed"].includes(pendingConfiguration?.state ?? "")) {
+          continue;
+        }
+        // A crash before committing the checkpoint must not expose an old
+        // proposal as an actionable legacy continuation after interruption.
+        store.invalidateConnectorConfigurationRequestsForStop(session.id, run.id);
         const reason = "API process exited before this run reached a terminal state";
         const interrupted = await store.updateSessionRunStatus(session.id, run.id, "interrupted", {
           error: reason,
@@ -3532,7 +3759,10 @@ export async function cancelSessionRun(
     sendJson(response, 200, run);
     return;
   }
-  if (run.status !== "queued") store.notifications.stop(sessionId);
+  if (run.status !== "queued") {
+    store.notifications.stop(sessionId);
+    store.invalidateConnectorConfigurationRequestsForStop(sessionId);
+  }
   cancelledRuns.add(runId);
   runLog.info("run_cancel_requested", { reason: "user_cancelled", runId, sessionId });
   const controller = activeRunAbortControllers.get(runId);
@@ -3540,6 +3770,17 @@ export async function cancelSessionRun(
     controller.abort();
     sendJson(response, 202, run);
     return;
+  }
+  if (run.status === "blocked" && run.configurationWait) {
+    const cancelled = await store.updateSessionRunStatusIfCurrent(sessionId, runId, "blocked", "cancelled", {
+      finishedAt: new Date().toISOString(),
+    });
+    if (cancelled) {
+      await publishRunEvent(store, sessionId, runId, { reason: "Configuration wait cancelled", runId, type: "run.cancelled" });
+      await publishRunEvent(store, sessionId, runId, { reason: "Configuration wait cancelled", run: cancelled, status: "cancelled", type: "run.status" });
+      sendJson(response, 200, cancelled);
+      return;
+    }
   }
   if (run.status === "queued") {
     const cancelled = await cancelQueuedRunBeforeExecution(store, sessionId, runId);
@@ -3554,6 +3795,7 @@ export async function cancelSessionRun(
       return;
     }
     store.notifications.stop(sessionId);
+    store.invalidateConnectorConfigurationRequestsForStop(sessionId);
     activeRunAbortControllers.get(runId)?.abort();
     sendJson(response, 202, current);
     return;

@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field
 
 from . import gateway
 from .config import Settings
+from .configuration_capabilities import configuration_capabilities
 from .diagnostics import emit as trace_boundary
 from .events import RunEventMapper
 from .llm_proxy import DEFAULT_ALIAS, LlmRoute, LlmRoutes
@@ -587,6 +588,13 @@ async def stream_with_keepalive(source: AsyncGenerator[str, None], interval: flo
 
 def agent_router(runner: AgentRunner, settings: Settings) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/agent/configuration/capabilities")
+    async def describe_configuration_capabilities(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+        accepted = {f"Bearer {token}" for token in (settings.agent_token, settings.api_token) if token}
+        if accepted and authorization not in accepted:
+            raise HTTPException(status_code=401, detail="unauthorized")
+        return configuration_capabilities()
 
     @router.post("/agent/runs")
     async def create_run(body: AgentRunRequest, authorization: str | None = Header(default=None)) -> StreamingResponse:

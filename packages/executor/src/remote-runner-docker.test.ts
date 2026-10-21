@@ -76,6 +76,12 @@ async function startContainer(root: string): Promise<{ keyPath: string; port: nu
 }
 
 test("a real SSH machine without a runner is deployed to, connected, and used", { tags: ["status:external"] }, async (context) => {
+  // Package commands have no external-test plan. An explicitly selected shared
+  // plan owns its environment requirements and must never silently skip this case.
+  if (!OPT_IN && !Reflect.has(globalThis, Symbol.for("sciencediscovery.tagged.registry"))) {
+    context.skip("Docker/SSH external test: set SCIENCE_AGENT_DOCKER_SSH_TEST=1 to run");
+    return;
+  }
   const root = await mkdtemp(resolve(tmpdir(), "sd-ssh-docker-"));
   context.after(async () => {
     await run("docker", ["rm", "-f", CONTAINER]).catch(() => undefined);

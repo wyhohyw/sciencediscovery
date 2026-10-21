@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { createTest } from "../../../test/support/tagged/compat.mjs";
-const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
+const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "os:macos", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
 
 import { createElement } from "react";
@@ -266,6 +266,69 @@ test("successful flow: creates provider, registers ALL listed models, tests the 
   assert.match(extractText(successAlert), /模型已连接并保存/);
   assert.match(extractText(successAlert), /登记 2 个模型；listed-model-first 已设为全局默认任务模型/);
   assert.match(extractText(successAlert), /88 ms/);
+});
+
+test("inline connection keeps the global default unset on an empty system", async () => {
+  let globalWrites = 0;
+  let connectedModelId: string | undefined;
+  const registrationScopes: boolean[] = [];
+  const client = createMockClient({
+    addProviderModel: async (_providerId: string, body: any) => {
+      registrationScopes.push(body.setGlobalDefault);
+      return { id: `profile-${body.model}`, model: body.model, name: body.model } as ModelProfile;
+    },
+    replaceGlobalSettings: async () => {
+      globalWrites += 1;
+      return {} as any;
+    },
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      onSuccess: (model) => { connectedModelId = model.id; },
+      presets: MODEL_PROVIDER_PRESETS,
+      setFirstModelAsGlobalDefault: false,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "demo-test-key" } });
+  });
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+  assert.ok(connectedModelId);
+  assert.equal(globalWrites, 0);
+  assert.deepEqual(registrationScopes, [false, false]);
+});
+
+test("a failed inline connection does not rewrite global settings", async () => {
+  let globalWrites = 0;
+  const client = createMockClient({
+    replaceGlobalSettings: async () => {
+      globalWrites += 1;
+      return {} as any;
+    },
+    testModel: async () => authFailResult,
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(createElement(LocaleProvider, { initialLocale: "en" }, createElement(ModelConnectWizard, {
+      client,
+      presets: MODEL_PROVIDER_PRESETS,
+      setFirstModelAsGlobalDefault: false,
+    })));
+  });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "bad-key" } });
+  });
+  await acceptProbeCost(renderer!);
+  await act(async () => {
+    await renderer!.root.findByProps({ className: "primary-button wizard-submit-button" }).props.onClick();
+  });
+  assert.equal(globalWrites, 0);
+  assert.match(JSON.stringify(renderer!.toJSON()), /Authorization|API key|invalid/i);
 });
 
 test("successful flow with existing models: registers all listed models but leaves the global default alone", async () => {

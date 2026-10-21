@@ -1,0 +1,15 @@
+diff --git a/openjiuwen/core/single_agent/interrupt/handler.py b/openjiuwen/core/single_agent/interrupt/handler.py
+--- a/openjiuwen/core/single_agent/interrupt/handler.py
++++ b/openjiuwen/core/single_agent/interrupt/handler.py
+@@ -287,6 +287,11 @@
+         """Persist tool interruption state and return interrupt dict."""
+         await self._agent.context_engine.save_contexts(session)
+         self.save(state, session)
++        # Agent streams may emit this result before their finally/post_run commit.
++        # Flush the existing checkpointer before making the interrupt observable.
++        # Workflow sessions remain owned by their workflow lifecycle.
++        if isinstance(session, Session):
++            await session.commit()
+         result = self.build_interrupt_result(sub_agent_outputs)
+         invoke_inputs.result = result
+         return result

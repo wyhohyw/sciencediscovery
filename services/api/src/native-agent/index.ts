@@ -139,10 +139,12 @@ export interface NativeAgentOptions extends WorkspaceAgentOptions {
    *  threaded through three run-loop entry points. */
   evolve?: EvolveToolRuntime;
   planStore?: PlanStore;
+  suspendAfterTurn?: () => boolean | Promise<boolean>;
 }
 
 export interface NativeAgentRunResult {
   finalMessages: AgentHistoryMessage[];
+  suspended?: boolean;
 }
 
 export interface NativeAgentHandle extends Agent {
@@ -673,6 +675,7 @@ class NativeAgent implements NativeAgentHandle {
           if (event.type === "model_usage") reportedModelUsage = true;
         },
         turnLifecycle: this.versionRecorder,
+        suspendAfterTurn: this.options.suspendAfterTurn,
         waitController: this.waitController,
       });
       const result = await loop.run(this.history, controller.signal, markProgress)
@@ -681,7 +684,8 @@ class NativeAgent implements NativeAgentHandle {
       const usage = result.usage;
       if (!reportedModelUsage) this.emit({ type: "model_usage", ...(usage ? { usage, usageReported: true } : { usageReported: false }) });
       if (usage) this.emit({ type: "usage", usage });
-      return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")) };
+      return { finalMessages: structuredClone(this.history.filter((message) => message.role !== "system")),
+        ...(result.suspended ? { suspended: true } : {}) };
     } finally {
       await this.versionRecorder?.flushEvents().catch((error: unknown) => console.error("Trajectory event flush failed", error instanceof Error ? error.message : "unknown error"));
       this.versionRecorder?.close();
