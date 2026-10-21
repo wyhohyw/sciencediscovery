@@ -12,7 +12,7 @@ import { ConfigurationRequestCard, type ConfigurationRequestActions } from "../s
 import { ApiRequestError } from "../src/api/auth.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 import { QuickConfigurationMenu } from "../src/configuration/QuickConfigurationMenu.js";
-import { genericConfigurationPresentation, mergeConfigurationRequests } from "../src/configuration/presentation.js";
+import { genericConfigurationPresentation, mergeConfigurationRequests, shouldPollConfigurationRequest } from "../src/configuration/presentation.js";
 import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -641,4 +641,26 @@ test("CFG-R02 local and private HTTP gateways disclose plaintext risk and collec
     assert.deepEqual([uploads, previews, decisions], [0, 0, 0], "The endpoint consent action cannot send a probe, upload a key, or apply settings");
     await act(async () => renderer!.unmount());
   }
+});
+
+test("CFG-R09 continuation receipt polling survives pending to started until the durable completed receipt arrives", () => {
+  const saved = request({ state: "applied", activation: { mode: "same_run", state: "active" }, resumption: { state: "pending" }, stateVersion: 4 });
+  const started = { ...saved, stateVersion: 5, resumption: { state: "started" as const, runId: "r1" } };
+  const completed = { ...saved, stateVersion: 6, resumption: { state: "completed" as const, runId: "r1" } };
+  let snapshots: ConfigurationRequestView[] = [];
+  const watchedIds = [saved, started, completed].map(snapshot => {
+    snapshots = mergeConfigurationRequests(snapshots, [snapshot]);
+    return snapshots.filter(shouldPollConfigurationRequest).map(item => item.id);
+  });
+  assert.deepEqual(watchedIds, [[saved.id], [saved.id], []], "A first read returning started after run completion must still schedule the next receipt read");
+  snapshots = mergeConfigurationRequests(snapshots, [started]);
+  assert.deepEqual(snapshots.filter(shouldPollConfigurationRequest), [], "An older started response cannot revive polling after the final receipt was observed");
+  assert.equal(snapshots[0]!.resumption.state, "completed");
+});
+
+test("CFG-R09 a saved next-run setting stops polling once activation needs a subsequent user run", () => {
+  const saved = request({ runId: undefined, state: "applied", activation: { mode: "next_run", state: "needs_user_action" }, resumption: { state: "not_requested" } });
+  assert.equal(shouldPollConfigurationRequest(saved), false, "A future-run setting must not keep an idle session polling");
+  assert.equal(shouldPollConfigurationRequest({ ...saved, activation: { mode: "next_run", state: "pending" } }), true, "Pending activation still receives the existing finite reconciliation polling");
+  assert.equal(shouldPollConfigurationRequest({ ...saved, activation: { mode: "next_run", state: "active" } }), false);
 });

@@ -37,6 +37,16 @@ export function mergeConfigurationRequests(current: readonly ConfigurationReques
   return [...merged.values()];
 }
 
+
+/** A run's terminal event can arrive before its durable configuration receipt.
+ * Keep reading a started continuation until the receipt itself settles. */
+export function shouldPollConfigurationRequest(request: ConfigurationRequestView): boolean {
+  return Boolean((request.state === "awaiting_confirmation" && request.autoApplyAt)
+    || ["validating", "applying"].includes(request.state)
+    || request.activation.state === "pending"
+    || ["pending", "queued", "started"].includes(request.resumption.state));
+}
+
 /** Keep a resolved request visible only until its in-conversation receipt exists. */
 export function connectorConfigurationPresentation(
   requests: readonly ConnectorConfigurationRequest[],

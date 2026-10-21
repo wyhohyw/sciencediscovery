@@ -230,7 +230,7 @@ import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./Provi
 
 import { ConversationalConnectorCard } from "./configuration/ConversationalConnectorCard.js";
 import { ConversationalConnectorReceipt } from "./configuration/ConversationalConnectorReceipt.js";
-import { connectorConfigurationPresentation, genericConfigurationPresentation, mergeConfigurationRequests } from "./configuration/presentation.js";
+import { connectorConfigurationPresentation, genericConfigurationPresentation, mergeConfigurationRequests, shouldPollConfigurationRequest } from "./configuration/presentation.js";
 import { ConfigurationRequestCard, isConfigurationRequestView } from "./configuration/ConfigurationRequestCard.js";
 import { QuickConfigurationMenu } from "./configuration/QuickConfigurationMenu.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
@@ -2046,8 +2046,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const pendingAutoConfigurationIds = [...connectorConfigurationRequests
     .filter((request) => request.sessionId === activeSessionId && request.state === "awaiting_confirmation" && request.autoApplyAt)
     .map((request) => request.id), ...configurationRequests.filter((request) => request.sessionId === activeSessionId
-      && ((request.state === "awaiting_confirmation" && request.autoApplyAt) || ["validating", "applying"].includes(request.state) || request.activation.state === "pending"
-        || ["pending", "queued"].includes(request.resumption.state))).map((request) => request.id)].join(",");
+      && shouldPollConfigurationRequest(request)).map((request) => request.id)].join(",");
   useEffect(() => {
     if (!activeSessionId || !pendingAutoConfigurationIds) return;
     let cancelled = false;
