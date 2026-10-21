@@ -111,7 +111,7 @@ Agent 只看到脱敏状态与请求 ID。HTTP 列表按同一 ID 合并 v2/v3 �
 
 连接器启用使用最新 effective 集合增加一项，并保留其他项；模型选择只写会话绑定。零模型首次连接明确写全局默认并保留其他全局 overrides。模型修复写目标 profile 的独立凭据，不修改共享 provider。
 
-生效方式区分 before_first_run、same_run、next_run、requires_restart。当前只有 Native 已就绪 MCP 连接器承诺任务中 same_run；模型和 P1 变更不热切换活动 run 或改写旧排队快照。会话审阅 automatic/level 在入队时额外冻结，后台审阅按产物来源读取；全局 Reviewer enabled 仍是实时总闸。仅后续任务生效的配置显示对应限制，不用 applied 代替 active。
+生效方式区分 before_first_run、same_run、next_run、requires_restart。当前只有 Native 已就绪 MCP 连接器承诺任务中 same_run；模型和 P1 变更不热切换活动 run 或改写旧排队快照。会话审阅 automatic/level 在入队时额外冻结，后台审阅按产物来源读取；全局 Reviewer enabled 仍是实时总闸。`enqueueArtifactVersion` 不因全局关闭而提前返回：来源会话快照允许自动审阅时仍持久任务，后台以 failed checkpoint 明示 Reviewer 已关闭，且不调用审阅执行器；来源会话快照明确 opt-out 才不入队。保留后台 admission 和所有异步等待之后、执行器调用之前的全局检查；若关闭发生在后一道检查，则按现有收束分支更新任务及回执，不启动执行。仅后续任务生效的配置显示对应限制，不用 applied 代替 active。
 
 ## 4. 数据契约与状态
 

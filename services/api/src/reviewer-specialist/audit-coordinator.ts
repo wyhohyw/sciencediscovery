@@ -97,7 +97,6 @@ export class ReviewerAuditCoordinator {
     // platform-produced scientific conclusion. Reviewer Specialist is scoped
     // to readable report deliverables, never code or data intermediates.
     if (!version || !artifact || artifact.origin !== "llm_declared" || !isReviewerReportCandidate(artifact, version)) return undefined;
-    if (!this.store.getReviewerSpecialistSettings().enabled) return undefined;
     const sourceRun = await this.artifactSourceRun(input.sessionId, version.turnId);
     const sessionSettings = sourceRun?.settingsSnapshot.sessionReviewer ?? this.store.getSessionReviewerSpecialistSettings(input.sessionId);
     if (!sessionSettings.automaticReviewEnabled) return undefined;

@@ -5796,10 +5796,29 @@ test("always-allow executes subagent code without permission requests or grants"
     const event = rawEvent as { step?: SubagentStep; type: string };
     return event.type === "subagent.step" && event.step?.kind === "tool" ? [event.step] : [];
   });
-  assert.deepEqual(streamedToolSteps.map((step) => step.status), ["running", "completed"]);
+  // CFG-R12: upstream streams transient output snapshots for the same tool.
+  // Validate one logical execution and monotonic progress, rather than a
+  // timing-dependent number of live broadcasts.
+  assert.ok(streamedToolSteps.length >= 2);
+  assert.equal(new Set(streamedToolSteps.map((step) => step.id)).size, 1);
+  assert.equal(new Set(streamedToolSteps.map((step) => step.toolCallId)).size, 1);
+  assert.ok(streamedToolSteps[0]?.toolCallId);
+  assert.equal(streamedToolSteps[0]?.status, "running");
+  assert.ok(streamedToolSteps.slice(0, -1).every((step) => step.status === "running"));
+  assert.equal(streamedToolSteps.filter((step) => step.status === "completed").length, 1);
+  const completedToolStep = streamedToolSteps.at(-1)!;
+  assert.equal(completedToolStep.status, "completed");
+  let previousProgress = "";
+  for (const snapshot of streamedToolSteps.slice(1, -1)) {
+    assert.ok(snapshot.progress, "An intermediate running snapshot must carry tool output progress");
+    assert.equal(snapshot.content, snapshot.progress);
+    assert.ok(snapshot.progress.startsWith(previousProgress), "Tool progress must retain previously streamed output");
+    previousProgress = snapshot.progress;
+  }
   assert.ok(streamedToolSteps.every((step) => step.input === pythonCommand(subagentPythonCode)));
   assert.equal(streamedToolSteps[0]?.content, pythonCommand(subagentPythonCode));
-  assert.ok((streamedToolSteps[1]?.content.length ?? 0) > 400);
+  assert.ok(completedToolStep.content.length > 400);
+  assert.match(completedToolStep.content, /x{650}/);
 
   const permissions = await jsonRequest<PermissionRequest[]>(
     `${origin}/api/permission-requests?sessionId=${encodeURIComponent(session.body.id)}`,
@@ -5828,7 +5847,11 @@ test("always-allow executes subagent code without permission requests or grants"
     `${origin}/api/sessions/${session.body.id}/subagents`,
     { headers: authorization },
   );
-  const toolStep = subagents.body[0]?.steps.find((step) => step.kind === "tool");
+  const toolSteps = subagents.body[0]?.steps.filter((step) => step.kind === "tool") ?? [];
+  assert.equal(toolSteps.length, 1);
+  const toolStep = toolSteps[0];
+  assert.equal(toolStep?.id, completedToolStep.id);
+  assert.equal(toolStep?.toolCallId, completedToolStep.toolCallId);
   assert.equal(toolStep?.input, pythonCommand(subagentPythonCode));
   assert.equal(toolStep?.status, "completed");
   assert.ok((toolStep?.content.length ?? 0) > 400);
