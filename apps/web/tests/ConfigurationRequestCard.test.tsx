@@ -598,3 +598,47 @@ test("CFG-R04 a repair target changed by intermediate preview clears the old key
   assert.equal(button(renderer!, "Confirm this change").props.disabled, true);
   await act(async () => renderer!.unmount());
 });
+
+test("CFG-R02 local and private HTTP gateways disclose plaintext risk and collect credentials only after exact user consent", async () => {
+  for (const locale of ["en", "zh"] as const) for (const destination of [
+    { baseUrl: "http://127.0.0.1:4550/v1", host: "127.0.0.1:4550", classification: "loopback" as const },
+    { baseUrl: "http://192.168.20.30:4550/v1", host: "192.168.20.30:4550", classification: "private_network" as const },
+  ]) {
+    const endpointTarget = JSON.stringify(["openai-chat-completions", "openai", destination.baseUrl + "/chat/completions"]);
+    let latest = request({ capabilityId: "model.connect", fields: [
+      { id: "baseUrl", kind: "url", label: "API URL", required: true, value: destination.baseUrl },
+      { id: "apiToken", kind: "credential", label: "API key", required: true, status: "missing" },
+    ], endpointAuthorization: { endpointTarget, host: destination.host, classification: destination.classification, status: "required", revision: 2 } });
+    let renderer: ReactTestRenderer;
+    const consents: unknown[] = [];
+    let uploads = 0, previews = 0, decisions = 0;
+    const api = actions({
+      consent: async input => { consents.push(input); return { ...latest, stateVersion: latest.stateVersion + 1,
+        endpointAuthorization: { ...latest.endpointAuthorization!, status: "confirmed" } }; },
+      credential: async () => { uploads++; assert.fail("Consent and local typing must not upload a credential"); },
+      preview: async () => { previews++; assert.fail("Consent and local typing must not start a preview or probe"); },
+      decide: async () => { decisions++; assert.fail("Consent is not approval to apply the configuration"); },
+    });
+    const draw = () => createElement(LocaleProvider, { initialLocale: locale }, createElement(ConfigurationRequestCard, {
+      request: latest, actions: api, onUpdate: (next: ConfigurationRequestView) => { latest = next; renderer.update(draw()); },
+    }));
+    await act(async () => { renderer = create(draw()); });
+    const riskText = JSON.stringify(renderer!.toJSON());
+    assert.ok(riskText.includes(destination.host), "The exact destination is visible alongside the risk disclosure");
+    assert.match(riskText, locale === "zh" ? /不等于可信/ : /does not mean trusted/);
+    assert.match(riskText, locale === "zh" ? /HTTP 不加密/ : /HTTP is not encrypted/);
+    assert.match(riskText, locale === "zh" ? /明文/ : /plaintext/);
+    assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 0, "Private address alone never authorizes key entry");
+    assert.equal(button(renderer!, locale === "zh" ? "确认此项变更" : "Confirm this change").props.disabled, true);
+    assert.deepEqual(consents, []);
+    await act(async () => button(renderer!, locale === "zh" ? "允许此精确端点" : "Allow this exact endpoint").props.onClick());
+    assert.deepEqual(consents, [{ revision: 2, endpointTarget }], "Dedicated user consent binds the displayed exact destination and revision");
+    assert.equal(latest.revision, 2, "Consent does not replace the configuration preview");
+    assert.equal(renderer!.root.findAllByProps({ type: "password" }).length, 1, "An explicitly approved local gateway retains compatibility");
+    assert.match(JSON.stringify(renderer!.toJSON()), locale === "zh" ? /明文/ : /plaintext/, "The risk stays visible after consent");
+    await act(async () => renderer!.root.findByProps({ name: "apiToken" }).props.onChange({ target: { value: "memory-only-gateway-key" } }));
+    assert.equal(button(renderer!, locale === "zh" ? "确认此项变更" : "Confirm this change").props.disabled, true, "Key input still requires a separate reviewed preview");
+    assert.deepEqual([uploads, previews, decisions], [0, 0, 0], "The endpoint consent action cannot send a probe, upload a key, or apply settings");
+    await act(async () => renderer!.unmount());
+  }
+});
