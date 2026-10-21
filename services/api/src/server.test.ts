@@ -6461,6 +6461,84 @@ test("deleting a session/project mirrors the cleanup to the memory-graph sidecar
   assert.deepEqual((projectCall.session_ids as string[]).toSorted(), expectedProjectSessionIds);
 });
 
+test("CFG-R14 manual HTTP requires current destination consent and preserves old-client errors", async (context) => {
+  const tempRoot = resolve(process.cwd(), ".tmp", `manual-http-${Date.now()}-${process.pid}`);
+  await mkdir(tempRoot, { recursive: true });
+  context.after(() => removeTestRoot(tempRoot));
+  let dispatched = 0;
+  let tunnels = 0;
+  let duringProbe: (() => Promise<void>) | undefined;
+  // An owned loopback proxy terminates this reserved fake public hostname.
+  // No DNS lookup or connection to any external destination can occur.
+  const target = createHttpServer(async (request, response) => {
+    dispatched++;
+    assert.equal(request.url, "/v1/chat/completions");
+    assert.equal(request.headers.authorization, "Bearer synthetic-manual-test-key");
+    for await (const _chunk of request) { /* drain synthetic input */ }
+    await duringProbe?.();
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ choices: [{ message: { content: "OK" } }] }));
+  });
+  const sockets = new Set<import("node:stream").Duplex>();
+  const proxy = createHttpServer((request, response) => {
+    assert.equal(request.url, "http://manual-gateway.invalid:8080/v1/chat/completions");
+    request.url = "/v1/chat/completions";
+    target.emit("request", request, response);
+  });
+  proxy.on("connect", (request, socket, head) => {
+    tunnels++;
+    assert.equal(request.url, "manual-gateway.invalid:8080");
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    if (head.length) socket.unshift(head);
+    target.emit("connection", socket);
+    socket.resume();
+  });
+  await new Promise<void>(done => proxy.listen(0, "127.0.0.1", done));
+  context.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise<void>(done => proxy.close(() => done())); });
+  const { origin } = await startTestApi(context, tempRoot);
+  const proxyRecord = await jsonRequest<ProxySettingsDetails["servers"][number]>(`${origin}/api/proxy/servers`, {
+    method: "POST", headers: authorization, body: JSON.stringify({ kind: "custom_url", name: "Owned manual fixture", url: `http://127.0.0.1:${(proxy.address() as AddressInfo).port}` }),
+  });
+  assert.equal(proxyRecord.response.status, 201);
+  const created = await jsonRequest<ModelProfile>(`${origin}/api/models`, {
+    method: "POST", headers: authorization,
+    body: JSON.stringify({ name: "Manual fixture", model: "fixture", baseUrl: "http://manual-gateway.invalid:8080/v1", apiToken: "synthetic-manual-test-key", proxyPolicy: `proxy:${proxyRecord.body.id}` }),
+  });
+  assert.equal(created.response.status, 201);
+  const endpoint = `${origin}/api/models/${created.body.id}/test`;
+  const post = (body: unknown) => jsonRequest<ApiError>(endpoint, { method: "POST", headers: authorization, body: JSON.stringify(body) });
+  const legacy = await jsonRequest<ApiError>(endpoint, { method: "POST", headers: authorization });
+  assert.equal(legacy.response.status, 400);
+  assert.match(JSON.stringify(legacy.body), /Refresh the page/);
+  assert.equal((await post({ consent: true })).response.status, 400);
+  const plaintextHttpConsent = { baseUrl: created.body.baseUrl, profileUpdatedAt: created.body.updatedAt };
+  assert.equal((await post({ consent: true, plaintextHttpConsent: { ...plaintextHttpConsent, baseUrl: "http://other.invalid" } })).response.status, 409);
+  assert.equal((await post({ consent: true, plaintextHttpConsent: { ...plaintextHttpConsent, profileUpdatedAt: "old" } })).response.status, 409);
+  assert.equal((await post({ consent: false, plaintextHttpConsent })).response.status, 400);
+  assert.equal(dispatched, 0, "No wire request before both valid user acknowledgements");
+  assert.equal(tunnels, 0);
+  const tested = await post({ consent: true, plaintextHttpConsent });
+  assert.equal(tested.response.status, 200);
+  assert.equal((tested.body as unknown as ModelConnectivityTestResult).ok, true, JSON.stringify(tested.body));
+  assert.equal(dispatched, 1);
+  assert.doesNotMatch(JSON.stringify(tested.body), /synthetic-manual-test-key/);
+  const changedInput = { name: "Revised fixture", baseUrl: created.body.baseUrl, model: created.body.model, apiProtocol: created.body.apiProtocol, apiVariant: created.body.apiVariant };
+  const updated = await jsonRequest<ModelProfile>(`${origin}/api/models/${created.body.id}`, { method: "PUT", headers: authorization, body: JSON.stringify(changedInput) });
+  assert.equal(updated.response.status, 200);
+  assert.notEqual(updated.body.updatedAt, created.body.updatedAt);
+  assert.equal((await post({ consent: true, plaintextHttpConsent })).response.status, 409);
+  assert.equal(dispatched, 1, "Old consent must not reuse a cached success after editing");
+  duringProbe = async () => {
+    const changed = await jsonRequest(`${origin}/api/models/${created.body.id}`, { method: "PUT", headers: authorization, body: JSON.stringify({ ...changedInput, name: "Changed during matrix" }) });
+    assert.equal(changed.response.status, 200);
+  };
+  const matrix = await post({ consent: true, compatibility: true, plaintextHttpConsent: { baseUrl: updated.body.baseUrl, profileUpdatedAt: updated.body.updatedAt } });
+  assert.equal(matrix.response.status, 200);
+  assert.equal(dispatched, 2, "A profile edit during basic check blocks every later matrix dispatch");
+});
+
 test("model connectivity endpoint uses the encrypted saved credential", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `model-connectivity-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });

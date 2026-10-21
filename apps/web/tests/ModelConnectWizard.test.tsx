@@ -122,6 +122,51 @@ async function acceptProbeCost(renderer: ReactTestRenderer): Promise<void> {
   await act(async () => { label.findByType("input").props.onChange({ target: { checked: true } }); });
 }
 
+test("CFG-R14 manual HTTP gates preview and save, preserves a retry, and invalidates a changed target", async () => {
+  let listings = 0;
+  let connects = 0;
+  const probes: unknown[][] = [];
+  const deleted: string[] = [];
+  const client = createMockClient({
+    previewProviderModels: async () => { listings++; return { models: [{ id: "fixture" }], source: "remote", fetchedAt: "now" }; },
+    createProvider: async (body: any) => { connects++; return { ...body, id: `provider-${connects}` } as ModelProvider; },
+    addProviderModel: async (providerId, body) => ({ id: `model-${connects}`, providerId, name: "Fixture", model: body.model, baseUrl: "http://gateway.invalid/v1", apiProtocol: "openai-chat-completions", apiVariant: "openai", updatedAt: `revision-${connects}` } as ModelProfile),
+    testModel: async (...args) => { probes.push(args); return connects === 1 ? authFailResult : successResult; },
+    deleteModel: async id => { deleted.push(id); return { deleted: id }; },
+    deleteProvider: async id => { deleted.push(id); return { deleted: id }; },
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(LocaleProvider, { initialLocale: "zh-CN" }, createElement(ModelConnectWizard, { client, presets: [] }))); });
+  await act(async () => {
+    renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://gateway.invalid/v1" } });
+    renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "synthetic-key" } });
+  });
+  const riskInput = () => renderer!.root.findByProps({ className: "manual-http-consent" }).findByType("input");
+  const submit = () => renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
+  const preview = () => renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" });
+  assert.equal(riskInput().props.checked, false);
+  assert.equal(preview().props.disabled, true);
+  await act(async () => { preview().props.onClick(); });
+  await acceptProbeCost(renderer!);
+  await act(async () => { submit().props.onClick(); });
+  assert.equal(listings, 0);
+  assert.equal(connects, 0);
+  await act(async () => { riskInput().props.onChange({ target: { checked: true } }); });
+  await act(async () => { preview().props.onClick(); });
+  assert.equal(listings, 1);
+  await act(async () => { submit().props.onClick(); });
+  assert.deepEqual(deleted, ["model-1", "provider-1"]);
+  assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "synthetic-key");
+  await act(async () => { submit().props.onClick(); });
+  assert.equal(probes.length, 2);
+  assert.deepEqual(probes[1], ["model-2", false, { baseUrl: "http://gateway.invalid/v1", profileUpdatedAt: "revision-2" }]);
+  await act(async () => { renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://another.invalid/v1" } }); });
+  assert.equal(riskInput().props.checked, false);
+  assert.equal(preview().props.disabled, true);
+  assert.equal(submit().props.disabled, true);
+  await act(async () => renderer!.unmount());
+});
+
 test("renders preset provider selection, official registration link, and billing notice in zh-CN and en", async () => {
   let zhRenderer: ReactTestRenderer;
   await act(async () => {
@@ -592,6 +637,7 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
     addProviderModel: async (providerId: string, body: any) => {
       addedModelInput = { providerId, ...body };
       return {
+        baseUrl: "http://localhost:8000/v1", apiProtocol: "openai-chat-completions", apiVariant: "openai", updatedAt: "fixture-v1",
         contextWindow: 32000,
         id: "profile-custom-model",
         model: body.model,
@@ -670,6 +716,7 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
   });
 
   // Submit
+  await act(async () => { renderer!.root.findByProps({ className: "manual-http-consent" }).findByType("input").props.onChange({ target: { checked: true } }); });
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
@@ -692,6 +739,7 @@ test("custom provider without model id: registers every listed model", async () 
     addProviderModel: async (providerId: string, body: any) => {
       registeredModels.push(body.model);
       return {
+        baseUrl: "http://localhost:8000/v1", apiProtocol: "openai-chat-completions", apiVariant: "openai", updatedAt: "fixture-v1",
         contextWindow: 32000,
         id: `profile-${body.model}`,
         model: body.model,
@@ -734,6 +782,7 @@ test("custom provider without model id: registers every listed model", async () 
   });
 
   // Model identifier intentionally left empty: the listing decides.
+  await act(async () => { renderer!.root.findByProps({ className: "manual-http-consent" }).findByType("input").props.onChange({ target: { checked: true } }); });
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {

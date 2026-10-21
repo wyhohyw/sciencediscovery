@@ -14,7 +14,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { ModelConnectivityTestCategory, ModelConnectivityTestResult } from "@sciencediscovery/schema";
+import type { ManualPlaintextHttpConsent, ModelConnectivityTestCategory, ModelConnectivityTestResult } from "@sciencediscovery/schema";
+import { isPlaintextModelUrl, ManualHttpConsent } from "./ManualHttpConsent.js";
 
 import { AlertCircleIcon, CheckIcon, SpinnerIcon } from "./icons.js";
 import { useLocale, type MessageKey } from "./i18n/index.js";
@@ -32,7 +33,8 @@ export interface ModelConnectivityButtonProps {
   modelId: string;
   modelName: string;
   profileVersion: string;
-  testModel: (modelId: string, compatibility?: boolean) => Promise<ModelConnectivityTestResult>;
+  baseUrl?: string;
+  testModel: (modelId: string, compatibility?: boolean, plaintextHttpConsent?: ManualPlaintextHttpConsent) => Promise<ModelConnectivityTestResult>;
 }
 
 export function failureCopy(category: ModelConnectivityTestCategory, t: Translate): { label: string; title: string } {
@@ -63,6 +65,7 @@ export function ModelConnectivityButton({
   modelId,
   modelName,
   profileVersion,
+  baseUrl = "",
   testModel,
 }: ModelConnectivityButtonProps) {
   const { t } = useLocale();
@@ -70,19 +73,24 @@ export function ModelConnectivityButton({
   const requestRevision = useRef(0);
   const [consent, setConsent] = useState(false);
   const [scope, setScope] = useState("selected");
+  const [httpApproval, setHttpApproval] = useState<string>();
+  const httpIdentity = JSON.stringify([modelId, profileVersion, baseUrl, scope]);
+  const needsHttpConsent = isPlaintextModelUrl(baseUrl);
+  const httpConfirmed = !needsHttpConsent || httpApproval === httpIdentity;
+  useEffect(() => setHttpApproval(undefined), [httpIdentity]);
 
   useEffect(() => {
     requestRevision.current += 1;
     setState({ status: "idle" });
     setConsent(false);
-  }, [modelId, profileVersion]);
+  }, [modelId, profileVersion, baseUrl]);
 
   async function runTest(): Promise<void> {
-    if (!consent) return;
+    if (!consent || !httpConfirmed || disabled || state.status === "testing") return;
     const revision = ++requestRevision.current;
     setState({ status: "testing" });
     try {
-      const result = await testModel(modelId, scope === "matrix");
+      const result = await testModel(modelId, scope === "matrix", needsHttpConsent ? { baseUrl, profileUpdatedAt: profileVersion } : undefined);
       if (requestRevision.current === revision) setState({ result, status: "result" });
     } catch (reason) {
       if (requestRevision.current !== revision) return;
@@ -125,6 +133,7 @@ export function ModelConnectivityButton({
 
   return (
     <div className="model-compatibility-check">
+    {needsHttpConsent ? <ManualHttpConsent baseUrl={baseUrl} checked={httpConfirmed} disabled={disabled || state.status === "testing"} onChange={checked => setHttpApproval(checked ? httpIdentity : undefined)} /> : null}
     <label>{t("settings.modelTest.scope")} <select value={scope} disabled={state.status === "testing"} onChange={e => { requestRevision.current += 1; setScope(e.target.value); setConsent(false); setState({ status: "idle" }); }}>
       <option value="selected">{t("settings.modelTest.selectedCheck")}</option><option value="matrix">{t("settings.modelTest.fullCheck")}</option>
     </select></label>
@@ -133,7 +142,7 @@ export function ModelConnectivityButton({
       aria-busy={state.status === "testing"}
       aria-label={title}
       className={className}
-      disabled={disabled || !consent || state.status === "testing"}
+      disabled={disabled || !consent || !httpConfirmed || state.status === "testing"}
       onClick={() => void runTest()}
       title={title}
       type="button"

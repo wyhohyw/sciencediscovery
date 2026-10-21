@@ -117,6 +117,12 @@ export interface ModelCompatibilityOutcome {
   providerStatus?: number;
 }
 
+/** Per-attempt, user-entered settings acknowledgement; never an Agent proposal field. */
+export interface ManualPlaintextHttpConsent {
+  baseUrl: string;
+  profileUpdatedAt: string;
+}
+
 export interface ModelConnectivityTestResult {
   inconclusiveReason?: ModelCompatibilityOutcome["inconclusiveReason"];
   category: ModelConnectivityTestCategory;

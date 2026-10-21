@@ -37,6 +37,7 @@ import type {
   ScientificEnvironmentSetup,
   InstallEnvironmentRequest,
   ModelConnectivityTestResult,
+  ManualPlaintextHttpConsent,
   MemoryGraphSettingsDetails,
   ModelCatalogDetails,
   IdeaTreeSettingsDetails,
@@ -458,7 +459,7 @@ export class SettingsApiClient extends ArtifactsApiClient {
     return this.request(`/api/models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
   }
 
-  testModel(modelId: string, compatibility = false): Promise<ModelConnectivityTestResult> {
-    return this.request(`/api/models/${encodeURIComponent(modelId)}/test`, { method: "POST", body: JSON.stringify({ consent: true, compatibility }) });
+  testModel(modelId: string, compatibility = false, plaintextHttpConsent?: ManualPlaintextHttpConsent): Promise<ModelConnectivityTestResult> {
+    return this.request(`/api/models/${encodeURIComponent(modelId)}/test`, { method: "POST", body: JSON.stringify({ consent: true, compatibility, plaintextHttpConsent }) });
   }
 }

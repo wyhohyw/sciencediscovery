@@ -1,8 +1,9 @@
-# 对话内按需配置 · 合入前修订与实测 v9
+# 对话内按需配置 · 合入前修订与实测 v10
 
 - 日期：2026-10-21；分支：`codex/conversational-settings-review-fixes`。
-- 产品依据：[设计 v20](conversational-settings.v20.md)第 17 节；工程合同：[开发 v10](conversational-settings-development.v10.md)第 21 节，CFG-R01～R13。
+- 产品依据：[设计 v21](conversational-settings.v21.md)第 17 节；工程合同：[开发 v11](conversational-settings-development.v11.md)第 21 节，CFG-R01～R13。
 - 上游整合基线：`7ee6c1d0`；本轮代码验收候选 E：`05efd5476e800fb66c6dcc92b80be5aac7bd0849`。原审阅基线 `f58c728b` 留作历史追溯，不代替当前验证。
+- **CFG-R14 手动 HTTP 修复尚待本轮验证**；以下 E 证据属于修复前基线，不代表新候选通过。
 - E 的公共 HTTP 十步旅程、下述真实 Flash/浏览器场景及原失败项专项复跑已通过；**标准根回归结论以第 3 节的最终命令退出状态和完整计数为准，不能由这些专项推定全仓通过**。
 
 ## 1. 本轮修订范围

@@ -40,6 +40,7 @@ import type { SettingsApiClient } from "./api/settings.js";
 import { replaceDefaultModelOverride } from "./default-model-override.js";
 import { AlertCircleIcon, CheckIcon, SparkleIcon, SpinnerIcon } from "./icons.js";
 import { failureCopy } from "./ModelConnectivityButton.js";
+import { isPlaintextModelUrl, ManualHttpConsent, normalizedModelBaseUrl } from "./ManualHttpConsent.js";
 import {
   EMPTY_MANUAL_MODEL,
   ManualModelFields,
@@ -133,7 +134,8 @@ export function ModelConnectWizard({
 
   const [testing, setTesting] = useState(false);
   const [probeConsent, setProbeConsent] = useState(false);
-  useEffect(() => setProbeConsent(false), [apiKey, customBaseUrl, customModelId, apiProtocol, proxyPolicy, baseUrlOverride, selectedPresetId]);
+  useEffect(() => setProbeConsent(false), [apiKey, customBaseUrl, customModelId, apiProtocol, apiVariant, proxyPolicy, baseUrlOverride, selectedPresetId, isCustom]);
+  const [httpApproval, setHttpApproval] = useState<string>();
   const [validationError, setValidationError] = useState<string>();
   const [testResult, setTestResult] = useState<ModelConnectivityTestResult>();
   const [successInfo, setSuccessInfo] = useState<{ count: number; defaultChanged: boolean; latencyMs: number; modelName: string; inconclusive?: boolean }>();
@@ -146,6 +148,11 @@ export function ModelConnectWizard({
   const explicitModelId = isCustom ? customModelId.trim() : "";
   const tokenOptional = selectedPreset?.tokenOptional === true;
   const busy = testing || previewLoading;
+  const endpoint = providerInput();
+  const httpIdentity = JSON.stringify([endpoint.baseUrl, apiProtocol, apiVariant, proxyPolicy]);
+  const needsHttpConsent = isPlaintextModelUrl(endpoint.baseUrl);
+  const httpConfirmed = !needsHttpConsent || httpApproval === httpIdentity;
+  useEffect(() => setHttpApproval(undefined), [httpIdentity]);
 
   const previewSelectedCount = preview ? preview.models.filter((entry) => selectedIds.has(entry.id)).length : 0;
   // How many models Save & connect will register right now; undefined means
@@ -215,6 +222,7 @@ export function ModelConnectWizard({
   function inputProblem(): string | undefined {
     if (isCustom && !customBaseUrl.trim()) return t("wizard.error.missingBaseUrl");
     if (!apiKey.trim() && !tokenOptional) return t("wizard.error.missingKey");
+    if (!httpConfirmed) return t("settings.modelTest.httpRequired");
     return undefined;
   }
 
@@ -222,7 +230,7 @@ export function ModelConnectWizard({
   // any advanced override on top, or the custom fields. Always a fresh
   // provider — the same vendor may be added several times with its own
   // name and key; existing rows are never touched.
-  function providerInput(): CreateModelProviderRequest {
+  function providerInput(): CreateModelProviderRequest & { baseUrl: string } {
     const apiToken = apiKey.trim() || undefined;
     if (selectedPreset) {
       return {
@@ -344,7 +352,7 @@ export function ModelConnectWizard({
   }
 
   async function handleTestAndEnable(): Promise<void> {
-    if (!probeConsent) return;
+    if (!probeConsent || !httpConfirmed || busy) return;
     setValidationError(undefined);
     setTestResult(undefined);
     setSuccessInfo(undefined);
@@ -412,7 +420,14 @@ export function ModelConnectWizard({
       });
       createdModelIds.push(firstProfile.id);
 
-      const testOutcome = await client.testModel(firstProfile.id);
+      // A saved profile must still match the address/protocol the user reviewed.
+      // Do not turn a server-side change into a fresh acknowledgement silently.
+      if (needsHttpConsent && (normalizedModelBaseUrl(firstProfile.baseUrl) !== normalizedModelBaseUrl(endpoint.baseUrl)
+        || firstProfile.apiProtocol !== apiProtocol || firstProfile.apiVariant !== apiVariant)) {
+        throw new Error(t("settings.modelTest.httpChanged"));
+      }
+      const testOutcome = await client.testModel(firstProfile.id, false, needsHttpConsent
+        ? { baseUrl: endpoint.baseUrl, profileUpdatedAt: firstProfile.updatedAt } : undefined);
 
       const budgetLimited = testOutcome.category === "invalid_response" && testOutcome.providerStatus === 200 && testOutcome.inconclusiveReason === "output_limit";
       if (!testOutcome.ok && !budgetLimited) {
@@ -851,13 +866,14 @@ export function ModelConnectWizard({
           </div>
         ) : null}
 
+        {needsHttpConsent ? <ManualHttpConsent baseUrl={endpoint.baseUrl} checked={httpConfirmed} disabled={busy} onChange={checked => setHttpApproval(checked ? httpIdentity : undefined)} /> : null}
         <div className="wizard-footer-row" ref={footerRef}>
           {/* Fetch the provider's model list right here next to Save & connect —
               no trip through 高级配置 needed; the ticked plan appears above. */}
           <div className="wizard-fetch-side">
             <button
               className="secondary-button compact-button wizard-fetch-models"
-              disabled={busy}
+              disabled={busy || !httpConfirmed}
               onClick={() => void fetchPreview()}
               type="button"
             >
@@ -875,7 +891,7 @@ export function ModelConnectWizard({
             <button
               aria-busy={testing}
               className="primary-button wizard-submit-button"
-              disabled={busy || !probeConsent}
+              disabled={busy || !probeConsent || !httpConfirmed}
               onClick={() => void handleTestAndEnable()}
               type="button"
             >

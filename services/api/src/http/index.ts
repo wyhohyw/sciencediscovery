@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { randomUUID } from "node:crypto";
+import { hasManualHttpConsent, requiresManualHttpConsent } from "./manual-model-consent.js";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
@@ -2021,12 +2022,24 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       const modelConnectivityMatch = url.pathname.match(/^\/api\/models\/([^/]+)\/test$/);
       if (modelConnectivityMatch && request.method === "POST") {
         const modelId = decodeURIComponent(modelConnectivityMatch[1]!);
-        const profile = store.getModel(modelId);
-        if (!profile) return sendError(response, 404, "Model not found");
-        const consent = await readJson<{ consent?: boolean; compatibility?: boolean }>(request);
+        const savedProfile = store.getModel(modelId);
+        if (!savedProfile) return sendError(response, 404, "Model not found");
+        // Store edits mutate the saved object. Keep the approved revision frozen
+        // for every dispatch, including later compatibility-matrix requests.
+        const profile = { ...savedProfile };
+        let consent: { consent?: boolean; compatibility?: boolean; plaintextHttpConsent?: unknown };
+        try {
+          consent = await readJson<typeof consent>(request);
+        } catch (error) {
+          if (error instanceof Error && error.message === "Request body must be valid JSON") return sendError(response, 400, "Model checks require JSON consent. Refresh the page and confirm the model check before retrying.");
+          throw error;
+        }
+        if (!consent || typeof consent !== "object" || Array.isArray(consent)) return sendError(response, 400, "Model checks require JSON consent");
         if (consent.consent !== true) return sendError(response, 400, "Explicit consent is required: model checks may consume paid tokens");
         const frozenDestination = modelDestination(profile).endpointTarget;
-        if (modelDestination(profile).classification === "public_http" && store.getModelApiToken(modelId)) return sendError(response, 400, "Remote plaintext HTTP cannot receive an API key");
+        const httpConfirmed = hasManualHttpConsent(profile, consent.plaintextHttpConsent);
+        if (consent.plaintextHttpConsent !== undefined && !httpConfirmed) return sendError(response, 409, "The model destination or revision changed. Review the HTTP address and confirm again.");
+        if (requiresManualHttpConsent(profile, !!store.getModelApiToken(modelId)) && !httpConfirmed) return sendError(response, 400, "Confirm the HTTP destination and plaintext API key risk in manual settings before testing this model");
         const tested = await modelConnectivityTests.run(`${modelId}:${profile.updatedAt}:${consent.compatibility === true}`, () => testModelConnectivity({
           compatibility: consent.compatibility === true,
           allowMissingToken: store.modelAllowsMissingToken(profile),
@@ -2035,8 +2048,8 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           profile,
           beforeDispatch: dispatchProfile => {
             const current = store.getModel(modelId);
-            if (!current || modelDestination(current).endpointTarget !== frozenDestination) throw new Error("MODEL_DESTINATION_CHANGED");
-            if (modelDestination(dispatchProfile).classification === "public_http" && store.getModelApiToken(modelId)) throw new Error("ENDPOINT_CREDENTIAL_INSECURE");
+            if (!current || current.updatedAt !== profile.updatedAt || modelDestination(current).endpointTarget !== frozenDestination) throw new Error("MODEL_DESTINATION_CHANGED");
+            if (requiresManualHttpConsent(dispatchProfile, !!store.getModelApiToken(modelId)) && !httpConfirmed) throw new Error("ENDPOINT_CREDENTIAL_INSECURE");
           },
           resolveProxy: () => resolveProxyForUrl(store.resolveProxy(profile.proxyPolicy), profile.baseUrl),
         }));
