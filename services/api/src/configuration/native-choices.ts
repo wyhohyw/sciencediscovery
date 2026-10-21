@@ -33,6 +33,13 @@ function context(store: SessionStore, sessionId: string, runId: string): NativeR
   return row ? JSON.parse(row.record_json) as NativeRunContext : undefined;
 }
 
+/** Evidence from the actual factory, distinct from configured or approved IDs. */
+export function nativeRuntimeConnectorIds(store: SessionStore, sessionId: string, runId: string): string[] | undefined {
+  const saved = context(store, sessionId, runId);
+  return saved && saved.stopGeneration === store.notifications.generation(sessionId) && store.notifications.canWake(sessionId)
+    ? [...saved.enabledConnectorIds] : undefined;
+}
+
 /** Persist evidence from the actual executable Native factory, never from Agent-supplied tool names. */
 export function recordNativeRunChoiceContext(input: { store: SessionStore; sessionId: string; runId: string;
   enabledConnectorIds: readonly string[]; webSearchAvailable: boolean; toolCatalogFingerprint: string; plugins?: RuntimeSettingsOverrides["plugins"] }): void {

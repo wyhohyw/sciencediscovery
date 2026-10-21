@@ -18,8 +18,10 @@ import { canonical, ConfigurationError, integer, object, string } from "./valida
 import { applyNativeRunOverlay, nativeConnectorChoiceOptions, validateNativeChoice, nativeExecutionDependencies, nativeExecutionDependenciesCurrent } from "./native-choices.js";
 import { configurationNeedKey } from "./need-key.js";
 import { ModelDestinationAuthorizer } from "./model-destination.js";
+import type { ConfigurationConnectorRegistration } from "./connector-directory.js";
 
 export interface ConfigurationFrameworkOptions {
+  connectors?(sessionId: string): readonly ConfigurationConnectorRegistration[];
   connector(sessionId: string, connectorId: string): { name: string; ready: boolean } | undefined;
   nativeExecutor: boolean;
   activate?(record: ConfigurationRecord, receipt: ConfigurationApplyReceipt): Promise<ConfigurationActivationEvidence>;
@@ -184,16 +186,18 @@ export class ConversationalConfigurationFramework {
   async provideCredential(sessionId: string, id: string, input: ConfigurationCredentialInput, key?: string) {
     object(input, ["expectedRevision", "fieldId", "secret"], "credential"); integer(input.expectedRevision, "expectedRevision");
     string(input.fieldId, "fieldId", 100);
+    if (typeof input.secret !== "string" || !input.secret.trim() || input.secret.length > 16_384)
+      throw new ConfigurationError("INVALID_CONFIGURATION_CREDENTIAL", "Enter a non-empty credential in its registered secure field", 400, input.fieldId);
     await this.reconcileLifecycle(sessionId, id);
     return this.store.runConfigurationTransaction(sessionId, () => {
       const record = this.service.getRecord(sessionId, id);
-      this.destinations.assert(record, true);
       if (record.view.expiresAt && Date.parse(record.view.expiresAt) <= Date.now())
         throw new ConfigurationError("CONFIGURATION_EXPIRED", "This configuration proposal expired", 410);
       if (record.view.revision !== input.expectedRevision || !["collecting_input", "awaiting_confirmation", "needs_fix", "failed"].includes(record.view.state))
         throw new ConfigurationError("STALE_CONFIGURATION_PREVIEW", "Refresh the configuration before supplying a credential", 409);
       if (!record.plan.fields.some(field => field.id === input.fieldId && field.kind === "credential"))
         throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "This field is not a registered credential", 400);
+      this.destinations.assert(record, true);
       if (record.stopGeneration !== this.store.notifications.generation(sessionId)) throw new ConfigurationError("CONTINUATION_STOPPED", "The task was stopped", 409);
       return this.credentials.provide({ sessionId, requestId: id, revision: input.expectedRevision,
         fieldId: input.fieldId, target: String(record.plan.data?.credentialTarget ?? record.target) }, input.secret, key);

@@ -20,6 +20,19 @@ async function fixture(context: { after(callback: () => Promise<void>): void }) 
   // background worker atomically replaces it (Windows may deny that rename).
   const settled = new Map<string, ReviewerAuditTask>(), waiters = new Map<string, (task: ReviewerAuditTask) => void>();
   const updateTask = store.updateReviewerAuditTask.bind(store);
+  const checkpointSettled = new Set<string>(), checkpointWaiters = new Map<string, () => void>();
+  const updateCheckpoint = store.updateReviewerCheckpointMessage.bind(store);
+  store.updateReviewerCheckpointMessage = async (sessionId, messageId, update) => {
+    const message = await updateCheckpoint(sessionId, messageId, update);
+    if (update.status === "failed" || update.status === "completed") {
+      checkpointSettled.add(messageId); checkpointWaiters.get(messageId)?.(); checkpointWaiters.delete(messageId);
+    }
+    return message;
+  };
+  const waitCheckpoint = async (id: string) => checkpointSettled.has(id) ? undefined : new Promise<void>((done, reject) => {
+    const timeout = setTimeout(() => { checkpointWaiters.delete(id); reject(new Error("Reviewer checkpoint did not settle")); }, 5_000);
+    checkpointWaiters.set(id, () => { clearTimeout(timeout); done(); });
+  });
   store.updateReviewerAuditTask = async (sessionId, taskId, update) => {
     const task = await updateTask(sessionId, taskId, update);
     if (["completed", "superseded", "failed", "cancelled"].includes(task.status)) {
@@ -52,7 +65,7 @@ async function fixture(context: { after(callback: () => Promise<void>): void }) 
   const enqueue = async (worker: ReviewerAuditCoordinator, artifact: Awaited<ReturnType<typeof report>>) => worker.enqueueArtifactVersion({
     sessionId: session.id, artifactVersionId: artifact.version.id, contentHash: artifact.version.content.hash, mediaType: artifact.version.mediaType,
   });
-  return { store, session, run, report, coordinator, enqueue, executions, waitTerminal };
+  return { store, session, run, report, coordinator, enqueue, executions, waitTerminal, waitCheckpoint };
 }
 
 test("CFG-T33 reviewer source follows nested Subagent parent IDs to its exact frozen root, never the newest run", async context => {
@@ -108,7 +121,13 @@ test("CFG-T33 a live global Reviewer off switch suppresses a previously queued f
   const run = await f.run({ automaticReviewEnabled: true, level: "quick" });
   const task = await f.enqueue(worker, await f.report("global-switch", run.id)); assert.ok(task);
   await f.store.updateReviewerSpecialistSettings({ enabled: false });
-  assert.equal((await f.waitTerminal(task.id)).status, "superseded");
+  const settled = await f.waitTerminal(task.id);
+  assert.equal(settled.status, "failed");
+  assert.equal(settled.errorSummary, "Automatic review skipped: Reviewer Specialist is off in System configuration → Specialists.");
+  await f.waitCheckpoint(task.checkpointMessageId);
+  const checkpoint = (await f.store.readMessages(f.session.id)).find(message => message.id === task.checkpointMessageId);
+  assert.equal(checkpoint?.reviewerCheckpoint?.status, "failed");
+  assert.equal(checkpoint?.reviewerCheckpoint?.error, settled.errorSummary);
   assert.equal(f.executions.length, 0);
 });
 
@@ -121,6 +140,11 @@ test("CFG-T33 a global-off decision during asynchronous Deep admission is checke
   await atAdmission; await f.store.updateReviewerSpecialistSettings({ enabled: false }); release();
   const settled = await f.waitTerminal(task.id);
   assert.equal(settled.status, "superseded"); assert.equal(f.executions.length, 0);
+  assert.equal(settled.errorSummary, "Reviewer admission was disabled before execution");
+  await f.waitCheckpoint(task.checkpointMessageId);
+  const checkpoint = (await f.store.readMessages(f.session.id)).find(message => message.id === task.checkpointMessageId);
+  assert.equal(checkpoint?.reviewerCheckpoint?.status, "completed");
+  assert.equal(checkpoint?.content, settled.errorSummary);
 });
 
 test("CFG-T33 an automatic audit with an explicit missing source cannot silently adopt current-session settings", async context => {
@@ -130,5 +154,10 @@ test("CFG-T33 an automatic audit with an explicit missing source cannot silently
   const getRun = f.store.getSessionRun.bind(f.store);
   f.store.getSessionRun = async (sessionId, runId) => runId === run.id ? undefined : getRun(sessionId, runId);
   const settled = await f.waitTerminal(task.id);
-  assert.equal(settled.status, "superseded"); assert.equal(f.executions.length, 0);
+  assert.equal(settled.status, "failed"); assert.equal(f.executions.length, 0);
+  assert.equal(settled.errorSummary, "The source Run is no longer available");
+  await f.waitCheckpoint(task.checkpointMessageId);
+  const checkpoint = (await f.store.readMessages(f.session.id)).find(message => message.id === task.checkpointMessageId);
+  assert.equal(checkpoint?.reviewerCheckpoint?.status, "failed");
+  assert.equal(checkpoint?.reviewerCheckpoint?.error, settled.errorSummary);
 });

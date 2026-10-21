@@ -12,6 +12,7 @@ import { createConfigurationAgentTools } from "./agent-tools.js";
 import { configurationDiagnostic } from "./diagnostics.js";
 import { normalizeConfigurationFields, normalizeConfigurationValues } from "./schema-normalizer.js";
 import { ReviewerAuditCoordinator } from "../reviewer-specialist/audit-coordinator.js";
+import { recordNativeRunChoiceContext } from "./native-choices.js";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "os:windows", "arch:amd64", "arch:arm64"] });
 async function harness(context: { after(action: () => Promise<void>): void }) {
   const parent = resolve(process.cwd(), ".tmp"); const root = resolve(parent, `configuration-p1-${randomUUID()}`);
@@ -139,6 +140,39 @@ test("CFG-T29/34/35: inspection exposes sources and unsupported domains, never m
   for (const code of ["NETWORK_ERROR", "TIMEOUT", "RATE_LIMITED", "NO_RESULTS", "UNKNOWN"]) assert.deepEqual(configurationDiagnostic(code).capabilityIds, []);
   assert.deepEqual(configurationDiagnostic("CONNECTOR_DISABLED").capabilityIds, ["connector.enable"]);
   assert.deepEqual(tools.map(tool => tool.name), ["inspect_configuration", "propose_configuration"]);
+});
+
+test("CFG-R13: inspection separates registered, ready, actually mounted, saved and policy-blocked sources", async context => {
+  const h = await harness(context);
+  await h.store.replaceSessionSettings(h.session.id, { enabledConnectorIds: ["pubmed", "arxiv"], plugins: { "connector.chembl": { enabled: false } } });
+  h.framework.options.connectors = () => [
+    { id: "pubmed", name: "PubMed", ready: false, readiness: "unavailable", readinessReason: "MCP_CONNECTION_TIMEOUT", sameRunSupported: true },
+    { id: "uniprot", name: "UniProt", ready: true, readiness: "ready", sameRunSupported: true },
+    { id: "arxiv", name: "arXiv", ready: true, readiness: "ready", sameRunSupported: true },
+    { id: "chembl", name: "ChEMBL", ready: true, readiness: "ready", sameRunSupported: true },
+  ];
+  const run = await h.store.createSessionRun({ sessionId: h.session.id, prompt: "Use a registered source", settingsSnapshot: h.store.resolveRuntimeSettings(h.session.id).effective });
+  recordNativeRunChoiceContext({ store: h.store, sessionId: h.session.id, runId: run.id,
+    enabledConnectorIds: ["arxiv"], plugins: run.settingsSnapshot.plugins, webSearchAvailable: false, toolCatalogFingerprint: "actual-mounted-arxiv" });
+  const inspect = createConfigurationAgentTools({ store: h.store, sessionId: h.session.id, runId: run.id })[0]!;
+  const result = await inspect.execute("inspect", {});
+  const output = JSON.parse(result.content[0]!.text);
+  const byId = new Map<string, Record<string, unknown>>(output.installedConnectors.map((row: Record<string, unknown>) => [row.id, row]));
+  assert.deepEqual(output.current.enabledConnectorIds, ["arxiv"]);
+  assert.ok(output.current.snapshotEnabledConnectorIds.includes("pubmed"));
+  assert.equal(byId.get("pubmed")?.installed, true); assert.equal(byId.get("pubmed")?.ready, false);
+  assert.equal(byId.get("pubmed")?.runtimeEnabled, false); assert.equal(byId.get("pubmed")?.sessionEnabled, true);
+  assert.equal(byId.get("pubmed")?.readinessReason, "MCP_CONNECTION_TIMEOUT"); assert.equal(byId.get("pubmed")?.canPropose, false);
+  assert.equal(byId.get("arxiv")?.runtimeEnabled, true); assert.equal(byId.get("arxiv")?.canPropose, false);
+  assert.equal(byId.get("uniprot")?.canPropose, true); assert.equal(byId.get("uniprot")?.activationMode, "same_run");
+  assert.equal(byId.get("chembl")?.ready, true); assert.equal(byId.get("chembl")?.policyAllowed, false);
+  assert.equal(byId.get("chembl")?.unavailableReason, "CONNECTOR_POLICY_BLOCKED");
+  const registered = h.framework.options.connectors(h.session.id);
+  h.framework.options.connectors = () => registered.filter(row => row.id !== "uniprot");
+  const unavailable = JSON.parse((await inspect.execute("inspect-again", {})).content[0]!.text);
+  assert.equal(unavailable.capabilities.find((item: { id: string }) => item.id === "connector.enable").available, false);
+  assert.equal(unavailable.capabilities.find((item: { id: string }) => item.id === "connector.enable").unsupportedReason, "NO_READY_CONFIGURABLE_CONNECTOR");
+  assert.deepEqual(unavailable.sameRunCapabilities, []);
 });
 test("CFG-T29/33: Agent proposals use protocol v3 and skip redundant all-mode Skill enablement", async context => {
   const h = await harness(context); const tools = createConfigurationAgentTools({ store: h.store, sessionId: h.session.id, runId: "test-run" });

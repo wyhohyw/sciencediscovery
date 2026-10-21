@@ -23,6 +23,7 @@ import { persistNativeConfigurationWait } from "../configuration/runtime-bridge.
 import { nativeToolFingerprint, verifyNativeConfigurationToolAssembly } from "../configuration/native-activation.js";
 import { nativeApprovedRunConnectorIds, nativeConfigurationChoiceRecord, nativeRunOverlay, recordNativeChoiceCheckpoint, recordNativeRunChoiceContext } from "../configuration/native-choices.js";
 import { configurationFramework } from "../configuration/framework.js";
+import { configurationConnectorDirectory, CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS } from "../configuration/connector-directory.js";
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
@@ -782,11 +783,14 @@ async function executeAgentRun(
         sessionId,
       }, ideaTreeExecutor)
     : [];
-  const configurableConnectors = mcpRegistry.listManifests()
-    .filter((manifest) => mcpCatalog.getStatus(manifest.id).status === "ready"
-      && !settingsSnapshot.enabledConnectorIds.includes(manifest.id)
-      && filterEnabledMcpSources([manifest.id], settingsSnapshot.plugins).includes(manifest.id))
-    .map((manifest) => ({ id: manifest.id, name: mcpConnectorManifest(manifest).displayName ?? manifest.id }));
+  const savedConnectorSettings = store.getSessionSettings(sessionId).effective;
+  const configurableConnectors = configurationConnectorDirectory({
+    registrations: configurationFramework(store).options.connectors?.(sessionId) ?? [],
+    runtimeEnabledConnectorIds: settingsSnapshot.enabledConnectorIds,
+    sessionEnabledConnectorIds: savedConnectorSettings.enabledConnectorIds,
+    runtimePlugins: settingsSnapshot.plugins, sessionPlugins: savedConnectorSettings.plugins,
+    nativeExecutor: !jiuwenSwarmConfigFromEnv(), runBound: true,
+  }).filter(row => row.canPropose);
   const connectorProposalParameters = Type.Object({
     connectorId: Type.String({ minLength: 1, maxLength: 100 }),
   });
@@ -817,6 +821,7 @@ async function executeAgentRun(
     }),
   ];
   const workflowInstructions = [
+    CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS,
     ideaTreeLeadInstructions(settingsSnapshot.ideaTreeSettings),
     sessionTitleInstructions(session.title),
   ].filter(Boolean).join("\n\n");

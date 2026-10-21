@@ -284,6 +284,7 @@ import { NotificationDispatcher } from "../notification-dispatch.js";
 import { manageRunnerEnvironment, runnerWorkspaceBindings, runnerTarget } from "../runner-management.js";
 import { ModelConnectivityTestCoordinator, testModelConnectivity } from "../model-connectivity.js";
 import { modelDestination } from "../configuration/model-destination.js";
+import { configurationConnectorReadinessReason } from "../configuration/connector-directory.js";
 import { configurationFramework } from "../configuration/framework.js";
 import { handleConfigurationHttp } from "../configuration/http.js";
 import { prepareNativeConnectorActivation } from "../configuration/native-activation.js";
@@ -401,6 +402,12 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     });
     return configurationFramework(store, {
     nativeExecutor: !jiuwenSwarmConfigFromEnv(),
+    connectors: () => mcpRegistry.listManifests().map(manifest => {
+      const status = mcpCatalog.getStatus(manifest.id);
+      return { id: manifest.id, name: mcpConnectorManifest(manifest).displayName ?? manifest.id,
+        ready: status.status === "ready", readiness: status.status,
+        readinessReason: configurationConnectorReadinessReason(status), sameRunSupported: manifest.id !== "web" };
+    }),
     connector: (sessionId, connectorId) => {
       const manifest = mcpRegistry.listManifests().find(item => item.id === connectorId);
       if (!manifest && connectorId !== "web") return undefined;

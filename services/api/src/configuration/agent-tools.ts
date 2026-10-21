@@ -9,7 +9,8 @@ import { ConfigurationError, object } from "./validation.js";
 import { CONFIGURATION_SETTINGS_INVENTORY } from "./settings-catalog.js";
 import { configurationDiagnostic } from "./diagnostics.js";
 import { thinkingChoices } from "./p1-adapters.js";
-import { nativeApprovedRunConnectorIds } from "./native-choices.js";
+import { nativeApprovedRunConnectorIds, nativeRuntimeConnectorIds } from "./native-choices.js";
+import { configurationConnectorDirectory, CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS } from "./connector-directory.js";
 
 /** Main Agent only. Deliberately contains no decision, credential, file or command tool. */
 export function createConfigurationAgentTools(input: { store: SessionStore; sessionId: string; runId: string }): AgentTool[] {
@@ -26,30 +27,36 @@ export function createConfigurationAgentTools(input: { store: SessionStore; sess
       const { effective: settings, sources } = store.getSessionSettings(sessionId);
       const snapshot = store.configurationSnapshot(sessionId, "skill.select", "skill.select");
       const run = framework.options.nativeExecutor ? await store.getSessionRun(sessionId, runId) : undefined;
-      const runtimeEnabledConnectorIds = run ? nativeApprovedRunConnectorIds(store, run) : settings.enabledConnectorIds;
+      const mountedConnectorIds = run ? nativeRuntimeConnectorIds(store, sessionId, runId) : undefined;
+      const installedConnectors = configurationConnectorDirectory({ registrations: framework.options.connectors?.(sessionId) ?? [],
+        runtimeEnabledConnectorIds: mountedConnectorIds,
+        sessionEnabledConnectorIds: settings.enabledConnectorIds, runtimePlugins: run?.settingsSnapshot.plugins,
+        sessionPlugins: settings.plugins, nativeExecutor: framework.options.nativeExecutor, runBound: true });
       return { content: [{ type: "text", text: JSON.stringify({ sessionId: session.id,
         capabilities: framework.service.registry.describe().map(capability => {
           const p1 = ["skill.select", "thinking.configure", "review.configure"].includes(capability.id);
-          const unsupportedReason = p1 && !framework.options.nativeExecutor ? "JiuwenSwarm scoped host configuration is not integrated"
+          const unsupportedReason = capability.id === "connector.enable" && !installedConnectors.some(connector => connector.canPropose) ? "NO_READY_CONFIGURABLE_CONNECTOR"
+            : p1 && !framework.options.nativeExecutor ? "JiuwenSwarm scoped host configuration is not integrated"
             : capability.id === "thinking.configure" && !thinkingChoices(snapshot.data.effectiveModel as ModelProfile | undefined).modes.length ? "The selected model API variant has no thinking control"
             : capability.id === "skill.select" && !snapshot.data.skillSelectionAvailable ? "This backend uses a shared Skill catalog" : undefined;
           return { ...capability, available: !unsupportedReason, ...(unsupportedReason ? { unsupportedReason } : {}) };
         }),
         modelId: settings.modelId ?? null,
         models: store.listModels().map(model => ({ id: model.id, name: model.name, credential: model.hasApiToken ? "provided" : store.modelAllowsMissingToken(model) ? "not_required" : "missing" })),
-        current: { enabledConnectorIds: runtimeEnabledConnectorIds, sessionSavedEnabledConnectorIds: settings.enabledConnectorIds, skillSelectionMode: settings.skillSelectionMode,
+        current: { enabledConnectorIds: mountedConnectorIds ?? [], runtimeStateKnown: mountedConnectorIds !== undefined,
+          snapshotEnabledConnectorIds: run?.settingsSnapshot.enabledConnectorIds ?? [], sessionSavedEnabledConnectorIds: settings.enabledConnectorIds, skillSelectionMode: settings.skillSelectionMode,
           enabledSkillIds: settings.enabledSkillIds, enabledSkillLibraries: settings.enabledSkillLibraries,
           thinkingMode: settings.thinkingMode ?? "model_default", thinkingEffort: settings.thinkingEffort ?? "model_default",
           reviewModelId: settings.reviewModelId ?? settings.modelId ?? null, semanticReviewEnabled: settings.semanticReviewEnabled,
           reviewer: snapshot.data.sessionReviewer },
-        sources, installedSkillIds: snapshot.data.installedSkillIds,
+        sources, installedConnectors, installedSkillIds: snapshot.data.installedSkillIds,
         skillLibraries: (snapshot.data.skillLibraries as SkillLibrary[]).map(item => ({ id: item.id, name: item.name, versionId: item.headVersionId, ready: Boolean(item.headVersionId) })),
         thinkingSupported: thinkingChoices(snapshot.data.effectiveModel as ModelProfile | undefined),
         reviewerGloballyEnabled: snapshot.data.reviewerGloballyEnabled,
         settingsInventory: CONFIGURATION_SETTINGS_INVENTORY,
         ...(args.diagnosticCode ? { diagnosis: configurationDiagnostic(args.diagnosticCode) } : {}),
-        sameRunCapabilities: framework.options.nativeExecutor ? ["connector.enable"] : [],
-        instruction: "Use the registered descriptions/fields for the user's normal task request. Propose only an actual missing requirement or explicit setting change, never defaults already effective. All mode includes every installed Skill. Users enter API keys only in the secure card. P1/model settings affect newly queued runs, never this active run. Unsupported inventory rows must not produce cards or success claims. Network failures, empty results and rate limits do not establish missing credentials or a need to loosen limits." }) }] };
+        sameRunCapabilities: installedConnectors.some(connector => connector.canPropose && connector.sameRunSupported) ? ["connector.enable"] : [],
+        instruction: `${CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS} Use the registered descriptions/fields for the user's normal task request. Propose only an actual missing requirement or explicit setting change, never defaults already effective. All mode includes every installed Skill. Users enter API keys only in the secure card. P1/model settings affect newly queued runs, never this active run. Unsupported inventory rows must not produce cards or success claims. Network failures, empty results and rate limits do not establish missing credentials or a need to loosen limits.` }) }] };
     },
   };
   const proposalParameters = framework.service.registry.proposalParameters();

@@ -107,7 +107,9 @@ async function fixture(context: TestContext, mode: "settings" | "review" = "sett
     const text = await response.text(); assert.equal(response.status, expected, `${method} ${path}: ${text}`); return JSON.parse(text) as T;
   }
   const model = await ok<ModelProfile>("/api/models", { name: "P1 native wire fixture", model: "p1-fixture", baseUrl: `${providerOrigin}/v1`, apiToken: "fixture-token",
-    apiProtocol: "openai-chat-completions", apiVariant: "deepseek", thinkingMode: "disabled", thinkingEffort: "low" });
+    apiProtocol: "openai-chat-completions", apiVariant: "deepseek", thinkingMode: "disabled", thinkingEffort: "low",
+    facts: { thinkingSupported: true, thinkingEfforts: ["low", "max"] } });
+  assert.deepEqual(model.facts?.thinkingEfforts, ["low", "max"], "The fixture explicitly declares only the effort values accepted by its provider");
   await ok("/api/settings", { modelId: model.id, enabledConnectorIds: [], semanticReviewEnabled: false }, "PUT", 200);
   await ok<SkillLibrary>("/api/skill-libraries", { id: "p1-runtime-library", name: "P1 methods library" });
   const committed = await ok<CommitSkillLibraryVersionResult>("/api/skill-libraries/p1-runtime-library/versions", { author: { kind: "user" }, operations: [{ type: "upsert", package: { files: [{ path: "SKILL.md",

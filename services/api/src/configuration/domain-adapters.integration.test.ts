@@ -177,7 +177,7 @@ test("CFG-R02: a repair target changed after approval cannot send the candidate 
       const proposal = await h.framework.propose(h.session.id, { capabilityId: "model.repair_credential", values: { modelId: model.id } });
       const ready = await secure(h.framework, proposal, { modelId: model.id }, "candidate-not-sent");
       const adapter = h.framework.service.registry.get("model.repair_credential"); const verify = adapter.verify!;
-      adapter.verify = async context => { await h.store.updateModel(model.id, { baseUrl: changed }); return verify(context); };
+      adapter.verify = async context => { await h.store.updateModel(model.id, { name: model.name, model: model.model, baseUrl: changed }); return verify(context); };
       const result = await approve(h.framework, ready);
       assert.notEqual(result.state, "applied"); assert.equal(calls, 0);
       assert.equal(h.store.getModelApiToken(model.id), "formal-original"); assert.equal(h.framework.repository.getReceipt(ready.id), undefined);

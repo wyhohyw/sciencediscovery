@@ -419,14 +419,22 @@ test("redirect responses never forward credentials or replay the paid probe", as
 
 test("64 KiB byte budget aborts an oversized response without draining the provider stream", async () => {
   let calls = 0; let closed = false;
+  let signalClosed!: () => void;
+  const responseClosed = new Promise<void>(resolve => { signalClosed = resolve; });
   await withProvider(async (request, response) => {
     calls++; await readRequest(request); response.writeHead(200, { "content-type": "application/json" });
-    response.on("close", () => { closed = true; });
+    response.on("close", () => { closed = true; signalClosed(); });
     // Multibyte UTF-8 must be counted as bytes, and the stream never terminates.
     response.write(JSON.stringify({ choices: [{ message: { content: "测".repeat(24_000) } }] }));
   }, async origin => {
-    const tested = await testModelConnectivity({ apiToken: "secret", profile: profile(origin), resolveProxy: directProxy, timeoutMs: 1000 });
+    const tested = await testModelConnectivity({ apiToken: "secret", profile: profile(origin), resolveProxy: directProxy, timeoutMs: 5000 });
     assert.equal(tested.category, "invalid_response"); assert.match(tested.message, /limit/);
+    // Observe real asynchronous socket cancellation well before the 5s probe
+    // deadline, so the timeout cannot accidentally satisfy this assertion.
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("The oversized response socket did not close after cancellation")), 1000);
+      responseClosed.then(() => { clearTimeout(timeout); resolve(); }, reject);
+    });
   });
   assert.equal(calls, 1); assert.equal(closed, true);
 });

@@ -39,17 +39,22 @@ async function fixture(context: TestContext, decision: "apply" | "dismiss", auto
     const input = await body(request); const task = Boolean(input.tools?.length);
     if (task) modelRequests.push(input);
     const results = new Set((input.messages ?? []).filter(item => item.role === "tool").map(item => item.tool_call_id));
+    const inspection = (input.messages ?? []).find(item => item.role === "tool" && item.tool_call_id === "cfg-inspect");
+    let discovered: Array<{ id: string; ready: boolean; runtimeEnabled: boolean; canPropose: boolean; sameRunSupported: boolean }> = [];
+    try { discovered = JSON.parse(typeof inspection?.content === "string" ? inspection.content : "{}").installedConnectors ?? []; } catch { /* Missing discovery evidence must not be replaced with a guessed ID. */ }
+    const selectedConnector = discovered.find(item => item.ready && !item.runtimeEnabled && item.canPropose && item.sameRunSupported);
     const queued = (input.messages ?? []).some(item => item.role === "user" && String(item.content).includes("QUEUE_MARKER"));
     let name: string | undefined, id: string | undefined, args: unknown, text = "Fixture title";
     if (task && queued) text = "QUEUED_TASK_DONE";
     else if (task && !results.has("cfg-inspect")) { name = "inspect_configuration"; id = "cfg-inspect"; args = {}; }
-    else if (task && !results.has("cfg-propose")) { name = "propose_configuration"; id = "cfg-propose"; args = { capabilityId: "connector.enable", values: { connectorId: "pubmed" } }; }
-    else if (task && choiceOptions.repeatNeed && !results.has("cfg-repeat")) { name = "propose_configuration"; id = "cfg-repeat"; args = { capabilityId: "connector.enable", values: { connectorId: "pubmed" } }; }
+    else if (task && !selectedConnector) text = "DISCOVERY_HAS_NO_READY_CONFIGURABLE_CONNECTOR";
+    else if (task && !results.has("cfg-propose")) { name = "propose_configuration"; id = "cfg-propose"; args = { capabilityId: "connector.enable", values: { connectorId: selectedConnector!.id } }; }
+    else if (task && choiceOptions.repeatNeed && !results.has("cfg-repeat")) { name = "propose_configuration"; id = "cfg-repeat"; args = { capabilityId: "connector.enable", values: { connectorId: selectedConnector!.id } }; }
     else if (task && decision === "dismiss") text = "CONFIGURATION_DECLINED_CONTINUED";
     else if (task && choiceOptions.choice === "use-web" && !results.has("cfg-web")) { name = "web_search"; id = "cfg-web"; args = { query: "diabetes systematic review" }; }
     else if (task && choiceOptions.choice === "use-web") text = "CONFIGURATION_WEB_ALTERNATIVE_COMPLETE";
-    else if (task && !results.has("cfg-discover")) { name = "tool_search"; id = "cfg-discover"; args = { query: "select:mcp__pubmed__search" }; }
-    else if (task && !results.has("cfg-pubmed")) { name = "mcp__pubmed__search"; id = "cfg-pubmed"; args = { query: "diabetes systematic review", limit: 1 }; }
+    else if (task && !results.has("cfg-discover")) { name = "tool_search"; id = "cfg-discover"; args = { query: `select:mcp__${selectedConnector!.id}__search` }; }
+    else if (task && !results.has("cfg-pubmed")) { name = `mcp__${selectedConnector!.id}__search`; id = "cfg-pubmed"; args = { query: "diabetes systematic review", limit: 1 }; }
     else if (task) text = "CONFIGURATION_TASK_COMPLETE: the offline PubMed search completed.";
     if (name) issued.push(name);
     if (!input.stream) {
@@ -80,7 +85,10 @@ async function fixture(context: TestContext, decision: "apply" | "dismiss", auto
     } };
   const config: ServerConfig = { authToken: "configuration-agent-token", dataDir: root, host: "127.0.0.1", port: 0,
     modelCatalogPath: resolve(root, "absent-models.json"), paperPythonPath: resolve(root, "no-python"), paperWorkerPath: resolve(root, "no-worker"),
-    gatewayIdleTimeoutMs: 15_000, gatewayTurnTimeoutMs: 0, kernelIdleTimeoutMs: 0, permissionWaitTimeoutMs: 0,
+    // This suite tests configuration recovery, not gateway idle limits. Keep a
+    // bounded budget large enough for child startup and first assembly under
+    // the full API suite's concurrent workload.
+    gatewayIdleTimeoutMs: 60_000, gatewayTurnTimeoutMs: 0, kernelIdleTimeoutMs: 0, permissionWaitTimeoutMs: 0,
     runnerExecTimeoutMs: 0, runnerMaxOutputBytes: 1_000_000, runnerMaxWorkspaceBytes: 10_737_418_240, runnerToken: "runner-token", runnerUrl: runnerOrigin,
     sshConfigPath: resolve(root, "ssh-config"), staticDir: resolve(root, "no-web"), workspaceUpload: { maxFileBytes: 1_000_000, maxRequestBytes: 10_000_000, maxWorkspaceBytes: 10_737_418_240 },
     memoryGraph: { url: "", internalToken: "" }, evolve: { url: "", internalToken: "" } };
@@ -168,8 +176,12 @@ async function fixture(context: TestContext, decision: "apply" | "dismiss", auto
     assert.equal(blocked.finishedAt, undefined);
     return { run: blocked, card, prompt };
   }
-  const select = async (card: ConfigurationRequestView, optionId: string) => ok<ConfigurationRequestView>(`${path}/configuration-requests/${card.id}/preview`,
-    { expectedRevision: card.revision, values: { connectorId: "pubmed" }, selectedOptionId: optionId }, "POST", 200);
+  const select = async (card: ConfigurationRequestView, optionId: string) => {
+    const field = card.fields.find(item => item.id === "connectorId");
+    if (!field || field.kind !== "enum" || typeof field.value !== "string") throw new Error("The discovered connector card has no exact target field");
+    return ok<ConfigurationRequestView>(`${path}/configuration-requests/${card.id}/preview`,
+      { expectedRevision: card.revision, values: { connectorId: field.value }, selectedOptionId: optionId }, "POST", 200);
+  };
   const decide = async (card: ConfigurationRequestView) => {
     const selected = decision === "dismiss" ? "dismiss" : choiceOptions.choice;
     if (selected && card.protocolVersion === 3 && card.selectedOptionId !== selected) card = await select(card, selected);

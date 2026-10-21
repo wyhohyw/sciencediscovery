@@ -7,7 +7,7 @@
 
 ## 1. 交付范围与技术决策
 
-当前通用切片包含七个已注册适配器：`model.select`、`model.connect`、`model.repair_credential`、`connector.enable`、`skill.select`、`thinking.configure`、`review.configure`。公共服务处理版本化预览、用户批准、批准后验证、正式提交、receipt 与持久阶段；Native 连接器已接工具装配 witness 和同 run 调度。旧模型向导、连接器预检/专用工具和 PubMed 计时器继续作为兼容分支。
+当前通用切片包含七个已注册适配器：`model.select`、`model.connect`、`model.repair_credential`、`connector.enable`、`skill.select`、`thinking.configure`、`review.configure`。公共服务处理版本化预览、用户批准、批准后验证、正式提交、receipt 与持久阶段；Native 连接器已接工具装配 witness 和同 run 调度。对话内无模型引导也使用统一持久请求；连接器预检/专用工具和旧 PubMed 计时器保留兼容。设置页继续使用原有模型管理接口。
 
 本轮已经接入注册驱动的 Agent 发现/参数、v3 可信选项、Native 已就绪 MCP 运行级覆盖、结构化替代/拒绝结果及 P1 三项领域。最终测试结果见状态 v9；P2～P4 和实际 JiuwenSwarm 宿主仍按后续计划逐项开发。任意 REST API、STDIO、宿主部署设置不自动获得支持。
 
@@ -45,7 +45,7 @@
 | `services/adapter/src/sciencediscovery_adapter/configuration_capabilities.py` | 认证后的实际 adapter 握手；未实现的条件写入与精确恢复报告为不支持 |
 | `runs/index.ts` | 主 Agent 工具、原生检查点、等待、同 run 恢复、真实工具 witness 核对 |
 | `apps/web/src/configuration/ConfigurationRequestCard.tsx`、`QuickConfigurationMenu.tsx` | 统一字段 renderer、专用凭据输入、预览/确认、折叠结果与主动入口 |
-| 旧 `ConversationalModelCard`、连接器卡及 `explicit-connector.ts` | 兼容原有缺模型引导、独立指令与历史记录；未整体替换成 v2 |
+| 旧模型组件、连接器卡及 `explicit-connector.ts` | 对话不再挂载旧模型直写卡；旧连接器指令及历史记录继续兼容，设置页模型管理保持独立 |
 
 ### 2.2 当前调用链
 
@@ -339,6 +339,7 @@ Stop 与已领取外部操作的检查使用调度租约/取消边界排序。St
 | `GET S/configuration-requests` | 同 ID 合并 v2 与 legacy，请求 checkpoint 未就绪时不开放操作卡 |
 | `POST S/configuration-requests` | capabilityId、values、可选 scope/reason/protocolVersion；P1 要求 v3，不接受 run/interrupt/内部恢复字段 |
 | `GET R` | 独立脱敏快照与 revision/stateVersion |
+| `POST R/endpoint-consent` | 用户专属精确目的地同意；绑定 revision/endpointTarget，只记同意，不上传密钥或探测；Agent 无此接口能力 |
 | `POST R/credentials` | expectedRevision、fieldId、secret；专用 no-store 响应返回短期 handle |
 | `POST R/preview` | expectedRevision、values、可选 scope/credentialHandle；v3 另有 selectedOptionId，产生新 revision 与方案绑定 digest |
 | `POST R/decision` | revision、previewDigest、apply/dismiss；v3 必须有匹配 selectedOptionId 和幂等键；单数 decision 路径兼容保留 |
@@ -361,7 +362,7 @@ Stop 与已领取外部操作的检查使用调度租约/取消边界排序。St
 
 前端缺模型检查不依赖 LLM。空会话只保留轻量入口；提交非空草稿时打开卡并阻止 run 创建，确认后经正常路径只提交一次。取消保留草稿；无任务时不提交空 run。
 
-`ConversationalModelCard` 复用 `ModelConnectWizard`。零模型直接进入连接向导，首次连接前固定并展示全局默认范围；写默认时读取并保留其他全局 overrides。已有模型时选择或新连接绑定当前会话。当前会话已通过继承取得首个模型时避免额外覆盖；并发变化应使旧绑定确认失效。
+零模型通过确定性前端入口创建 `model.connect` 持久请求，在统一卡片收集连接字段；已有模型走 `model.select` 或新连接请求。它们使用同一幂等、预览、用户决定与持久回执，不再直接从对话调用 `updateSession`。首次连接前固定并展示全局默认范围；写默认时保留其他全局 overrides。已有模型的选择或新连接只绑定当前会话。并发变化使旧确认失效；原研究草稿只续交一次。`ModelConnectWizard` 保留用于普通设置页。
 
 ### 7.2 已接入的协议验证
 
@@ -434,6 +435,8 @@ Specialist 的现有预设连接器仍可与会话设置组合；本功能不改
 ### 9.3 持久阶段与仍未保证的外部副作用
 
 现有 checkpoint 以模型历史为核心，并不等于已实现所有外部动作/产物的提交协议。本轮协调器已明确绑定 request/revision、应用 receipt、冻结 run、激活/恢复意图及资源版本；但这不是所有业务工具、产物和附件的跨系统提交协议。
+
+正式写入的 CAS 与恢复依赖证明分别维护。`receipt.executionDependencies` 绑定原任务实际挂载的源与获准增量，并对这些源的安装、传输/认证/OAuth、代理和相关权限做代际核对；prepare、激活协调器和最终工具装配使用同一证明。无关模型默认、其他 MCP 或其他设置变化不应阻止恢复。旧记录没有执行证明时保留原有保守检查，不凭空补造历史批准依据。
 
 未知副作用先查权威状态，否则需要用户处理；不能猜测成功、重新上传、重新付费或重复提交远程作业。冻结模型 ID 也不自动冻结共享 provider 地址与密钥依赖，跨类型恢复需增加依赖版本检查。
 
@@ -934,7 +937,7 @@ P1 首轮不提供“移除覆盖并恢复继承”的专门动作；未出现�
 
 以上是测试覆盖说明，最终通过数量、WSL/浏览器端到端、脚本模型与真实 LLM、真实或离线工具、Runner 与 Jiuwen 后端的证据由集成记录逐项回填；未执行部分保持待验证。
 
-## 21. 审查修订实施与验收（CFG-R01～R12）
+## 21. 审查修订实施与验收（CFG-R01～R13）
 
 本轮以设计 v20 第 17 节为准，保留 `f58c728b` 的可追溯审阅基线，在 `7ee6c1d0` 上整合。不得用删除安全比较来修复误阻塞，不得用通用确认按钮替代明确的自定义凭据接收主机授权。
 
@@ -944,6 +947,8 @@ P1 首轮不提供“移除覆盖并恢复继承”的专门动作；未出现�
 4. **集成与交付（R12）**：逐项处理上游 Store、Runs、HTTP、Reviewer、MCP 工具和模型连接代码冲突，保留双方设计约束。删除本 feature 初始合入中的重复历史文档，仅保留当前完整版本与必要证据；重建 HTML 并验证锚点、单页阅读和链接。先专项测试，再完整 WSL 构建/测试与真实模型浏览器确认、暂停、同 run 恢复/完成、Stop、范围隔离和数据清理。所有结论分别记录通过、未验证与不适用，旧测试结果不能替代新分支结果。
 
 回归测试应以实际失败场景构造，不只断言实现内部字段；主机未确认测试须观察网络未发出，恢复测试须有无关更改仍成功和相关更改拒绝两组对照。凭据重试测试要覆盖中间预览已成功、上传失败、同表单重试成功以及目标切换清空四个阶段。项目/全局通知同时检查其他会话收到更新和旧 run 快照不变。
+
+CFG-R13 补齐原 CFG-01 的发现合同：`inspect_configuration.installedConnectors` 必须由实际注册目录与服务端状态生成，不只返回能力名称或当前启用 ID。通用发现和旧专用提案描述复用同一资源目录；分别表达 installed、ready、原 run 已装配、Session 已保存、相关策略许可和 same-run 支持。未就绪不可被宣传为能立即启用。集成脚本必须先读取发现结果再选中资源、创建提案和验证同 run 完成；真实模型未产生正确提案不能算端到端通过。
 
 ### 21.1 模型目的地授权合同
 
