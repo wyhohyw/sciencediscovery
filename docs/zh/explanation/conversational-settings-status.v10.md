@@ -1,10 +1,10 @@
 # 对话内按需配置 · 合入前修订与实测 v10
 
 - 日期：2026-10-21；分支：`codex/conversational-settings-review-fixes`。
-- 产品依据：[设计 v21](conversational-settings.v21.md)第 17 节；工程合同：[开发 v11](conversational-settings-development.v11.md)第 21 节，CFG-R01～R13。
-- 上游整合基线：`7ee6c1d0`；本轮代码验收候选 E：`05efd5476e800fb66c6dcc92b80be5aac7bd0849`。原审阅基线 `f58c728b` 留作历史追溯，不代替当前验证。
-- **CFG-R14 手动 HTTP 修复尚待本轮验证**；以下 E 证据属于修复前基线，不代表新候选通过。
-- E 的公共 HTTP 十步旅程、下述真实 Flash/浏览器场景及原失败项专项复跑已通过；**标准根回归结论以第 3 节的最终命令退出状态和完整计数为准，不能由这些专项推定全仓通过**。
+- 产品依据：[设计 v21](conversational-settings.v21.md)第 17 节；工程合同：[开发 v11](conversational-settings-development.v11.md)第 21 节，CFG-R01～R14。
+- 上游整合基线：`7ee6c1d0`；修复前审查验收候选 E：`05efd5476e800fb66c6dcc92b80be5aac7bd0849`。原审阅基线 `f58c728b` 留作历史追溯，不代替当前验证。
+- CFG-R14 手动 HTTP 修复候选 F：`20acc0df682eca8fcccbdd1efdcc4cd53662a014`；本轮结果见第 1.1 节。以下 E 的原始证据属于修复前基线，分别保留原候选和计数。
+- E 的公共 HTTP 十步旅程、真实 Flash/浏览器场景与第 3 节根回归属于前轮记录；不能用它们替代 F 的手动连接回归。
 
 ## 1. 本轮修订范围
 
@@ -18,7 +18,28 @@
 
 E 还修正最新上游整合中的 Reviewer 回执回归：移除入队阶段导致无回执的全局关闭早退，保留会话选项和真正执行前的全局关闭检查。关闭时仍能留下可见的失败/跳过原因，不因此调用审阅模型。子 Agent 流测试按同一个逻辑工具执行核对单调 running 进度和唯一 completed，保留权限、输出、持久化及无重复执行断言。
 
-## 2. 专项与端到端证据
+### 1.1 CFG-R14 手动 HTTP 连接修复与验收
+
+F 恢复正式设置页的手动 HTTP 网关路径：列表预览和保存前独立确认目标及明文风险；保存后测试绑定 baseUrl/updatedAt，地址、协议、variant 或代理变化后重新确认。费用确认保持独立。模型对象冻结，测试中修改正式模型会阻止后续矩阵探测；旧空 body 返回明确的刷新/确认提示。Agent 对话提案的公网 HTTP 携凭据禁止规则没有放宽。
+
+| F 的实际验证 | 结果与边界 |
+| --- | --- |
+| 标准 WSL 根回归 | 同一不可变候选，从头执行 pnpm test：3688 tests，3687 pass，0 fail，1 skip；唯一跳过项为用户已允许跳过的 Docker/SSH 外部环境用例 |
+| 类型与架构 | pnpm typecheck 退出 0；pnpm architecture:check 退出 0，72 tests 通过；不以早期候选结果替代 |
+| 专项 | WSL 表单/已有模型按钮 52/52；HTTP 缺确认/错地址/过期版本、测试途中修改与保存凭据 2/2；客户端序列化回归也进入本次完整套件 |
+| 公开 API 用户旅程 | test/api/manual-model-connection-review.mjs，8/8：预览、创建、登记、探测、持久化读取与精确清理；只使用 loopback 假服务和虚构 Key |
+| 真实浏览器 | 1280×720：HTTP 确认默认未选、列表按钮受限、确认后列表成功、保存成功、刷新后记录仍在、已有模型再次测试返回可用；全局默认模型未改。未验证其他宽度、DPR 或真实手机 |
+| 根地址补测 | 不带 /v1、带尾斜杠的本地网关从 /models 列表到 /chat/completions 探测通过，按基础 URL 原样组装，不自动为自定义地址添加 /v1 |
+
+保留环境失败史：首次标准根流程在 Runner SEA 冷启动健康检查超时，原断言/预算重试 2/2 通过；第二次流程中 3 项 Runner 执行等待超时。改为显式 --test-concurrency=1，保持测试文件串行、允许沙箱子进程使用原有 4 核，未放宽产品、断言或超时。完整 Runner 285/285 通过后，从头重跑并得到上表的最终根回归；不是用局部重跑拼接全仓通过。旧日志保留为 manual-http-first-root-sea-timeout.log 与 manual-http-second-root-runner-deadlines.log。
+
+浏览器曾遇到测试控制连接延迟，恢复后才执行上述交互。用户报告仍失败时，原标签页使用旧 bundle index-CwjwBKLx.js 并显示 Failed to fetch；经用户明确授权刷新后，已核对为修复版 index-CvF-uN3Z.js，旧错误通知消失。刷新曾被自动权限审核因未保存输入风险阻止，获得本次用户授权后才执行。
+
+API/浏览器测试资源均按精确 ID 清理，本地假服务已停止；用户原有 3 个模型和测试前已有 3 个项目保留，API 4420 / Runner 4421 健康均为 200。浏览器模型 f5ca1045-7a8b-4e89-8644-ca5bea1f982d 与 provider c587b371-75eb-4d72-85b5-14d174d26b13 已删除。
+
+F 的证据：Windows .tmp/manual-http-20acc0df-evidence/（三张截图、browser-verification.json、full-validation-counts.json）；WSL .tmp/manual-model-connection-20acc0df/report.md；完整日志在 .tmp/configuration-review-validation/。证据仅本地保存，不含用户 Key。真实 OpenCSI 的生成请求曾被自动权限审核拒绝，本轮未重试，也未用产品接口间接执行；这些本地结果不宣称该商业网关生成已通过。
+
+## 2. 修复前 E 基线的专项与端到端证据
 
 | 范围 | 候选与本轮结果 | 证明边界 |
 | --- | --- | --- |
@@ -39,7 +60,7 @@ E 的真实模型断言位于 `.tmp/configuration-review-05efd547-evidence/confi
 
 Reviewer/Thinking 的本轮覆盖限于领域、协议和运行回归；没有将上述 PubMed/Skill 结果扩写为这两项的商业模型界面通过。桌面证据限实际使用的视口，不宣称手机、缩放和全部断点已测。
 
-## 3. WSL 完整验证
+## 3. 修复前 E 基线的 WSL 完整验证
 
 标准根回归必须在同一已提交候选、同一源码清单和对应构建产物下完整执行，以最终命令退出结果为准。独立包、失败项重跑或真实模型成功不能拼成一次不存在的全仓通过。
 
