@@ -117,8 +117,8 @@ export interface ModelCompatibilityOutcome {
   providerStatus?: number;
 }
 
-/** Per-attempt, user-entered settings acknowledgement; never an Agent proposal field. */
-export interface ManualPlaintextHttpConsent {
+/** Snapshot of the manually selected target; never an Agent permission grant. */
+export interface ManualModelDestination {
   baseUrl: string;
   profileUpdatedAt: string;
 }

@@ -6461,7 +6461,7 @@ test("deleting a session/project mirrors the cleanup to the memory-graph sidecar
   assert.deepEqual((projectCall.session_ids as string[]).toSorted(), expectedProjectSessionIds);
 });
 
-test("CFG-R14 manual HTTP requires current destination consent and preserves old-client errors", async (context) => {
+test("CFG-R14 manual HTTP preserves the manual flow and checks a supplied destination snapshot", async (context) => {
   const tempRoot = resolve(process.cwd(), ".tmp", `manual-http-${Date.now()}-${process.pid}`);
   await mkdir(tempRoot, { recursive: true });
   context.after(() => removeTestRoot(tempRoot));
@@ -6512,31 +6512,33 @@ test("CFG-R14 manual HTTP requires current destination consent and preserves old
   const legacy = await jsonRequest<ApiError>(endpoint, { method: "POST", headers: authorization });
   assert.equal(legacy.response.status, 400);
   assert.match(JSON.stringify(legacy.body), /Refresh the page/);
-  assert.equal((await post({ consent: true })).response.status, 400);
-  const plaintextHttpConsent = { baseUrl: created.body.baseUrl, profileUpdatedAt: created.body.updatedAt };
-  assert.equal((await post({ consent: true, plaintextHttpConsent: { ...plaintextHttpConsent, baseUrl: "http://other.invalid" } })).response.status, 409);
-  assert.equal((await post({ consent: true, plaintextHttpConsent: { ...plaintextHttpConsent, profileUpdatedAt: "old" } })).response.status, 409);
-  assert.equal((await post({ consent: false, plaintextHttpConsent })).response.status, 400);
-  assert.equal(dispatched, 0, "No wire request before both valid user acknowledgements");
+  assert.equal((await post({ consent: false })).response.status, 400);
+  const expectedDestination = { baseUrl: created.body.baseUrl, profileUpdatedAt: created.body.updatedAt };
+  assert.equal((await post({ consent: true, expectedDestination: { ...expectedDestination, baseUrl: "http://other.invalid" } })).response.status, 409);
+  assert.equal((await post({ consent: true, expectedDestination: { ...expectedDestination, profileUpdatedAt: "old" } })).response.status, 409);
+  assert.equal((await post({ consent: false, expectedDestination })).response.status, 400);
+  assert.equal(dispatched, 0, "No wire request before paid consent and a matching supplied destination");
   assert.equal(tunnels, 0);
-  const tested = await post({ consent: true, plaintextHttpConsent });
+  const tested = await post({ consent: true, expectedDestination });
   assert.equal(tested.response.status, 200);
   assert.equal((tested.body as unknown as ModelConnectivityTestResult).ok, true, JSON.stringify(tested.body));
   assert.equal(dispatched, 1);
+  assert.equal((await post({ consent: true })).response.status, 200, "Existing manual clients need no additional HTTP acknowledgement");
+  assert.equal(dispatched, 2, "A separate manual click performs its own paid-consented check");
   assert.doesNotMatch(JSON.stringify(tested.body), /synthetic-manual-test-key/);
   const changedInput = { name: "Revised fixture", baseUrl: created.body.baseUrl, model: created.body.model, apiProtocol: created.body.apiProtocol, apiVariant: created.body.apiVariant };
   const updated = await jsonRequest<ModelProfile>(`${origin}/api/models/${created.body.id}`, { method: "PUT", headers: authorization, body: JSON.stringify(changedInput) });
   assert.equal(updated.response.status, 200);
   assert.notEqual(updated.body.updatedAt, created.body.updatedAt);
-  assert.equal((await post({ consent: true, plaintextHttpConsent })).response.status, 409);
-  assert.equal(dispatched, 1, "Old consent must not reuse a cached success after editing");
+  assert.equal((await post({ consent: true, expectedDestination })).response.status, 409);
+  assert.equal(dispatched, 2, "A stale target snapshot cannot dispatch after editing");
   duringProbe = async () => {
     const changed = await jsonRequest(`${origin}/api/models/${created.body.id}`, { method: "PUT", headers: authorization, body: JSON.stringify({ ...changedInput, name: "Changed during matrix" }) });
     assert.equal(changed.response.status, 200);
   };
-  const matrix = await post({ consent: true, compatibility: true, plaintextHttpConsent: { baseUrl: updated.body.baseUrl, profileUpdatedAt: updated.body.updatedAt } });
+  const matrix = await post({ consent: true, compatibility: true, expectedDestination: { baseUrl: updated.body.baseUrl, profileUpdatedAt: updated.body.updatedAt } });
   assert.equal(matrix.response.status, 200);
-  assert.equal(dispatched, 2, "A profile edit during basic check blocks every later matrix dispatch");
+  assert.equal(dispatched, 3, "A profile edit during basic check blocks every later matrix dispatch");
 });
 
 test("model connectivity endpoint uses the encrypted saved credential", async (context) => {

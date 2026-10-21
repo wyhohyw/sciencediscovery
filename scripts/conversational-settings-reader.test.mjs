@@ -89,8 +89,8 @@ test('current documents expose the implemented local layer and distinguish block
   const page = await readFile(new URL('../docs/zh/explanation/conversational-settings.html', import.meta.url), 'utf8');
   const data = JSON.parse(page.split('<script type="application/json" id="document-data">')[1].split('</script>')[0]);
   const current = new Map(data.filter(doc => !doc.archived).map(doc => [doc.id, doc]));
-  assert.equal(current.get('design').filename, 'conversational-settings.v21.md');
-  assert.equal(current.get('development').filename, 'conversational-settings-development.v11.md');
+  assert.equal(current.get('design').filename, 'conversational-settings.v22.md');
+  assert.equal(current.get('development').filename, 'conversational-settings-development.v12.md');
   assert.equal(current.get('status').filename, 'conversational-settings-status.v10.md');
   assert.equal(current.get('research').filename, 'conversational-settings-research.v2.md');
   assert.equal(current.get('design').sections.length, 18);

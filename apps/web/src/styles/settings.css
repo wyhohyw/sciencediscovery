@@ -1006,10 +1006,6 @@
 /* Compatibility evidence stays beside the selected model and wraps at narrow widths. */
 .provider-row-test { flex-wrap: wrap; min-width: 0; max-width: 100%; }
 .model-compatibility-check { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%; align-items: center; }
-.manual-http-consent { display: grid; flex-basis: 100%; min-width: 0; gap: 6px; padding: 12px; border: 1px solid var(--warning-border, #d6a84b); border-radius: 8px; background: var(--warning-soft, #fff8e6); color: var(--text-primary); font-size: 12px; line-height: 1.5; }
-.manual-http-consent code { white-space: normal; overflow-wrap: anywhere; font-size: inherit; }
-.manual-http-consent label { display: flex; align-items: flex-start; gap: 6px; white-space: normal; }
-.manual-http-consent input { flex: 0 0 auto; margin-top: 3px; }
 .model-compatibility-check label { white-space: normal; overflow-wrap: anywhere; font-size: 12px; color: var(--text-secondary); }
 .model-compatibility-results { flex-basis: 100%; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 .model-compatibility-results ul { margin: 4px 0; padding-left: 18px; }

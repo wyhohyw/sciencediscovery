@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { randomUUID } from "node:crypto";
-import { hasManualHttpConsent, requiresManualHttpConsent } from "./manual-model-consent.js";
+import { matchesManualModelDestination } from "./manual-model-destination.js";
 import { handleExecutionReadiness } from "./execution-readiness.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
@@ -2027,7 +2027,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         // Store edits mutate the saved object. Keep the approved revision frozen
         // for every dispatch, including later compatibility-matrix requests.
         const profile = { ...savedProfile };
-        let consent: { consent?: boolean; compatibility?: boolean; plaintextHttpConsent?: unknown };
+        let consent: { consent?: boolean; compatibility?: boolean; expectedDestination?: unknown };
         try {
           consent = await readJson<typeof consent>(request);
         } catch (error) {
@@ -2037,19 +2037,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!consent || typeof consent !== "object" || Array.isArray(consent)) return sendError(response, 400, "Model checks require JSON consent");
         if (consent.consent !== true) return sendError(response, 400, "Explicit consent is required: model checks may consume paid tokens");
         const frozenDestination = modelDestination(profile).endpointTarget;
-        const httpConfirmed = hasManualHttpConsent(profile, consent.plaintextHttpConsent);
-        if (consent.plaintextHttpConsent !== undefined && !httpConfirmed) return sendError(response, 409, "The model destination or revision changed. Review the HTTP address and confirm again.");
-        if (requiresManualHttpConsent(profile, !!store.getModelApiToken(modelId)) && !httpConfirmed) return sendError(response, 400, "Confirm the HTTP destination and plaintext API key risk in manual settings before testing this model");
+        const destinationMatches = matchesManualModelDestination(profile, consent.expectedDestination);
+        if (consent.expectedDestination !== undefined && !destinationMatches) return sendError(response, 409, "The model destination or revision changed. Reopen the model settings before testing again.");
         const tested = await modelConnectivityTests.run(`${modelId}:${profile.updatedAt}:${consent.compatibility === true}`, () => testModelConnectivity({
           compatibility: consent.compatibility === true,
           allowMissingToken: store.modelAllowsMissingToken(profile),
 
           apiToken: store.getModelApiToken(modelId),
           profile,
-          beforeDispatch: dispatchProfile => {
+          beforeDispatch: () => {
             const current = store.getModel(modelId);
             if (!current || current.updatedAt !== profile.updatedAt || modelDestination(current).endpointTarget !== frozenDestination) throw new Error("MODEL_DESTINATION_CHANGED");
-            if (requiresManualHttpConsent(dispatchProfile, !!store.getModelApiToken(modelId)) && !httpConfirmed) throw new Error("ENDPOINT_CREDENTIAL_INSECURE");
           },
           resolveProxy: () => resolveProxyForUrl(store.resolveProxy(profile.proxyPolicy), profile.baseUrl),
         }));

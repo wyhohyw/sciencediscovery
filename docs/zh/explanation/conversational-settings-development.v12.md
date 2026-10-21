@@ -1,6 +1,6 @@
-# 对话内按需配置 · 完整开发文档 v11
+# 对话内按需配置 · 完整开发文档 v12
 
-- 日期：2026-10-21；产品依据：[完整设计 v21](conversational-settings.v21.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
+- 日期：2026-10-21；产品依据：[完整设计 v22](conversational-settings.v22.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
 - 本文保留[开发 v8](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v8.md)及[历史开发 v7](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v7.md)，延续完整章节和验收编号，按 [#278 维护者决策](https://github.com/openJiuwen-ai/sciencediscovery/issues/278#issuecomment-6238467927)更新 DEV-CFG-11～17 实施状态。第 19 节记录本轮 P0/P1 接线与未完成边界，第 20 节内嵌完整设置矩阵；最终结果见状态 v10，不由文档更新推定端到端全部通过。
 - 核对范围：隔离分支 `codex/conversational-settings-review-fixes` 本轮实现。最终提交标识与 WSL 结果见[状态 v10](conversational-settings-status.v10.md)；旧 `a88d9283` 只对应 2026-10-16 的历史真实模型用例。
 - 标记约定：“已接入”表示实际产品调用路径；“合同验证”表示接口/模拟器/故障测试已有，真实后端未贯通；“待开发/待集成”表示仍需本项目宿主工作或固定补丁集成，尚不能开放产品承诺。文档中的未来宿主接口不能当作已安装能力。
@@ -939,7 +939,7 @@ P1 首轮不提供“移除覆盖并恢复继承”的专门动作；未出现�
 
 ## 21. 审查修订实施与验收（CFG-R01～R14）
 
-本轮以设计 v21 第 17 节为准，保留 `f58c728b` 的可追溯审阅基线，在 `7ee6c1d0` 上整合。不得用删除安全比较来修复误阻塞，不得用通用确认按钮替代明确的自定义凭据接收主机授权。
+本轮以设计 v22 第 17 节为准，保留 `f58c728b` 的可追溯审阅基线，在 `7ee6c1d0` 上整合。不得用删除安全比较来修复误阻塞，不得用通用确认按钮替代明确的自定义凭据接收主机授权。
 
 1. **执行依赖与领域恢复（R01/R03/R08/R10）**：Store 提供语义化有效依赖与范围通知；framework/native activation 使用同一依赖证明。正式写入仍执行 CAS；恢复只看冻结执行所依赖的资源。连接器撤销全链路区分移除与新增；受信任恢复数据支持有界长集合。持久仓库提供待办/到期查询，批量有限且不扫描所有会话。
 2. **目标安全与领域适配（R02/R11）**：统一标准化和分类端点；预设协议/主机有明确映射；用户 HTTP 路由接收专属端点同意并绑定精确目标，Agent 工具不暴露批准字段。验证和连接发送前再次检查。本机/私网按标准化主机字面量分类，独立确认后保留 HTTP 网关兼容，但须明确显示密钥明文传输风险；对话内提案的其余 HTTP 端点拒绝携带凭据，保留禁止重定向的连接测试。Provider 按合法身份复用，不覆盖共享凭据；凭据忙、未知模型取值分别处理。
@@ -956,12 +956,12 @@ CFG-R13 补齐原 CFG-01 的发现合同：`inspect_configuration.installedConne
 
 用户专属 `POST /api/sessions/{sessionId}/configuration-requests/{requestId}/endpoint-consent` 接收 `{revision, endpointTarget}`，只记录同意，不发送验证请求。Agent 提案工具不接受此字段。目的地相同的后续凭据预览可继承同意到新 revision，目的地或字段目标变化必须重新确认；上传、批准验证及最终每次网络发送前均重新核对。模型凭据修复在实际发送前重读正式模型，不能将已确认的 Key 发往后来更换的地址。
 
-既有设置页中用户手动保存模型后的测试按钮，保留原来的明确付费探测同意；它不被标成自动可信预设。该路径冻结用户所选目标、每次发送前复查；公网 HTTP 携 Key 仅在用户手动勾选本节 CFG-R14 明文风险确认后允许。本轮不把设置页的手动模型管理改造成 Agent 提案；对话内 `model.connect` 和 `model.repair_credential` 始终使用上述专属同意接口。
+既有设置页中用户手动保存模型后的测试按钮，保留原来的明确付费探测同意；它不被标成自动可信预设。该路径冻结用户所选目标、每次发送前复查；用户亲自填写的 HTTP 网关不额外增加风险复选框，见 CFG-R14。本轮不把设置页的手动模型管理改造成 Agent 提案；对话内 `model.connect` 和 `model.repair_credential` 始终使用上述专属同意接口。
 
 ### 21.2 手动模型连接回归（CFG-R14）
 
-设置页独立增加明文传输确认，复用同一组件显示规范化 baseUrl、风险和默认未选复选框。向导的模型列表预览及保存均受该确认约束；保存前比较服务器返回的模型目标与用户所见目标。已有模型测试按钮同样使用该确认。
+移除 v11 引入的黄色 HTTP 确认区及前端阻塞。手动获取列表直接使用用户输入，保存和重测保留既有付费探测同意；不默认授予 Agent 任何端点权限。
 
-POST /api/models/{id}/test 保留 consent=true 和 compatibility，新增可选 plaintextHttpConsent={baseUrl, profileUpdatedAt}。公网 HTTP 有凭据时必须精确匹配当前模型；每次发送前再次比较 updatedAt 和冻结目标，不复用其他请求的确认。第三参数仅由正式设置页客户端传入，不能进入配置 Agent 工具 schema。空 body 返回明确提示；旧客户端不得被默认为同意。
+POST /api/models/{id}/test 保留 consent=true 和 compatibility，可选 expectedDestination={baseUrl, profileUpdatedAt} 只用于目标版本检查。客户端从本次表单与服务器返回模型比对后构造快照，不需要用户再次勾选。旧手动客户端只发送付费 consent 也能测试；空 body 仍返回明确提示。提供了错误/过期快照时返回 409；每次发送前复查保存版本和冻结目标，防止兼容性矩阵中途更换地址。
 
-新增测试覆盖未确认不发送、正确确认成功、过期版本/换目标拒绝、旧空请求、手动表单确认撤回及重试、已有模型按钮、原 Agent 禁止规则。浏览器和公开 API 使用独立本地假服务与虚构 Key，测试完成按精确 ID 清理。最终不可变候选 F 的 WSL 根回归、类型/架构和真实浏览器结果见状态 v10 第 1.1 节；历史候选结果不能计入本修复。
+回归覆盖 HTTP 表单无需额外勾选即可获取列表、付费同意前不生成、失败保留草稿并能重试、改地址撤销既有付费同意、已有模型按钮只保留原确认、错误目标/过期版本/测试中修改拦截，以及原 Agent 目的地保护。浏览器与公开 API 的本地假服务仅证明产品路径，不代表真实 OpenCSI 可连接；真实网络故障记录与这些回归结果分开。

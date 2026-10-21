@@ -59,8 +59,8 @@ if (process.argv.includes('--fixture')) {
     providerId = provider.id;
     const profile = expect('Register selected model without changing default', await request(`/api/providers/${providerId}/models`, 'POST', { model: 'manual-http-fixture', setGlobalDefault: false }), 201);
     modelId = profile.id;
-    const plaintextHttpConsent = { baseUrl, profileUpdatedAt: profile.updatedAt };
-    const tested = expect('Probe the saved HTTP gateway with exact manual acknowledgement', await request(`/api/models/${modelId}/test`, 'POST', { consent: true, plaintextHttpConsent }), 200);
+    const expectedDestination = { baseUrl, profileUpdatedAt: profile.updatedAt };
+    const tested = expect('Probe the saved HTTP gateway with the saved destination snapshot', await request(`/api/models/${modelId}/test`, 'POST', { consent: true, expectedDestination }), 200);
     assert.equal(tested.ok, true);
     const savedList = expect('Read saved model after successful connection', await request('/api/models'), 200);
     const stored = (savedList.models ?? savedList).find(model => model.id === modelId);

@@ -1,7 +1,7 @@
 # 对话内按需配置 · 合入前修订与实测 v10
 
 - 日期：2026-10-21；分支：`codex/conversational-settings-review-fixes`。
-- 产品依据：[设计 v21](conversational-settings.v21.md)第 17 节；工程合同：[开发 v11](conversational-settings-development.v11.md)第 21 节，CFG-R01～R14。
+- 产品依据：[设计 v22](conversational-settings.v22.md)第 17 节；工程合同：[开发 v12](conversational-settings-development.v12.md)第 21 节，CFG-R01～R14。
 - 上游整合基线：`7ee6c1d0`；修复前审查验收候选 E：`05efd5476e800fb66c6dcc92b80be5aac7bd0849`。原审阅基线 `f58c728b` 留作历史追溯，不代替当前验证。
 - CFG-R14 手动 HTTP 修复候选 F：`20acc0df682eca8fcccbdd1efdcc4cd53662a014`；本轮结果见第 1.1 节。以下 E 的原始证据属于修复前基线，分别保留原候选和计数。
 - E 的公共 HTTP 十步旅程、真实 Flash/浏览器场景与第 3 节根回归属于前轮记录；不能用它们替代 F 的手动连接回归。
@@ -38,6 +38,14 @@ F 恢复正式设置页的手动 HTTP 网关路径：列表预览和保存前独
 API/浏览器测试资源均按精确 ID 清理，本地假服务已停止；用户原有 3 个模型和测试前已有 3 个项目保留，API 4420 / Runner 4421 健康均为 200。浏览器模型 f5ca1045-7a8b-4e89-8644-ca5bea1f982d 与 provider c587b371-75eb-4d72-85b5-14d174d26b13 已删除。
 
 F 的证据：Windows .tmp/manual-http-20acc0df-evidence/（三张截图、browser-verification.json、full-validation-counts.json）；WSL .tmp/manual-model-connection-20acc0df/report.md；完整日志在 .tmp/configuration-review-validation/。证据仅本地保存，不含用户 Key。真实 OpenCSI 的生成请求曾被自动权限审核拒绝，本轮未重试，也未用产品接口间接执行；这些本地结果不宣称该商业网关生成已通过。
+
+### 1.2 用户手动配置反馈后的修订
+
+设计 v22 / 开发 v12 替代 F 的额外 HTTP 确认要求：移除黄色卡片及复选框，手动列表不增加确认步骤，保存及测试保留上游原有的付费探测同意。目标快照仅作版本检查，不是风险同意或 Agent 授权。后端兼容只传付费 consent 的手动客户端；Agent 提案的目的地主机保护保持独立。
+
+澄清此前浏览器证据：自动化只能操作内置浏览器，先前刷新并未刷新用户截图中的 Chrome。用户自行硬刷新后确认 Chrome 出现黄色区域，且勾选后仍报连接关闭；不能把内置浏览器旧通知消失写成真实网关问题解决。
+
+2026-10-21 21:38～21:40 的本机 Meta 日志显示到 `113.46.219.251:8080` 的 DIRECT TCP 拨号超时；无凭据 GET 在 Windows/WSL 可复现关闭或超时，本地代理返回 502。这是本次网络诊断证据，未据此宣称服务商永久不可用。未修改系统路由或代理，也未重试被拒绝的真实 Key 生成请求。当前表单专项 54/54 通过，完整回归和本候选浏览器验证结果待回填；F 的结果不替代本修订的验证。
 
 ## 2. 修复前 E 基线的专项与端到端证据
 

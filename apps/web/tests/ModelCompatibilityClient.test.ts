@@ -24,13 +24,13 @@ test('shipped Settings client sends consent and explicit compatibility mode with
     assert.deepEqual(seen.map(([path, options]) => [path, JSON.parse(options.body), options.headers.authorization]), [['/api/models/a%2Fb/test', { consent: true, compatibility: false }, 'Bearer synthetic-key'], ['/api/models/a%2Fb/test', { consent: true, compatibility: true }, 'Bearer synthetic-key']]);
   } finally { globalThis.fetch = previous; }
 });
-test('CFG-R14 manual HTTP acknowledgement is serialized for the exact profile only', async () => {
+test('CFG-R14 manual target snapshot is serialized without an extra consent field', async () => {
   const previous = globalThis.fetch;
   let body: any;
   globalThis.fetch = async (_path, options) => { body = JSON.parse(options!.body as string); return Response.json({ ok: true }); };
   try {
-    const plaintextHttpConsent = { baseUrl: 'http://gateway.invalid/v1', profileUpdatedAt: 'revision-1' };
-    await new SettingsApiClient('synthetic-key').testModel('manual-model', false, plaintextHttpConsent);
-    assert.deepEqual(body, { consent: true, compatibility: false, plaintextHttpConsent });
+    const expectedDestination = { baseUrl: 'http://gateway.invalid/v1', profileUpdatedAt: 'revision-1' };
+    await new SettingsApiClient('synthetic-key').testModel('manual-model', false, expectedDestination);
+    assert.deepEqual(body, { consent: true, compatibility: false, expectedDestination });
   } finally { globalThis.fetch = previous; }
 });

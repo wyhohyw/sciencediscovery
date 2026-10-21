@@ -1,4 +1,4 @@
-# 对话内按需配置 · 完整设计 v21（合入前审查修订；任务选项、运行级覆盖与七项配置能力）
+# 对话内按需配置 · 完整设计 v22（合入前审查修订；任务选项、运行级覆盖与七项配置能力）
 
 **本功能将任务所需的配置变更纳入对话执行链路：Agent 识别配置缺口并提出具体变更，用户确认后由系统应用，原任务继续执行。** 目标是减少查找设置、理解字段和切换上下文的成本，同时保留用户对修改内容与作用范围的控制。
 
@@ -7,7 +7,7 @@
 - 想先理解体验：读第 1～4 节；想讨论长任务和实现方式：再读第 8～10 节。
 - 需要核对交付：读第 2、12、13 节；维护者决策与分批开发见第 15 节；本轮交付及证据入口见第 16 节。图中的“目标设计”不代表当前全部完成。
 - 对比其他产品的机制与本功能定位，直接读第 14 节；JiuwenSwarm 已有能力与新增开发分析见配套开发文档第 17 节。
-- 技术契约见[完整开发文档 v11](conversational-settings-development.v11.md)，实测记录见[实现与实测 v10](conversational-settings-status.v10.md)，来源与固定版本见[竞品与底座调研 v2](conversational-settings-research.v2.md)。
+- 技术契约见[完整开发文档 v12](conversational-settings-development.v12.md)，实测记录见[实现与实测 v10](conversational-settings-status.v10.md)，来源与固定版本见[竞品与底座调研 v2](conversational-settings-research.v2.md)。
 - 本版保留[设计 v18](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings.v18.md)及[历史设计 v17](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings.v17.md)，按 [#278 维护者决策](https://github.com/openJiuwen-ai/sciencediscovery/issues/278#issuecomment-6238467927)更新 P0/P1 已接入内容。代码接线与发布验收分别记录；最终结果见[状态 v10](conversational-settings-status.v10.md)，不能由本次文档更新推定端到端全部通过。
 - 文档日期：2026-10-21。当前为隔离分支中的有限实现，不表示已合入主仓；具体交付与验证范围在正文中分别说明。
 
@@ -442,7 +442,7 @@ Codex/OpenCode/WorkBuddy 是交互与协议参照，不新增这些产品的运�
 | C 上游能力桥接 | 基础合同已实现；core 提交顺序补丁待集成；宿主桥接待开发 | 自研条件写入、凭据所属服务桥接及 core interrupt 贯通后分别验收 |
 | D 逐类扩展 | 模型选择、连接、修复与连接器已接入；其他设置未注册 | 新类型逐项提供领域验证、范围、生效及撤销证据 |
 
-扩展顺序以第 15.5 节为准：通用选项和能力发现先行，再逐类接入；DEV-CFG-08/09 的真实宿主桥接作为另一条开发线推进。各阶段存在依赖，但不同执行器可以按已验证能力分别发布。任意 API/文件导入、高影响设置和未知外部副作用继续单独评估。完整开发文档 v11 按工作包列出复用来源、自研项与验收条件，第 17 节集中分析 JiuwenSwarm 已有能力与新增开发，第 18 节汇总本轮完成、合同验证、待集成补丁和待开发宿主。
+扩展顺序以第 15.5 节为准：通用选项和能力发现先行，再逐类接入；DEV-CFG-08/09 的真实宿主桥接作为另一条开发线推进。各阶段存在依赖，但不同执行器可以按已验证能力分别发布。任意 API/文件导入、高影响设置和未知外部副作用继续单独评估。完整开发文档 v12 按工作包列出复用来源、自研项与验收条件，第 17 节集中分析 JiuwenSwarm 已有能力与新增开发，第 18 节汇总本轮完成、合同验证、待集成补丁和待开发宿主。
 
 工程追溯：本轮代码位于隔离分支 `codex/conversational-settings-review-fixes`；当前提交标识与最终 WSL 证据由发布记录回填。旧 `a88d9283` 只作为 2026-10-16 纵向切片的历史基线。
 
@@ -476,7 +476,7 @@ WorkBuddy 已经公开覆盖了相近的连接器体验，因此本功能应按�
 | 如何减少长任务等待 | 保留独立授权后的 PubMed 白名单与 30 秒取消窗口 | 不把其他产品的全局完全访问或工具 always allow 转换为配置批准 |
 | 是否全部重做底层机制 | Native 沿用既有检查点；JiuwenSwarm 优先复用 core 和已有控制面 | 通过适配补齐 request/run/interrupt 关联、作用范围、版本与外部操作回执 |
 
-产品对比用于解释方案取舍；具体复用来源、JiuwenSwarm 中已有什么以及我们还要开发什么，见[开发文档第 17 节](conversational-settings-development.v11.md)。
+产品对比用于解释方案取舍；具体复用来源、JiuwenSwarm 中已有什么以及我们还要开发什么，见[开发文档第 17 节](conversational-settings-development.v12.md)。
 
 ## 15. 维护者决策对齐与后续开发计划
 
@@ -548,7 +548,7 @@ P0 和 P1 已进入本轮 Native 产品调用路径，最终验证结果见状�
 
 ## 16. 本轮交付边界与证据入口
 
-本节区分源码已接入、测试入口已存在和最终验证结果。不得由文档更新、单元测试或历史模型结果推定新 P0/P1 已全部验收。最终结果见[状态 v10](conversational-settings-status.v10.md)，开发任务与完整设置矩阵见[开发 v11 第 19～20 节](conversational-settings-development.v11.md)。
+本节区分源码已接入、测试入口已存在和最终验证结果。不得由文档更新、单元测试或历史模型结果推定新 P0/P1 已全部验收。最终结果见[状态 v10](conversational-settings-status.v10.md)，开发任务与完整设置矩阵见[开发 v11 第 19～20 节](conversational-settings-development.v12.md)。
 
 ### 16.1 已接入的产品能力
 
@@ -603,11 +603,11 @@ v3 默认人工决定，旧 PubMed 的 30 秒预授权不迁移为新方案授�
 
 真实验收须至少覆盖：无关设置并发变化后原任务继续；目标变化被拦截；离线/已卸载连接器撤销；自定义主机未确认时不能验证或发送密钥；确认后端点变化拒绝；凭据上传失败后不刷新重试；统一无模型入口；确认后同 run 完成；Stop 不被自动恢复。测试数据按创建的精确 ID 清理。
 
-### 17.1 手动 HTTP 网关兼容（CFG-R14）
+### 17.1 手动模型配置保持原操作流程（CFG-R14）
 
-本修订仅调整用户在正式设置页亲自填写的模型连接，不扩大 Agent 提案权限。旧版设计和开发合同见固定提交 [fc620bcb](https://github.com/wyhohyw/sciencediscovery/tree/fc620bcb118a5d6b4f76640837f5bf4cc5ab9bf6/docs/zh/explanation)。
+本修订根据用户试用反馈替代 v21 的额外 HTTP 复选框。v21 和开发 v11 见固定提交 [0ad9bc7d](https://github.com/wyhohyw/sciencediscovery/tree/0ad9bc7d5f9f91e20dc1b8d6a970c97fbddf73ea/docs/zh/explanation)。
 
-- 手动填写 HTTP 地址时，在获取模型列表及保存连接前展示完整目标地址和“API Key 将明文传输”的独立确认；默认不选中。费用确认保持独立。地址、协议、variant 或代理变化后重新确认。
-- 手动模型测试只接受绑定该模型当前 baseUrl 与 updatedAt 的明文确认；公网 HTTP 有 Key 且无有效确认时拒绝，不能持久保存为全局授权。测试发送前复核模型版本及实际目标，变更后拒绝；不跟随重定向。
-- 手动向导验证失败仍精确回滚本次创建的模型和 provider，保留表单便于重试。旧客户端空请求须收到明确的确认/刷新提示，不默认授权。
-- 对话内 model.connect / model.repair_credential 的公网 HTTP 携 Key 禁止规则不变，Agent 参数不能批准手动确认。验收使用虚构凭据和本地/隔离网络 fixture，不以真实商业调用代替回归。
+- 用户在设置页亲自填写地址和 Key 后，可以直接获取模型列表；不增加 HTTP 确认卡或复选框，不因地址使用 HTTP 而额外禁用操作。保存连接和已有模型测试保留上游原有的付费探测同意。
+- 手动测试客户端发送正确 JSON，不得回退成空 body。可随请求附上用户所选目标的版本快照；提供快照时，服务端必须拒绝过期目标。每次实际发送前仍复核保存模型的版本及冻结目标。此快照不是风险授权或 Agent 权限。
+- 失败精确回滚本次创建的记录并保留表单。网络连接被关闭、超时与鉴权拒绝分别保留实际错误，不用增加确认、自动更换目标或宣称保存成功来掩盖连接失败。
+- 对话内 model.connect / model.repair_credential 的独立主机同意、公网 HTTP 携 Key 禁止规则不变；手动设置接口不向 Agent 暴露。当前真实网关的连接故障仍单独诊断，移除额外交互不代表网关已恢复。

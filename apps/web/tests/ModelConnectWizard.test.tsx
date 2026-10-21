@@ -122,7 +122,7 @@ async function acceptProbeCost(renderer: ReactTestRenderer): Promise<void> {
   await act(async () => { label.findByType("input").props.onChange({ target: { checked: true } }); });
 }
 
-test("CFG-R14 manual HTTP gates preview and save, preserves a retry, and invalidates a changed target", async () => {
+test("CFG-R14 manual HTTP lists without an extra checkbox, retains paid consent and preserves a retry", async () => {
   let listings = 0;
   let connects = 0;
   const probes: unknown[][] = [];
@@ -141,19 +141,16 @@ test("CFG-R14 manual HTTP gates preview and save, preserves a retry, and invalid
     renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://gateway.invalid/v1" } });
     renderer!.root.findByProps({ id: "wizard-api-key" }).props.onChange({ target: { value: "synthetic-key" } });
   });
-  const riskInput = () => renderer!.root.findByProps({ className: "manual-http-consent" }).findByType("input");
   const submit = () => renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   const preview = () => renderer!.root.findByProps({ className: "secondary-button compact-button wizard-fetch-models" });
-  assert.equal(riskInput().props.checked, false);
-  assert.equal(preview().props.disabled, true);
-  await act(async () => { preview().props.onClick(); });
-  await acceptProbeCost(renderer!);
-  await act(async () => { submit().props.onClick(); });
-  assert.equal(listings, 0);
-  assert.equal(connects, 0);
-  await act(async () => { riskInput().props.onChange({ target: { checked: true } }); });
+  assert.equal(renderer!.root.findAllByProps({ className: "manual-http-consent" }).length, 0);
+  assert.equal(preview().props.disabled, false);
   await act(async () => { preview().props.onClick(); });
   assert.equal(listings, 1);
+  assert.equal(submit().props.disabled, true, "Only the existing paid probe consent gates Save & connect");
+  await act(async () => { submit().props.onClick(); });
+  assert.equal(connects, 0);
+  await acceptProbeCost(renderer!);
   await act(async () => { submit().props.onClick(); });
   assert.deepEqual(deleted, ["model-1", "provider-1"]);
   assert.equal(renderer!.root.findByProps({ id: "wizard-api-key" }).props.value, "synthetic-key");
@@ -161,8 +158,7 @@ test("CFG-R14 manual HTTP gates preview and save, preserves a retry, and invalid
   assert.equal(probes.length, 2);
   assert.deepEqual(probes[1], ["model-2", false, { baseUrl: "http://gateway.invalid/v1", profileUpdatedAt: "revision-2" }]);
   await act(async () => { renderer!.root.findByProps({ id: "wizard-custom-url" }).props.onChange({ target: { value: "http://another.invalid/v1" } }); });
-  assert.equal(riskInput().props.checked, false);
-  assert.equal(preview().props.disabled, true);
+  assert.equal(preview().props.disabled, false);
   assert.equal(submit().props.disabled, true);
   await act(async () => renderer!.unmount());
 });
@@ -716,7 +712,6 @@ test("custom provider flow: creates custom provider with custom baseUrl and mode
   });
 
   // Submit
-  await act(async () => { renderer!.root.findByProps({ className: "manual-http-consent" }).findByType("input").props.onChange({ target: { checked: true } }); });
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
@@ -782,7 +777,6 @@ test("custom provider without model id: registers every listed model", async () 
   });
 
   // Model identifier intentionally left empty: the listing decides.
-  await act(async () => { renderer!.root.findByProps({ className: "manual-http-consent" }).findByType("input").props.onChange({ target: { checked: true } }); });
   await acceptProbeCost(renderer!);
   const submitButton = renderer!.root.findByProps({ className: "primary-button wizard-submit-button" });
   await act(async () => {
