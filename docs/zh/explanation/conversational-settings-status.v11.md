@@ -1,14 +1,37 @@
 # 对话内按需配置 · 合入前修订与实测 v11
 
-- 日期：2026-10-21；分支：`codex/conversational-settings-review-fixes`。
-- 产品依据：[设计 v23](conversational-settings.v23.md)第 17 节；工程合同：[开发 v13](conversational-settings-development.v13.md)第 21 节，CFG-R01～R14。
+- 日期：2026-10-22；分支：`codex/conversational-settings-review-fixes`。
+- 产品依据：[设计 v23](conversational-settings.v23.md)第 17 节；工程合同：[开发 v13](conversational-settings-development.v13.md)第 21 节，CFG-R01～R15。
 - 上游整合基线：`7ee6c1d0`；修复前审查验收候选 E：`05efd5476e800fb66c6dcc92b80be5aac7bd0849`。原审阅基线 `f58c728b` 留作历史追溯，不代替当前验证。
 - CFG-R14 手动 HTTP 修复候选 F：`20acc0df682eca8fcccbdd1efdcc4cd53662a014`；本轮结果见第 1.1 节。以下 E 的原始证据属于修复前基线，分别保留原候选和计数。
 - E 的公共 HTTP 十步旅程、真实 Flash/浏览器场景与第 3 节根回归属于前轮记录；不能用它们替代 F 的手动连接回归。
 
 ## 1. 本轮修订范围
 
-本轮新增 CFG-R15：configuration 单入口按需发现和上下文预算；实现与本候选验证进行中，以下 G/F/E 证据均为历史基线，不计入本轮通过。预计 6～10 个生产文件，无配置数据迁移。
+本轮 CFG-R15 已完成单入口按需发现、查询分页和模型历史预算控制；当前验收见下表。以下 G/F/E 记录保留为历史证据，不代替 H 的验证。
+
+### CFG-R15 按需查询：本轮实测
+
+候选 H 为 `97ff217b67cc8621031e1fc748cf37d81a61c2c1`，源码清单核对 1,508 个文件。正式 E2E 与完整 WSL 验证固定在该候选；最终文档回填不改变生产代码。改动落在 11 个生产文件，289 行新增、128 行删除，无数据库迁移，复用原七项适配器。
+
+| 本轮验证 | 实际结果与边界 |
+| --- | --- |
+| 固定入口 | 本功能仅暴露 configuration，动作 search/describe/propose；实际发往模型的函数定义 1,162 字节，参数 schema 743 字节，不包含能力字段并集或资源目录；1,000 项资源测试中定义保持不变 |
+| 查询与历史预算 | search ≤4 KiB，describe ≤8 KiB，propose ≤2 KiB；默认 5 条、最多 10 条。千条多字节资源可取全且 ID 不截断。此次产品旅程的搜索/详情正文合计从 2,914 字节缩减为 592 字节摘要；这不是整个模型输入或 token 用量的比例 |
+| 正式产品 API | [configuration-on-demand.mjs](../../../test/api/configuration-on-demand.mjs)，6 步全部通过：固定候选预检、专属夹具、确认后同 run 完成、拒绝后继续且不调用资源、Stop 后不恢复、精确清理与默认值保持。确认路径实际 MCP 调用 1 次，临时选择不写 Session |
+| 浏览器 | ChatGPT 内置浏览器 1280×720：打开空会话没有卡片；输入任务后按需出现卡片、选择仅本次任务、确认、同一 run 完成、回执自动收起、可展开、刷新仍在。公共 API 核对仅 1 个 run、原研究提示仅提交 1 次、保存的连接器仍为 web。未扩写为手机或其他浏览器验收 |
+| 完整 WSL 根回归 | 同一不可变候选，从头执行 pnpm test：3,698 tests、3,697 pass、0 fail、1 skip；唯一跳过项为已获用户允许的 Docker/SSH 外部环境用例；API 1,493/1,493 |
+| 类型与架构 | pnpm typecheck 退出 0；pnpm architecture:check 退出 0，72 tests 通过，291 个包源码文件的边界检查通过 |
+| 文档 | HTML 同源重建；reader 9/9；pnpm docs:check 检查 147 个 Markdown 文件，格式与本地链接均通过 |
+| 清理与运行环境 | 本轮模型、项目与 MCP 按精确 ID 清理；保留当前 12 个既有模型和 3 个既有项目。4420 API / 4421 Runner 健康检查为 200 |
+
+本轮模型使用专属 loopback SSE 测试服务，MCP 使用专属 loopback 协议服务器，通过正式产品启动与公共接口验证真实调用链。没有执行商业模型或真实文献网关调用；历史 E 的真实 Flash 证据不计为 CFG-R15 的真实模型验证。自然语言识别的商业模型覆盖仍是独立边界。
+
+保留失败史：早期脚本使用了与部署不符的本地登录令牌、漏传预览必填 values、假定自定义 MCP 工具名没有哈希，以及在异步生命周期完成前立即断言 Stop；分别修正脚本后，从固定候选完整重跑。一次根回归因本地 SEA 构建未加载进程级 Git 配置而产生 dirty 版本标记失败；修正隔离构建脚本并重建，未放宽产品权限、测试断言或时间预算。失败与最终日志均保留在忽略目录。
+
+正式 API 报告为 `.tmp/configuration-on-demand-evidence/api-report.md`，浏览器步骤与接口核对证据同目录；完成截图为 `.tmp/configuration-on-demand-browser-complete.png`。这些本机证据不提交为仓库产物，复现入口及环境要求写在上述驱动文件中。
+
+### 既有能力的历史修订说明
 
 落实 R01～R13：恢复前仅比较真实运行依赖，同时保留写入时的版本检查；自定义模型目标由用户通过专属入口确认；失效或已卸载连接器仍可撤销；凭据中间预览立即接收新 revision，上传失败可原地重试，同一目标更新保留输入，目标变化清空旧密钥并停止上传。
 

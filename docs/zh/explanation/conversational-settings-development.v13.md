@@ -1,6 +1,6 @@
 # 对话内按需配置 · 完整开发文档 v13
 
-- 日期：2026-10-21；产品依据：[完整设计 v23](conversational-settings.v23.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
+- 日期：2026-10-22；产品依据：[完整设计 v23](conversational-settings.v23.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
 - 本文保留[开发 v8](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v8.md)及[历史开发 v7](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v7.md)，延续完整章节和验收编号，按 [#278 维护者决策](https://github.com/openJiuwen-ai/sciencediscovery/issues/278#issuecomment-6238467927)更新 DEV-CFG-11～17 实施状态。第 19 节记录本轮 P0/P1 接线与未完成边界，第 20 节内嵌完整设置矩阵；最终结果见状态 v11，不由文档更新推定端到端全部通过。
 - 核对范围：隔离分支 `codex/conversational-settings-review-fixes` 本轮实现。最终提交标识与 WSL 结果见[状态 v11](conversational-settings-status.v11.md)；旧 `a88d9283` 只对应 2026-10-16 的历史真实模型用例。
 - 标记约定：“已接入”表示实际产品调用路径；“合同验证”表示接口/模拟器/故障测试已有，真实后端未贯通；“待开发/待集成”表示仍需本项目宿主工作或固定补丁集成，尚不能开放产品承诺。文档中的未来宿主接口不能当作已安装能力。
@@ -975,6 +975,6 @@ POST /api/models/{id}/test 保留 consent=true 和 compatibility，可选 expect
 5. 前端识别 configuration(propose) 的工具完成事件以及时刷新原卡片；search/describe 不触发卡片刷新。卡片 UI/密钥/决定接口不重写。旧事件继续能回放。
 6. 新测试验证 1 与大数量元数据下固定 schema、千条资源分页和多字节名称的预算、无关领域未加载、同领域字段白名单与跨 scope 拒绝、搜索无探测/写入、历史投影不丢协议 ID/非配置研究证据，以及真实 Native 队列、Stop、拒绝、重启和恢复。更新既有脚本模型使用按需协议；产品 API/浏览器旅程须观察实际发往模型的工具定义与结果预算，并验证用户决定后实际任务完成、清理精确 ID。局部测试不替代完整 WSL 构建和根回归。
 
-预计改动集中在 6～10 个生产文件及相应测试/文档，无配置库迁移，不重写七项适配器或修改手动模型接入。最终改动量与执行证据由状态 v11 回填。
+实际改动为 11 个生产文件（289 行新增、128 行删除），另有专项测试、正式 E2E 驱动与版本化文档。无配置库迁移，不重写七项适配器或修改手动模型接入；执行证据见状态 v11。
 
 CFG-R15 的单入口范围是本功能的发现与提案。原有 configure_specialist_runtime 为独立的 Specialist 运行参数工具，保持原行为；它的固定参数不随本配置注册表扩张。后续迁移需要单独定义兼容与权限合同。

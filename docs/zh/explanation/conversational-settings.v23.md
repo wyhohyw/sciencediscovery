@@ -1,4 +1,4 @@
-# 对话内按需配置 · 完整设计 v23（合入前审查修订；任务选项、运行级覆盖与七项配置能力）
+# 对话内按需配置 · 完整设计 v23（按需发现、上下文预算与七项配置能力）
 
 **本功能将任务所需的配置变更纳入对话执行链路：Agent 识别配置缺口并提出具体变更，用户确认后由系统应用，原任务继续执行。** 目标是减少查找设置、理解字段和切换上下文的成本，同时保留用户对修改内容与作用范围的控制。
 
@@ -9,7 +9,7 @@
 - 对比其他产品的机制与本功能定位，直接读第 14 节；JiuwenSwarm 已有能力与新增开发分析见配套开发文档第 17 节。
 - 技术契约见[完整开发文档 v13](conversational-settings-development.v13.md)，实测记录见[实现与实测 v11](conversational-settings-status.v11.md)，来源与固定版本见[竞品与底座调研 v2](conversational-settings-research.v2.md)。
 - 本版保留[设计 v18](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings.v18.md)及[历史设计 v17](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings.v17.md)，按 [#278 维护者决策](https://github.com/openJiuwen-ai/sciencediscovery/issues/278#issuecomment-6238467927)更新 P0/P1 已接入内容。代码接线与发布验收分别记录；最终结果见[状态 v11](conversational-settings-status.v11.md)，不能由本次文档更新推定端到端全部通过。
-- 文档日期：2026-10-21。当前为隔离分支中的有限实现，不表示已合入主仓；具体交付与验证范围在正文中分别说明。
+- 文档日期：2026-10-22。当前为隔离分支中的有限实现，不表示已合入主仓；具体交付与验证范围在正文中分别说明。
 
 ## 1. 问题背景与设计目标
 
@@ -633,3 +633,5 @@ v3 默认人工决定，旧 PubMed 的 30 秒预授权不迁移为新方案授�
 验收 CFG-Q01～Q08：单入口/固定预算；大目录分页与无关信息隔离；单领域脱敏详情；非法输入无副作用；模型历史缩减且协议和审计保留；确认/拒绝/Stop/重启同 run 接续；后续运行设置冻结；正式产品浏览器与 API 旅程。实测结果独立记录于状态 v11，未执行不得计通过。
 
 本节的单入口指本功能的按需发现与配置提案。项目原有的 configure_specialist_runtime 仍按原职责提供独立的 Specialist 运行参数配置；本轮不将其迁入配置注册表，也不改变其权限边界。
+
+按需发现的代价是首次配置通常增加一到两次工具查询往返；不需要配置的研究任务不触发这些查询。历史摘要仍占少量上下文，总历史继续受既有上下文组装预算约束，不能把单入口理解为零上下文成本。
