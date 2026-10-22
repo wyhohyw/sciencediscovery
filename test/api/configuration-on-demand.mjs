@@ -103,7 +103,7 @@ async function start(session, mode) {
 }
 async function decide(session, card, option, decision) {
   if (card.selectedOptionId !== option) card = await api(`/api/sessions/${session.id}/configuration-requests/${card.id}/preview`,
-    { expectedRevision: card.revision, selectedOptionId: option }, "POST", 200);
+    { expectedRevision: card.revision, values: { connectorId: source.sourceId }, selectedOptionId: option }, "POST", 200);
   return api(`/api/sessions/${session.id}/configuration-requests/${card.id}/decision`,
     { revision: card.revision, previewDigest: card.previewDigest, selectedOptionId: option, decision }, "POST", 200);
 }
