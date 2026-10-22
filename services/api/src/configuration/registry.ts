@@ -3,8 +3,7 @@
 import type { ConfigurationCapabilityId, ConfigurationCapabilityView } from "@sciencediscovery/schema";
 import type { ConfigurationAdapter } from "./types.js";
 import { ConfigurationError, integer, invalid } from "./validation.js";
-import { CONFIGURATION_AGENT_DESCRIPTORS, descriptorValuesSchema, type ConfigurationAgentDescriptor } from "./agent-metadata.js";
-import { Type } from "typebox";
+import { CONFIGURATION_AGENT_DESCRIPTORS, type ConfigurationAgentDescriptor } from "./agent-metadata.js";
 const supported = new Set<ConfigurationCapabilityId>(Object.keys(CONFIGURATION_AGENT_DESCRIPTORS) as ConfigurationCapabilityId[]);
 export class ConfigurationRegistry {
   private readonly adapters = new Map<ConfigurationCapabilityId, ConfigurationAdapter>();
@@ -29,14 +28,7 @@ export class ConfigurationRegistry {
   describe() {
     return this.list().map(capability => ({ ...capability, ...this.descriptors.get(capability.id)! }));
   }
-  proposalParameters() {
-    const descriptors = this.describe();
-    return Type.Object({ capabilityId: Type.Union(descriptors.map(item => Type.Literal(item.id))),
-      values: Type.Union(descriptors.map(item => descriptorValuesSchema(item))),
-      reason: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
-      scope: Type.Optional(Type.Union([Type.Literal("session"), Type.Literal("project")])),
-    }, { additionalProperties: false });
-  }
+  fields(id: string) { this.get(id); return structuredClone(this.descriptors.get(id as ConfigurationCapabilityId)!.fields); }
   agentValues(id: string, input: unknown) {
     const adapter = this.get(id);
     const fields = this.descriptors.get(adapter.id)!.fields;

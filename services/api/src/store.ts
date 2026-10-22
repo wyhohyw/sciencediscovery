@@ -474,6 +474,10 @@ export class SessionStore {
   private configurationSkillLibrarySource: () => SkillLibrary[] = () => [];
 
   setConfigurationSkillLibrarySource(source: () => SkillLibrary[]): void { this.configurationSkillLibrarySource = source; }
+  /** Read-only catalog facts for scoped discovery, without collecting unrelated secrets or version hashes. */
+  configurationSkillResources(): { ids: string[]; libraries: SkillLibrary[]; selectionAvailable: boolean } {
+    return { ids: [...this.skillIds].sort(), libraries: structuredClone(this.configurationSkillLibrarySource()), selectionAvailable: !this.everySkillEverywhere };
+  }
   /** Every Session uses every installed skill, whatever its settings say (the JiuwenSwarm backend: its skills are one set). */
   private everySkillEverywhere = false;
   private connectorIds = knownConnectorIdSet();

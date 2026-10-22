@@ -64,10 +64,10 @@ async function fixture(context: TestContext, mode: "settings" | "review" = "sett
       if (!completed.has("p1-read-method")) { tool = "read_skill"; id = "p1-read-method"; args = { skillId: librarySkillId }; }
       else if (!completed.has("p1-read-literature")) { tool = "read_skill"; id = "p1-read-literature"; args = { skillId: "literature-searcher" }; }
       else text = "CONFIGURED_WORKFLOW_COMPLETE";
-    } else if (task && !completed.has("p1-inspect")) { tool = "inspect_configuration"; id = "p1-inspect"; args = {}; }
-    else if (task && !completed.has("p1-skills")) { tool = "propose_configuration"; id = "p1-skills"; args = {
+    } else if (task && !completed.has("p1-inspect")) { tool = "configuration"; id = "p1-inspect"; args = { action: "search", query: "skill thinking" }; }
+    else if (task && !completed.has("p1-skills")) { tool = "configuration"; id = "p1-skills"; args = { action: "propose",
       capabilityId: "skill.select", values: { skillSelectionMode: "selected", enabledSkillIds: ["literature-searcher"], enabledSkillLibraryIds: ["p1-runtime-library"] }, reason: "Use only the requested installed literature workflow and methods library for subsequent research." }; }
-    else if (task && !completed.has("p1-thinking")) { tool = "propose_configuration"; id = "p1-thinking"; args = {
+    else if (task && !completed.has("p1-thinking")) { tool = "configuration"; id = "p1-thinking"; args = { action: "propose",
       capabilityId: "thinking.configure", values: { thinkingMode: "enabled", thinkingEffort: "max" }, reason: "Enable the requested supported deep thinking mode for subsequent tasks." }; }
     else if (task) text = "SETTINGS_PROPOSED_FOR_FUTURE";
     if (!input.stream) {

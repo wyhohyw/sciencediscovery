@@ -3,7 +3,7 @@
 import { filterEnabledMcpSources } from "@sciencediscovery/mcp-sources";
 import type { RuntimeSettingsOverrides } from "@sciencediscovery/schema";
 
-export const CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS = "Before claiming that a required data source is unavailable or substituting generic Web fetching, use inspect_configuration. Its installedConnectors directory is authoritative: installed, ready, actually mounted in this run, saved for the session and policy permission are separate facts. If an exact required resource has canPropose=true, propose connector.enable using its returned ID and wait for the user's choice. A registered but unready source is not uninstalled: explain its finite readinessReason without inventing configuration fixes or weakening network restrictions. Do not guess connector IDs from Specialist descriptions.";
+export const CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS = "When a task needs configuration or an installed resource seems missing, use configuration(search), then describe if needed and propose a user choice. Query actual readiness and activation timing; never guess IDs, repeat declined changes, collect keys in chat or treat network errors as permission to weaken settings.";
 
 /** Registered server facts only; never accept these from Agent tool arguments. */
 export interface ConfigurationConnectorRegistration {

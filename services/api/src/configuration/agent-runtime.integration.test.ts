@@ -18,7 +18,7 @@ import type { ConfigurationRequestView, McpCatalog, McpInvocation, McpInvokeResp
 import { createApiServer, closeApiServer } from "../http/index.js";
 import type { ServerConfig } from "../bootstrap/config.js";
 
-type ModelMessage = { role?: string; content?: unknown; tool_call_id?: string; tool_calls?: Array<{ id?: string; function?: { name?: string } }> };
+type ModelMessage = { role?: string; content?: unknown; tool_call_id?: string; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> };
 type ModelRequest = { stream?: boolean; tools?: Array<{ function?: { name?: string } }>; messages?: ModelMessage[] };
 async function listen(server: Server) {
   await new Promise<void>((done, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", done); });
@@ -41,15 +41,22 @@ async function fixture(context: TestContext, decision: "apply" | "dismiss", auto
     const results = new Set((input.messages ?? []).filter(item => item.role === "tool").map(item => item.tool_call_id));
     const inspection = (input.messages ?? []).find(item => item.role === "tool" && item.tool_call_id === "cfg-inspect");
     let discovered: Array<{ id: string; ready: boolean; runtimeEnabled: boolean; canPropose: boolean; sameRunSupported: boolean }> = [];
-    try { discovered = JSON.parse(typeof inspection?.content === "string" ? inspection.content : "{}").installedConnectors ?? []; } catch { /* Missing discovery evidence must not be replaced with a guessed ID. */ }
-    const selectedConnector = discovered.find(item => item.ready && !item.runtimeEnabled && item.canPropose && item.sameRunSupported);
+    try { discovered = JSON.parse(typeof inspection?.content === "string" ? inspection.content : "{}").items?.map((item: { resource?: unknown }) => item.resource).filter(Boolean) ?? []; } catch { /* Missing discovery evidence must not be replaced with a guessed ID. */ }
+    let selectedConnector = discovered.find(item => item.ready && !item.runtimeEnabled && item.canPropose && item.sameRunSupported);
+    // After proposing, discovery details are elided; the model still has its own exact proposal arguments.
+    if (!selectedConnector && results.has("cfg-propose")) for (const message of input.messages ?? []) for (const call of message.tool_calls ?? []) {
+      try { const value = JSON.parse(call.function?.arguments ?? "{}");
+        if (call.function?.name === "configuration" && value.action === "propose" && value.capabilityId === "connector.enable")
+          selectedConnector = { id: value.values.connectorId, ready: true, runtimeEnabled: false, canPropose: true, sameRunSupported: true };
+      } catch { /* Invalid previous arguments cannot fabricate discovery. */ }
+    }
     const queued = (input.messages ?? []).some(item => item.role === "user" && String(item.content).includes("QUEUE_MARKER"));
     let name: string | undefined, id: string | undefined, args: unknown, text = "Fixture title";
     if (task && queued) text = "QUEUED_TASK_DONE";
-    else if (task && !results.has("cfg-inspect")) { name = "inspect_configuration"; id = "cfg-inspect"; args = {}; }
+    else if (task && !results.has("cfg-inspect")) { name = "configuration"; id = "cfg-inspect"; args = { action: "search", query: "PubMed" }; }
     else if (task && !selectedConnector) text = "DISCOVERY_HAS_NO_READY_CONFIGURABLE_CONNECTOR";
-    else if (task && !results.has("cfg-propose")) { name = "propose_configuration"; id = "cfg-propose"; args = { capabilityId: "connector.enable", values: { connectorId: selectedConnector!.id } }; }
-    else if (task && choiceOptions.repeatNeed && !results.has("cfg-repeat")) { name = "propose_configuration"; id = "cfg-repeat"; args = { capabilityId: "connector.enable", values: { connectorId: selectedConnector!.id } }; }
+    else if (task && !results.has("cfg-propose")) { name = "configuration"; id = "cfg-propose"; args = { action: "propose", capabilityId: "connector.enable", values: { connectorId: selectedConnector!.id } }; }
+    else if (task && choiceOptions.repeatNeed && !results.has("cfg-repeat")) { name = "configuration"; id = "cfg-repeat"; args = { action: "propose", capabilityId: "connector.enable", values: { connectorId: selectedConnector!.id } }; }
     else if (task && decision === "dismiss") text = "CONFIGURATION_DECLINED_CONTINUED";
     else if (task && choiceOptions.choice === "use-web" && !results.has("cfg-web")) { name = "web_search"; id = "cfg-web"; args = { query: "diabetes systematic review" }; }
     else if (task && choiceOptions.choice === "use-web") text = "CONFIGURATION_WEB_ALTERNATIVE_COMPLETE";
@@ -207,7 +214,7 @@ test("CFG Agent runtime: generic proposal blocks, approval resumes the same run,
   assert.ok(laterCompleted.startedAt! >= completed.finishedAt!, "The queued run must start only after the original run ends");
   assert.equal(completed.id, original.run.id); assert.equal(completed.userMessageId, original.run.userMessageId);
   assert.equal(f.invocations(), 1);
-  for (const name of ["inspect_configuration", "propose_configuration", "mcp__pubmed__search"]) assert.equal(f.issued.filter(item => item === name).length, 1, `${name} must not replay`);
+  for (const [name, count] of [["configuration", 2], ["mcp__pubmed__search", 1]] as const) assert.equal(f.issued.filter(item => item === name).length, count, `${name} must not replay`);
   const events = await f.ok<SessionRunEvent[]>(`${f.path}/runs/${completed.id}/events`);
   assert.equal(events.filter(item => item.event.type === "run.completed").length, 1);
   const searches = await f.ok<McpInvocation[]>(`${f.path}/mcp/invocations`); assert.equal(searches.filter(item => item.sourceId === "pubmed").length, 1);
@@ -222,7 +229,7 @@ test("CFG Agent runtime: refusing the selected option continues original history
   const f = await fixture(context, "dismiss"); const original = await f.start();
   assert.equal((await f.decide(original.card)).status, 200);
   const completed = await f.waitRun(original.run.id, "completed"); assert.equal(completed.userMessageId, original.run.userMessageId);
-  assert.equal(f.invocations(), 0); assert.equal(f.issued.filter(name => name === "propose_configuration").length, 1);
+  assert.equal(f.invocations(), 0); assert.equal(f.issued.filter(name => name === "configuration").length, 2);
   const detail = await f.ok<SessionDetail>(f.path);
   assert.equal(detail.messages.filter(message => message.role === "assistant" && message.content.includes("CONFIGURATION_DECLINED_CONTINUED")).length, 1);
   assert.ok(f.modelRequests.some(request => JSON.stringify(request.messages).includes("The user declined enabling")));
@@ -252,7 +259,7 @@ test("CFG-T36: a v3 choice cannot inherit the previous PubMed thirty-second auth
   assert.equal((await f.decide(original.card)).status, 200);
   const completed = await f.waitRun(original.run.id, "completed");
   assert.equal(completed.id, original.run.id); assert.equal(completed.userMessageId, original.run.userMessageId);
-  assert.equal(f.invocations(), 1); assert.equal(f.issued.filter(name => name === "propose_configuration").length, 1);
+  assert.equal(f.invocations(), 1); assert.equal(f.issued.filter(name => name === "configuration").length, 2);
   const saved = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
   assert.equal(saved.state, "applied"); assert.equal(saved.decisionSource, "user"); assert.equal(saved.activation.state, "active");
   const events = await f.ok<SessionRunEvent[]>(`${f.path}/runs/${original.run.id}/events`);
@@ -328,7 +335,7 @@ test("CFG-T31: SIGKILL after durable run-only approval recovers activation and t
   assert.equal(completed.id, original.run.id); assert.equal(completed.userMessageId, original.run.userMessageId);
   assert.deepEqual(completed.settingsSnapshot, original.run.settingsSnapshot);
   assert.deepEqual(await f.ok(`${f.path}/settings`), before);
-  assert.equal(f.invocations(), 1); assert.equal(f.issued.filter(name => name === "propose_configuration").length, 1);
+  assert.equal(f.invocations(), 1); assert.equal(f.issued.filter(name => name === "configuration").length, 2);
   const runs = await f.ok<SessionRun[]>(`${f.path}/runs`); assert.equal(runs.length, 1);
   const events = await f.ok<SessionRunEvent[]>(`${f.path}/runs/${original.run.id}/events`);
   assert.equal(events.filter(event => event.event.type === "run.completed").length, 1);

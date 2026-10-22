@@ -12,10 +12,20 @@ import { ConfigurationRequestCard, type ConfigurationRequestActions } from "../s
 import { ApiRequestError } from "../src/api/auth.js";
 import { LocaleProvider } from "../src/i18n/index.js";
 import { QuickConfigurationMenu } from "../src/configuration/QuickConfigurationMenu.js";
-import { genericConfigurationPresentation, mergeConfigurationRequests, shouldPollConfigurationRequest } from "../src/configuration/presentation.js";
+import { genericConfigurationPresentation, isConfigurationProposalTrace, mergeConfigurationRequests, shouldPollConfigurationRequest } from "../src/configuration/presentation.js";
 import type { ChatMessage } from "@sciencediscovery/schema";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
+test("CFG-Q08: only an actual configuration proposal completion refreshes cards; historical proposal traces remain readable", () => {
+  assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "search" } }), false);
+  assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "describe" } }), false);
+  assert.equal(isConfigurationProposalTrace({ name: "configuration", details: { configurationAction: "propose" } }), true);
+  assert.equal(isConfigurationProposalTrace({ name: "configuration", details: null }), false);
+  assert.equal(isConfigurationProposalTrace({ name: "paper_search", details: { configurationAction: "propose" } }), false);
+  assert.equal(isConfigurationProposalTrace({ name: "propose_configuration" }), true);
+  assert.equal(isConfigurationProposalTrace({ name: "propose_connector_enable" }), true);
+});
 
 function request(overrides: Partial<ConfigurationRequestView> = {}): ConfigurationRequestView {
   return {

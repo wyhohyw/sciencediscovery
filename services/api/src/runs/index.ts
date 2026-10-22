@@ -23,7 +23,7 @@ import { persistNativeConfigurationWait } from "../configuration/runtime-bridge.
 import { nativeToolFingerprint, verifyNativeConfigurationToolAssembly } from "../configuration/native-activation.js";
 import { nativeApprovedRunConnectorIds, nativeConfigurationChoiceRecord, nativeRunOverlay, recordNativeChoiceCheckpoint, recordNativeRunChoiceContext } from "../configuration/native-choices.js";
 import { configurationFramework } from "../configuration/framework.js";
-import { configurationConnectorDirectory, CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS } from "../configuration/connector-directory.js";
+import { CONFIGURATION_CONNECTOR_DISCOVERY_INSTRUCTIONS } from "../configuration/connector-directory.js";
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@sciencediscovery/tools";
@@ -783,39 +783,10 @@ async function executeAgentRun(
         sessionId,
       }, ideaTreeExecutor)
     : [];
-  const savedConnectorSettings = store.getSessionSettings(sessionId).effective;
-  const configurableConnectors = configurationConnectorDirectory({
-    registrations: configurationFramework(store).options.connectors?.(sessionId) ?? [],
-    runtimeEnabledConnectorIds: settingsSnapshot.enabledConnectorIds,
-    sessionEnabledConnectorIds: savedConnectorSettings.enabledConnectorIds,
-    runtimePlugins: settingsSnapshot.plugins, sessionPlugins: savedConnectorSettings.plugins,
-    nativeExecutor: !jiuwenSwarmConfigFromEnv(), runBound: true,
-  }).filter(row => row.canPropose);
-  const connectorProposalParameters = Type.Object({
-    connectorId: Type.String({ minLength: 1, maxLength: 100 }),
-  });
-  const proposeConnectorTool: AgentTool<typeof connectorProposalParameters> = {
-    name: "propose_connector_enable",
-    label: "Request connector configuration",
-    description: `If the user task needs an installed connector that is not enabled, request user confirmation before using it. Available connectors: ${configurableConnectors.map((item) => `${item.id} (${item.name})`).join(", ")}. Call this before taking actions that depend on the connector. This tool only proposes a change; it cannot approve it. After calling, stop at a safe point. The system will resume the task after confirmation.`,
-    parameters: connectorProposalParameters,
-    execute: async (_toolCallId, params) => {
-      const connector = configurableConnectors.find((item) => item.id === params.connectorId);
-      if (!connector || mcpCatalog.getStatus(connector.id).status !== "ready") {
-        throw new Error("Connector is not available for configuration");
-      }
-      const proposal = await configurationFramework(store).propose(sessionId, { protocolVersion: 3,
-        capabilityId: "connector.enable", values: { connectorId: connector.id }, runId,
-        reason: "CONNECTOR_REQUIRED_FOR_TASK" });
-      return { content: [{ type: "text", text: JSON.stringify({ requestId: proposal.id, state: proposal.state,
-        instruction: "Stop at a safe point while configuration is pending. The system will resume this task after confirmation." }) }] };
-    },
-  };
   const leadExtraTools = [
     ...ideaTreeTools,
     ...authorityTools,
     ...createConfigurationAgentTools({ store, sessionId, runId }),
-    ...(configurableConnectors.length ? [proposeConnectorTool] : []),
     createSessionTitleTool(store, sessionId, async (updated) => {
       await emit({ session: updated, type: "session.updated" });
     }),

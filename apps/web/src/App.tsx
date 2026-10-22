@@ -230,7 +230,7 @@ import { ProviderModelSettings, type ProviderModelSettingsHandle } from "./Provi
 
 import { ConversationalConnectorCard } from "./configuration/ConversationalConnectorCard.js";
 import { ConversationalConnectorReceipt } from "./configuration/ConversationalConnectorReceipt.js";
-import { connectorConfigurationPresentation, genericConfigurationPresentation, mergeConfigurationRequests, shouldPollConfigurationRequest } from "./configuration/presentation.js";
+import { connectorConfigurationPresentation, genericConfigurationPresentation, isConfigurationProposalTrace, mergeConfigurationRequests, shouldPollConfigurationRequest } from "./configuration/presentation.js";
 import { ConfigurationRequestCard, isConfigurationRequestView } from "./configuration/ConfigurationRequestCard.js";
 import { QuickConfigurationMenu } from "./configuration/QuickConfigurationMenu.js";
 import { modelThinkingControls, modelVariantThinkingControls, normalizeSessionThinking } from "./modelThinking.js";
@@ -3377,7 +3377,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
     if (streamEvent.type === "session.updated") {
       syncSessionSummary(streamEvent.session);
     }
-    if ((streamEvent.type === "tool.completed" && ["propose_connector_enable", "propose_configuration"].includes(streamEvent.trace.name))
+    if ((streamEvent.type === "tool.completed" && isConfigurationProposalTrace(streamEvent.trace))
       || streamEvent.type === "run.status") {
       void client.listConfigurationRequests(sessionId).then(({ items }) => {
         if (shouldApplySessionScopedUpdate(sessionId, activeSessionIdRef.current)) receiveConfigurationRequests(items);

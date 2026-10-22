@@ -1,15 +1,15 @@
-# 对话内按需配置 · 完整开发文档 v12
+# 对话内按需配置 · 完整开发文档 v13
 
-- 日期：2026-10-21；产品依据：[完整设计 v22](conversational-settings.v22.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
-- 本文保留[开发 v8](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v8.md)及[历史开发 v7](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v7.md)，延续完整章节和验收编号，按 [#278 维护者决策](https://github.com/openJiuwen-ai/sciencediscovery/issues/278#issuecomment-6238467927)更新 DEV-CFG-11～17 实施状态。第 19 节记录本轮 P0/P1 接线与未完成边界，第 20 节内嵌完整设置矩阵；最终结果见状态 v10，不由文档更新推定端到端全部通过。
-- 核对范围：隔离分支 `codex/conversational-settings-review-fixes` 本轮实现。最终提交标识与 WSL 结果见[状态 v10](conversational-settings-status.v10.md)；旧 `a88d9283` 只对应 2026-10-16 的历史真实模型用例。
+- 日期：2026-10-21；产品依据：[完整设计 v23](conversational-settings.v23.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
+- 本文保留[开发 v8](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v8.md)及[历史开发 v7](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v7.md)，延续完整章节和验收编号，按 [#278 维护者决策](https://github.com/openJiuwen-ai/sciencediscovery/issues/278#issuecomment-6238467927)更新 DEV-CFG-11～17 实施状态。第 19 节记录本轮 P0/P1 接线与未完成边界，第 20 节内嵌完整设置矩阵；最终结果见状态 v11，不由文档更新推定端到端全部通过。
+- 核对范围：隔离分支 `codex/conversational-settings-review-fixes` 本轮实现。最终提交标识与 WSL 结果见[状态 v11](conversational-settings-status.v11.md)；旧 `a88d9283` 只对应 2026-10-16 的历史真实模型用例。
 - 标记约定：“已接入”表示实际产品调用路径；“合同验证”表示接口/模拟器/故障测试已有，真实后端未贯通；“待开发/待集成”表示仍需本项目宿主工作或固定补丁集成，尚不能开放产品承诺。文档中的未来宿主接口不能当作已安装能力。
 
 ## 1. 交付范围与技术决策
 
 当前通用切片包含七个已注册适配器：`model.select`、`model.connect`、`model.repair_credential`、`connector.enable`、`skill.select`、`thinking.configure`、`review.configure`。公共服务处理版本化预览、用户批准、批准后验证、正式提交、receipt 与持久阶段；Native 连接器已接工具装配 witness 和同 run 调度。对话内无模型引导也使用统一持久请求；连接器预检/专用工具和旧 PubMed 计时器保留兼容。设置页继续使用原有模型管理接口。
 
-本轮已经接入注册驱动的 Agent 发现/参数、v3 可信选项、Native 已就绪 MCP 运行级覆盖、结构化替代/拒绝结果及 P1 三项领域。最终测试结果见状态 v10；P2～P4 和实际 JiuwenSwarm 宿主仍按后续计划逐项开发。任意 REST API、STDIO、宿主部署设置不自动获得支持。
+本轮已经接入注册驱动的 Agent 发现/参数、v3 可信选项、Native 已就绪 MCP 运行级覆盖、结构化替代/拒绝结果及 P1 三项领域。最终测试结果见状态 v11；P2～P4 和实际 JiuwenSwarm 宿主仍按后续计划逐项开发。任意 REST API、STDIO、宿主部署设置不自动获得支持。
 
 关键决策：
 
@@ -103,7 +103,7 @@ Agent 只看到脱敏状态与请求 ID。HTTP 列表按同一 ID 合并 v2/v3 �
 
 未知字段、类型、重复 key、凭据占位符不一致、非法枚举与未批准帮助链接均拒绝。Schema 只来自受支持适配器/连接器包。静态帮助地址按服务端 host 白名单且不允许认证信息、query 或 fragment；当前模型适配器不依赖外部帮助脚本。
 
-当前 registry.register 同时保存受信任元数据，目录和 Agent 参数按实际已注册能力生成；通用 `agent-tools.ts` 不再手工枚举四/七类参数并集。P1 normalizer 使用同一字段描述，再执行已安装资源、模型取值和 scope 校验。旧四适配器保留领域内部的反向/凭据校验，不把它们变成 Agent 可写字段。
+registry.register 在服务端保存受信任元数据，单项字段仅供 describe 与领域 normalizer 使用；不再据此生成全能力常驻工具参数。configuration 的固定动作 schema 与能力数量无关，详见第 21.3 节。
 
 ### 3.2 正式来源与生效方式
 
@@ -350,7 +350,7 @@ Stop 与已领取外部操作的检查使用调度租约/取消边界排序。St
 
 ### 6.2 Agent、版本与错误边界
 
-`inspect_configuration` 返回有限目录、脱敏当前值/来源/资源、实际 thinking 取值与后端不可用原因；`propose_configuration` 的七项有限参数由登记元数据生成，不获得批准工具、bearer、handle、headers/env、任意文件或脚本接口。运行中 connector v3 提案绑定原 run；模型与 P1 明确用于后续新排队 run。诊断只提供有限 code 映射；没有串联任意真实工具失败的自动定位和修复，不能将网络失败当作换 Key/代理的证据。Specialist 既有配置与工具组合规则保持原样。
+主 Agent 仅获得 configuration：search 返回相关能力/资源小页，describe 返回单领域字段与脱敏状态，propose 复用现有 v3 请求服务。常驻 schema 不包含七能力的字段并集。未知能力、越权范围、密钥与任意脚本仍拒绝；同 run 与 next_run 的界限不变。
 
 持久 Idempotency-Key 用于提案、预览、决定和凭据上传；同键不同载荷拒绝，不同键也不能重复应用同一 revision。激活/恢复由独立持久 phase/outbox 与租约去重；continue 不被描述为重新应用配置。恢复请求本身不能制造新原始用户提问。
 
@@ -405,7 +405,7 @@ Agent / 普通快照 / SSE / 日志：仅见 missing、provided、expired 等状
 
 独立指令请求用 `user-request:*` 区分，不对应研究 run，不生成 continuation。已有 applied 记录不能作为“仍启用”的判断依据，必须读取当前 effective 设置。待确认请求按会话和连接器复用。
 
-主 Agent 的研究任务可通过通用 `propose_configuration` 请求 `connector.enable`，也保留 `propose_connector_enable` 兼容提案；不要把该模型工具路径描述为所有复合自然语言需求的确定性识别。专用工具仅提供给主 Agent，参数与目录由服务端校验。
+主 Agent 的研究任务通过 configuration 的 search/describe/propose 动作请求 connector.enable。旧三个配置工具不进入新运行；旧已保存工具结果继续作为历史可读。自然语言识别仍由模型判断，实际资源和参数由服务端校验。
 
 Specialist 的现有预设连接器仍可与会话设置组合；本功能不改变该授权/装配规则。当前通用配置工具仅给主 Agent，子 Agent 没有该提案工具。未来如增加，所有提案仍需服务端归属、去重、决定与恢复协调，不能并行卡片各自覆盖设置。测试主 Agent 路径应禁用委派，另测 Specialist 既有路径。
 
@@ -573,7 +573,7 @@ API 定时器识别同 ID 的 v2 请求时，必须调用 `framework.decide(...,
 | DEV-CFG-03 验证/凭据 | ModelConnectWizard、现有密钥库、WorkSwarm 凭据服务 | 草稿/引用桥接、获准验证、认证修复适配器 | 同一资源单一正式来源，取消不提前保存/连接，输入脱敏 |
 | DEV-CFG-04 运行协调 | Native 检查点与调度 | runtime-bridge、激活/恢复回执、故障核对 | 同 run、无提前最终答复，保存/生效/继续分别验证 |
 | DEV-CFG-05 前端 | 现有卡片/ProcessRecord、声明式表单模式 | 归一化 renderer、状态映射和范围预览 | 不引入上游全局 store，快照/事件/设置页一致 |
-| DEV-CFG-06 Agent 接入 | propose_connector_enable、独立指令预检 | inspect/propose 通用工具与受控诊断 | 不获得批准/写配置/密钥工具，Specialist 既有规则保留 |
+| DEV-CFG-06 Agent 接入 | propose_connector_enable、独立指令预检 | 单入口按需查询/提案与受控诊断 | 不获得批准/写配置/密钥工具，Specialist 既有规则保留 |
 | DEV-CFG-07 验收发布 | 既有测试与限定真实模型闭环 | 两执行器/两基线合同、故障与兼容回归 | 承诺能力逐项验收，完整 WSL 检查与清理记录齐全 |
 | DEV-CFG-08 外部控制面 | WorkSwarm config/model/MCP 管理与连接/重载 | 条件写入/幂等宿主接口、操作 worker、query/reconcile | 超时未知不盲重试，远端结果与激活独立核对 |
 | DEV-CFG-09 JiuwenSwarm 接续 | core interrupt/resume/checkpointer、上游交互合同 | interrupt/run 绑定、状态顺序、工具刷新和 Stop 桥接 | 原 run 实际调用新工具；重启、错配、重复/迟到决定通过 |
@@ -613,7 +613,7 @@ API 定时器识别同 ID 的 v2 请求时，必须调用 `framework.decide(...,
 
 `dist` 必须排除。本轮曾因中途同步 Windows Runner `dist`，覆盖 Linux SEA 的 build-info，导致版本元数据不一致；补齐 Linux 产物后再同步源码仍会重新引入该问题。同步完成后才在 WSL 构建、生成 SEA 和运行测试，期间不再次同步。禁止未经确认使用 `rsync --delete`。
 
-适用命令如下；这是开发验证要求，本轮完整 WSL 检查结果由根流程统一回填，状态 v10 单独列明待执行、通过或失败：
+适用命令如下；这是开发验证要求，本轮完整 WSL 检查结果由根流程统一回填，状态 v11 单独列明待执行、通过或失败：
 
 ```bash
 rsync -a \
@@ -631,9 +631,9 @@ pnpm typecheck
 pnpm test
 ```
 
-优先用普通用户运行测试。在 WSL root 环境执行包含“不允许写目录”断言的完整套件时，需要让测试进程遵循目录 mode bits；本轮使用 `setpriv --bounding-set=-dac_override,-dac_read_search pnpm test`。这只是去除 root 的权限绕过能力，不跳过测试、不改产品逻辑或测试断言。完整结果仍以状态 v10 的最终记录为准。
+优先用普通用户运行测试。在 WSL root 环境执行包含“不允许写目录”断言的完整套件时，需要让测试进程遵循目录 mode bits；本轮使用 `setpriv --bounding-set=-dac_override,-dac_read_search pnpm test`。这只是去除 root 的权限绕过能力，不跳过测试、不改产品逻辑或测试断言。完整结果仍以状态 v11 的最终记录为准。
 
-资源受限时可设置 `pnpm_config_workspace_concurrency=1` 串行运行各包。历史全包回归曾因 executor 的真实 Docker/SSH 外部用例缺少 Docker 而失败；用户已明确跳过这一项，该决定继续适用于本轮。普通包命令复用 `SCIENCE_AGENT_DOCKER_SSH_TEST=1` 显式启用，否则输出带原因的 skip；共享测试计划显式选中该外部用例时仍实际执行。Docker/SSH 真实部署链路仍记为未验证，skip 不是通过；本轮新增生产代码需要重新验证，最终结果见状态 v10，不沿用历史成绩。
+资源受限时可设置 `pnpm_config_workspace_concurrency=1` 串行运行各包。历史全包回归曾因 executor 的真实 Docker/SSH 外部用例缺少 Docker 而失败；用户已明确跳过这一项，该决定继续适用于本轮。普通包命令复用 `SCIENCE_AGENT_DOCKER_SSH_TEST=1` 显式启用，否则输出带原因的 skip；共享测试计划显式选中该外部用例时仍实际执行。Docker/SSH 真实部署链路仍记为未验证，skip 不是通过；本轮新增生产代码需要重新验证，最终结果见状态 v11，不沿用历史成绩。
 
 本轮浏览器验收使用 `http://127.0.0.1:4420`（Runner 4421，evolve 4423）。Windows 已有另一实例占用 4410，因此保留原实例并给新 WSL 构建另分配端口；核对 `/health` 的 Linux Runner 身份后才操作临时项目。不能仅凭相同端口或页面标题推定浏览器访问的是本轮代码。
 
@@ -658,9 +658,9 @@ pnpm test
 
 ## 16. 实施状态、交付记录与版本
 
-上一轮四适配器与 Native 协调记录于设计/开发/状态 v17/v7/v7，v18/v8 明确下一阶段目标；本轮 v19/v9 更新已进入隔离分支调用路径的 P0/P1 七能力、v3 选择与 Native overlay。历史[状态 v7](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-status.v7.md)保留；最新构建、WSL、真实模型、浏览器及崩溃恢复的最终结果见[状态 v10](conversational-settings-status.v10.md)。源码接线不代表已经合入主仓或全部验收。
+上一轮四适配器与 Native 协调记录于设计/开发/状态 v17/v7/v7，v18/v8 明确下一阶段目标；本轮 v19/v9 更新已进入隔离分支调用路径的 P0/P1 七能力、v3 选择与 Native overlay。历史[状态 v7](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-status.v7.md)保留；最新构建、WSL、真实模型、浏览器及崩溃恢复的最终结果见[状态 v11](conversational-settings-status.v11.md)。源码接线不代表已经合入主仓或全部验收。
 
-已本地执行的核心、领域、凭据与真实 HTTP stub 验证见状态 v10；单元/模拟通过不等于真实 WorkSwarm 服务已接通。2026-10-16 的真实 DeepSeek/PubMed 同 run 记录只证明旧切片。新版本真实模型/浏览器闭环若未重跑，则继续明确标记待验证。
+已本地执行的核心、领域、凭据与真实 HTTP stub 验证见状态 v11；单元/模拟通过不等于真实 WorkSwarm 服务已接通。2026-10-16 的真实 DeepSeek/PubMed 同 run 记录只证明旧切片。新版本真实模型/浏览器闭环若未重跑，则继续明确标记待验证。
 
 完整发布仍需列出适配器支持表、schema/迁移影响、CFG 断言、故障与并发证据、WSL 命令结果、真实/模拟边界和测试数据清理。JiuwenSwarm 宿主与外部条件写入缺口不因本轮端口代码和合同测试而消失。
 
@@ -731,7 +731,7 @@ pnpm test
 
 ## 18. 本轮任务拆分、交付状态与后续工作
 
-这里的“已接入”只说明实现进入本轮实际调用路径；最终验收以状态 v10 的 WSL 及闭环结果为准。“合同验证”不能在评审中改写成“已连接真实 JiuwenSwarm”。
+这里的“已接入”只说明实现进入本轮实际调用路径；最终验收以状态 v11 的 WSL 及闭环结果为准。“合同验证”不能在评审中改写成“已连接真实 JiuwenSwarm”。
 
 | 工作包 | 本轮交付 | 当前状态 | 对应验收与下一步 |
 |---|---|---|---|
@@ -741,14 +741,14 @@ pnpm test
 | DEV-CFG-04 运行协调 | Native checkpoint 等待、激活/恢复持久阶段、租约、Stop、真实工具描述与装配 witness | 已接入 Native 连接器 | CFG-T11/13/17/18/27/28；模型不热切换，Jiuwen 实际恢复见 DEV09 |
 | DEV-CFG-05 前端 | schema 卡片、专用凭据字段、预览/确认、scope/错误、生效/恢复状态与折叠记录 | 已接入 | CFG-T05/15/19/23；旧向导和专用卡继续兼容，浏览器闭环需单列证据 |
 | DEV-CFG-06 Agent 接入 | inspect/propose 通用工具，有限参数、主 Agent 边界、无批准/密钥工具 | 已接入 | CFG-T07/16/22；保留 legacy 提案，不改变 Specialist 原有装配 |
-| DEV-CFG-07 验收发布 | core/领域/HTTP/凭据/Native/外部故障/前端测试入口 | 新 P0/P1 联合验收由根流程收口；Docker 外部用例按用户决定明确跳过 | 历史成绩见状态 v7；最新构建、全套/专项、真实/模拟边界与临时 ID 清理见状态 v10，不能沿用旧成绩声称新能力通过 |
+| DEV-CFG-07 验收发布 | core/领域/HTTP/凭据/Native/外部故障/前端测试入口 | 新 P0/P1 联合验收由根流程收口；Docker 外部用例按用户决定明确跳过 | 历史成绩见状态 v7；最新构建、全套/专项、真实/模拟边界与临时 ID 清理见状态 v11，不能沿用旧成绩声称新能力通过 |
 | DEV-CFG-08 外部控制面 | HttpBackendControl、不可变 operation、SQLite journal、query-only 超时恢复 worker | 基础合同已实现；宿主控制面待开发 | CFG-T24/28；本项目需统一 Web/TUI/config/model/MCP/凭据写入口的版本、去重与权威查询，并接生产调度 |
 | DEV-CFG-09 JiuwenSwarm 接续 | 精确 request/run/Session/interrupt/checkpoint/generation 校验及 resumeKey 合同；固定 core 补丁提案与真实 handler 临时副本验证 | 基础合同已实现；上游提交顺序补丁待集成；宿主桥接待开发 | CFG-T25/27；需实际 rail 注册、Session/interrupt 持久绑定、精确 InteractiveInput 恢复、目标工具刷新和原 run 事件贯通 |
 | DEV-CFG-10 依赖能力 | 固定基线常量、认证握手、设置/执行器能力矩阵与不支持原因 | 握手/门控已接入 | CFG-T26；旧安装组合不会凭版本名自动获得 same_run 或外部写入 |
 
 后续采用两条开发线：产品扩展按第 19 节的公共合同 → 运行级覆盖/选择恢复 → P1/P2 适配器推进；执行底座继续依次完成 DEV-CFG-08 的实际宿主配置资源与 DEV-CFG-09 的 core interrupt/run 贯通。已有 Native 验收不替代 JiuwenSwarm 证据；每阶段独立给出正式存储归属、批准范围、实际生效与恢复结果。
 
-历史 v2 Native PubMed 保留 30 秒独立授权策略与双重复核；新 v3 请求撤回旧计时并要求选项批准。旧真实 /runs 结果不扩展为新选择或 P1 的验收，最新重启/跨进程、真实模型与浏览器结果见状态 v10；JiuwenSwarm 对应后端仍待实际贯通。
+历史 v2 Native PubMed 保留 30 秒独立授权策略与双重复核；新 v3 请求撤回旧计时并要求选项批准。旧真实 /runs 结果不扩展为新选择或 P1 的验收，最新重启/跨进程、真实模型与浏览器结果见状态 v11；JiuwenSwarm 对应后端仍待实际贯通。
 
 ## 19. P0/P1 开发合同、任务拆分与实施状态
 
@@ -790,7 +790,7 @@ pnpm test
 
 当前实现只开放 Native 已安装就绪 MCP 连接器的临时启用：复用 MCP 目录与真实工具 factory/witness，检查点恢复后确实能调用新增工具；普通下一任务及已有排队任务继续使用各自原配置。不先写 Session 再回滚，不让任务完成/取消后的清理覆盖用户新编辑。其他设置是否支持 overlay 由适配器和执行器声明，模型不因此支持热切换。关联接续继承 overlay 必须核对同一 task 身份；无可靠关联或无法生效时禁用该选项。
 
-临时使用不等于不持久化恢复信息：非敏感 overlay、决定和回执已独立持久化；崩溃/重启最终结果见状态 v10。当前没有开放新临时凭据；未来若增加，临时凭据必须是后端隔离加密资源，只返回可用状态，限定 task/目标/用途和租约，终态后按策略清理且保留脱敏审计。不得复制到正式全局凭据库、聊天、事件或浏览器存储。没有临时凭据生命周期的适配器暂不开放对应 run-only 选项。
+临时使用不等于不持久化恢复信息：非敏感 overlay、决定和回执已独立持久化；崩溃/重启最终结果见状态 v11。当前没有开放新临时凭据；未来若增加，临时凭据必须是后端隔离加密资源，只返回可用状态，限定 task/目标/用途和租约，终态后按策略清理且保留脱敏审计。不得复制到正式全局凭据库、聊天、事件或浏览器存储。没有临时凭据生命周期的适配器暂不开放对应 run-only 选项。
 
 任务终止、Stop、过期及归档/删除使未提交的覆盖失效，持久租约和恢复动作同时校验 generation。进程重启恢复同一任务所需 overlay；终态后不激活、不复用。不能对结果未知的外部动作重放，也不能在临时选项下偷偷修改共享资源。
 
@@ -820,17 +820,17 @@ DEV-CFG-11 已盘点当前设置页、共享 schema、正式领域 API 与两个
 
 ### 19.7 可拆分工作包与依赖
 
-以下按当前源码调用路径记录，最终验收以状态 v10 为准；DEV-CFG-01～10 的底座与宿主边界继续见第 18 节。
+以下按当前源码调用路径记录，最终验收以状态 v11 为准；DEV-CFG-01～10 的底座与宿主边界继续见第 18 节。
 
 | 工作包 | 已接入产物与主要位置 | 当前状态与剩余验收 |
 |---|---|---|
-| DEV-CFG-11 设置盘点与能力发现 | registry 保存 descriptor；Agent schema 按实际注册生成；inspect 脱敏当前值/来源/资源/后端；settings-catalog 与第 20 节矩阵；diagnostic code 映射 | 已接入有限目录/映射；任意真实失败自动诊断仍未贯通；CFG-T29/33/34/35 最终结果见状态 v10 |
-| DEV-CFG-12 通用选项合同 | v3 options/selectedOptionId/choiceReceipt/needKey、方案绑定 revision/digest、HTTP/幂等/公共投影；旧四能力 v2 兼容，P1 仅 v3 | 已接入；旧决定不能批准新选项，CFG-T30/36 最终结果见状态 v10 |
-| DEV-CFG-13 运行级覆盖 | configuration_native_runs_v3/overlays_v3、精确 task/检查点/批准绑定、实际 MCP factory witness 与获准增量读取 | 已接 Native ready MCP，不含新凭据/模型 overlay；CFG-T31/27/28、崩溃/重启最终结果见状态 v10 |
-| DEV-CFG-14 选择结果与恢复 | 选择 receipt、基线敏感 needKey、已有 Web 可用性/版本检查、dismiss/alternative 返回原目标与检查点 | 已接 Native 四类选择；Stop 不恢复，刷新不决定；CFG-T08/11/13/32 最终结果见状态 v10 |
-| DEV-CFG-15 通用选项前端 | 统一 renderer、选项预览、范围/预算、multiselect/专用字段、主动关闭和折叠回执、中英文 | 已接入；浏览器与 CFG-T15/19/30/32 最终结果见状态 v10 |
-| DEV-CFG-16 P1 适配器组 | skill.select、thinking.configure、review.configure；正式领域同步 hooks；Library pin/CAS；会话审阅队列快照与 sourceRunId、来源合批和最终 live gate | 已接 Native 后续新排队 run；不热切换，Jiuwen scoped 操作拒绝；CFG-T33 与真实消费结果见状态 v10 |
-| DEV-CFG-17 扩展验收与后续适配 | P0/P1 核心/HTTP/UI/实际 /runs/后续运行与审阅专项、故障/重启入口，支持矩阵证据归档 | 验收由根流程收口，最终结果见状态 v10；P2～P4 和真实 Jiuwen 宿主继续待开发，不借旧成绩背书 |
+| DEV-CFG-11 设置盘点与能力发现 | registry 保存 descriptor；Agent schema 按实际注册生成；inspect 脱敏当前值/来源/资源/后端；settings-catalog 与第 20 节矩阵；diagnostic code 映射 | 已接入有限目录/映射；任意真实失败自动诊断仍未贯通；CFG-T29/33/34/35 最终结果见状态 v11 |
+| DEV-CFG-12 通用选项合同 | v3 options/selectedOptionId/choiceReceipt/needKey、方案绑定 revision/digest、HTTP/幂等/公共投影；旧四能力 v2 兼容，P1 仅 v3 | 已接入；旧决定不能批准新选项，CFG-T30/36 最终结果见状态 v11 |
+| DEV-CFG-13 运行级覆盖 | configuration_native_runs_v3/overlays_v3、精确 task/检查点/批准绑定、实际 MCP factory witness 与获准增量读取 | 已接 Native ready MCP，不含新凭据/模型 overlay；CFG-T31/27/28、崩溃/重启最终结果见状态 v11 |
+| DEV-CFG-14 选择结果与恢复 | 选择 receipt、基线敏感 needKey、已有 Web 可用性/版本检查、dismiss/alternative 返回原目标与检查点 | 已接 Native 四类选择；Stop 不恢复，刷新不决定；CFG-T08/11/13/32 最终结果见状态 v11 |
+| DEV-CFG-15 通用选项前端 | 统一 renderer、选项预览、范围/预算、multiselect/专用字段、主动关闭和折叠回执、中英文 | 已接入；浏览器与 CFG-T15/19/30/32 最终结果见状态 v11 |
+| DEV-CFG-16 P1 适配器组 | skill.select、thinking.configure、review.configure；正式领域同步 hooks；Library pin/CAS；会话审阅队列快照与 sourceRunId、来源合批和最终 live gate | 已接 Native 后续新排队 run；不热切换，Jiuwen scoped 操作拒绝；CFG-T33 与真实消费结果见状态 v11 |
+| DEV-CFG-17 扩展验收与后续适配 | P0/P1 核心/HTTP/UI/实际 /runs/后续运行与审阅专项、故障/重启入口，支持矩阵证据归档 | 验收由根流程收口，最终结果见状态 v11；P2～P4 和真实 Jiuwen 宿主继续待开发，不借旧成绩背书 |
 
 底座开发线继续 DEV-CFG-08 → DEV-CFG-09，并由 DEV-CFG-10 门控。先接真实权威配置资源和所有相关写入口的版本/回执，再接精确中断、core 补丁与恢复。其合同可与 11/12 协调；未贯通前不开放 JiuwenSwarm 的新修改/同 run 能力，也不以本地测试代替实际宿主测试。
 
@@ -855,23 +855,23 @@ P0 退出需覆盖持久应用、运行级覆盖、可用替代路径及拒绝�
 
 新增能力默认人工决定。保留已有独立授权的 PubMed 30 秒策略时，须限定旧选项、范围、目标和版本；升级到新选项合同需要显式迁移/重新授权，不能选择第一个选项当默认自动提交。维护者没有认可通用倒计时，新设置不继承工具 Always allow 或旧配置授权。聊天误贴 Key 的检测/脱敏另列凭据专项，不承诺识别任意秘密。
 
-本版记录已接入源码，不在文档中预填新的通过数量或全量验收结论。构建、WSL 完整/专项、真实模型与浏览器、崩溃/重启和清理最终结果统一见状态 v10；脚本模型或模拟 Runner 通过不能写成真实商业模型/真实外部链路已验证。
+本版记录已接入源码，不在文档中预填新的通过数量或全量验收结论。构建、WSL 完整/专项、真实模型与浏览器、崩溃/重启和清理最终结果统一见状态 v11；脚本模型或模拟 Runner 通过不能写成真实商业模型/真实外部链路已验证。
 
 ## 20. 完整设置支持矩阵与领域盘点
 
-本节完整内嵌[设置支持矩阵 v1](conversational-settings-capability-matrix.v1.md)正文并按 20.x 编号，方便单页评审，不要求跳转阅读；前置汇总表进一步分列提案、保存和生效维度。源码与实际调用路径优先；最终结果见[状态 v10](conversational-settings-status.v10.md)。独立矩阵保留历史来源，实际验收不得由目录存在推定。
+本节完整内嵌[设置支持矩阵 v1](conversational-settings-capability-matrix.v1.md)正文并按 20.x 编号，方便单页评审，不要求跳转阅读；前置汇总表进一步分列提案、保存和生效维度。源码与实际调用路径优先；最终结果见[状态 v11](conversational-settings-status.v11.md)。独立矩阵保留历史来源，实际验收不得由目录存在推定。
 
-先按产品支持维度分别核对；“已接入”仍不等于最终验收已通过，后端验证结果统一见状态 v10。
+先按产品支持维度分别核对；“已接入”仍不等于最终验收已通过，后端验证结果统一见状态 v11。
 
 | 能力 / 设置组 | 目录识别 | 可提案 | 可保存正式配置 | 当前任务生效 | 后续新排队任务生效 | 后端与验证证据 |
 |---|---|---|---|---|---|---|
-| model.select | 已有模型/来源 | 是 | Session 绑定 | 不热切换 | 是 | 本地正式模型域；实际执行器和最终结果见状态 v10 |
-| model.connect | 有限协议/连接字段 | 是 | 共享资源；首模型 Global 默认明示 | 不热切换，零模型走首次运行入口 | 是 | 本地凭据/模型域；真实/模拟验证分别见状态 v10 |
-| model.repair_credential | 精确模型及凭据状态 | 是 | 指定 profile 覆盖 | 不把修复宣称为活动模型热切换 | 后续使用该 profile 的任务 | 本地隔离验证/正式凭据域；最终结果见状态 v10 |
-| connector.enable | 安装/有效启用集合 | 是 | 保存方案写 Session；run-only/替代/拒绝不写 | Native ready MCP 的保存或 overlay 可同 run；已有 Web 替代沿原可用工具继续 | 只有 Session 保存方案使新任务默认启用；overlay 不传播 | Native 实际工厂/witness；Jiuwen 同 run 尚无实际宿主；最终结果见状态 v10 |
-| skill.select | 安装 ID、库版本和来源 | 是，v3 | Project/Session | 不改变活动装配 | 是，保留已有排队快照 | Native 已接；Jiuwen scoped 选择拒绝；最终结果见状态 v10 |
-| thinking.configure | 实际 variant/模型合法值 | 是，v3 且字段真实受支持 | Session | 不热切换 | 是 | Native 已接；Jiuwen scoped 激活未验收；最终结果见状态 v10 |
-| review.configure | runtime 字段、会话偏好和全局依赖 | 是，v3 | Session runtime + 正式会话审阅域 | 不修改活动/已排队快照；全局开关仍实时约束实际审阅 | 是，automatic/level 额外入队冻结；全局禁用时偏好仍不激活 | Native 及真实审阅 scheduler 已接；Jiuwen scoped 操作拒绝；最终结果见状态 v10 |
+| model.select | 已有模型/来源 | 是 | Session 绑定 | 不热切换 | 是 | 本地正式模型域；实际执行器和最终结果见状态 v11 |
+| model.connect | 有限协议/连接字段 | 是 | 共享资源；首模型 Global 默认明示 | 不热切换，零模型走首次运行入口 | 是 | 本地凭据/模型域；真实/模拟验证分别见状态 v11 |
+| model.repair_credential | 精确模型及凭据状态 | 是 | 指定 profile 覆盖 | 不把修复宣称为活动模型热切换 | 后续使用该 profile 的任务 | 本地隔离验证/正式凭据域；最终结果见状态 v11 |
+| connector.enable | 安装/有效启用集合 | 是 | 保存方案写 Session；run-only/替代/拒绝不写 | Native ready MCP 的保存或 overlay 可同 run；已有 Web 替代沿原可用工具继续 | 只有 Session 保存方案使新任务默认启用；overlay 不传播 | Native 实际工厂/witness；Jiuwen 同 run 尚无实际宿主；最终结果见状态 v11 |
+| skill.select | 安装 ID、库版本和来源 | 是，v3 | Project/Session | 不改变活动装配 | 是，保留已有排队快照 | Native 已接；Jiuwen scoped 选择拒绝；最终结果见状态 v11 |
+| thinking.configure | 实际 variant/模型合法值 | 是，v3 且字段真实受支持 | Session | 不热切换 | 是 | Native 已接；Jiuwen scoped 激活未验收；最终结果见状态 v11 |
+| review.configure | runtime 字段、会话偏好和全局依赖 | 是，v3 | Session runtime + 正式会话审阅域 | 不修改活动/已排队快照；全局开关仍实时约束实际审阅 | 是，automatic/level 额外入队冻结；全局禁用时偏好仍不激活 | Native 及真实审阅 scheduler 已接；Jiuwen scoped 操作拒绝；最终结果见状态 v11 |
 | P2～P4、权限/全局开关及其他盘点项 | 目录列出字段/归属/未支持原因 | 未注册，不生成成功卡 | 本 feature 不写 | 无新承诺 | 无新承诺 | 继续使用正式设置入口；对应适配器及实际后端验收待开发 |
 
 版本日期：2026-10-20。对应设计 v19 §15～16、开发 v9 §19 的 DEV-CFG-11/16，验收 CFG-T29/33/34/35。本文盘点当前正式设置入口，并区分已经接线的领域操作和后续候选。新增源码的 Windows 专项结果只用于开发反馈；WSL、浏览器与真实/脚本模型证据由集成状态记录，不能用本表替代。
@@ -917,7 +917,7 @@ P1 首轮不提供“移除覆盖并恢复继承”的专门动作；未出现�
 | Plugins / Specialist：namespaced `plugins`、`specialistId`、全局 Reviewer Specialist `enabled`、legacy `feedbackPolicy` | plugin scope/资源不同；全局 Reviewer 与会话审阅不同 | PluginControl、scoped editor、Specialist API | plugin config 可能包含敏感信息，不能整体暴露给 inspect；全局开关不是 P1 会话审阅；legacy feedbackPolicy 不恢复为可配置项 |
 | 导入 / 新服务 / OAuth | 来源、路径和资源范围由正式入口决定 | 既有受控文件选择、安装和授权服务 | P4：安全文件选择、认证回调绑定、来源信任、凭据/执行权限及中断恢复；不接受任意 config path |
 
-对应的机器可读有限目录在 `services/api/src/configuration/settings-catalog.ts`，只包含字段名、归属、风险和未支持原因，不包含真实配置值或凭据。`inspect_configuration` 当前值采用显式白名单投影，不返回完整 plugins config、endpoint URL、headers、密码或凭据 handle。
+对应的机器可读有限目录在 `services/api/src/configuration/settings-catalog.ts`，只包含字段名、归属、风险和未支持原因，不包含真实配置值或凭据。`configuration` 的 describe 当前值采用领域白名单投影，不返回完整 plugins config、endpoint URL、headers、密码或凭据 handle。
 
 ### 20.3 目录、参数和诊断如何复用
 
@@ -939,7 +939,7 @@ P1 首轮不提供“移除覆盖并恢复继承”的专门动作；未出现�
 
 ## 21. 审查修订实施与验收（CFG-R01～R14）
 
-本轮以设计 v22 第 17 节为准，保留 `f58c728b` 的可追溯审阅基线，在 `7ee6c1d0` 上整合。不得用删除安全比较来修复误阻塞，不得用通用确认按钮替代明确的自定义凭据接收主机授权。
+本轮以设计 v23 第 17 节为准，保留 `f58c728b` 的可追溯审阅基线，在 `7ee6c1d0` 上整合。不得用删除安全比较来修复误阻塞，不得用通用确认按钮替代明确的自定义凭据接收主机授权。
 
 1. **执行依赖与领域恢复（R01/R03/R08/R10）**：Store 提供语义化有效依赖与范围通知；framework/native activation 使用同一依赖证明。正式写入仍执行 CAS；恢复只看冻结执行所依赖的资源。连接器撤销全链路区分移除与新增；受信任恢复数据支持有界长集合。持久仓库提供待办/到期查询，批量有限且不扫描所有会话。
 2. **目标安全与领域适配（R02/R11）**：统一标准化和分类端点；预设协议/主机有明确映射；用户 HTTP 路由接收专属端点同意并绑定精确目标，Agent 工具不暴露批准字段。验证和连接发送前再次检查。本机/私网按标准化主机字面量分类，独立确认后保留 HTTP 网关兼容，但须明确显示密钥明文传输风险；对话内提案的其余 HTTP 端点拒绝携带凭据，保留禁止重定向的连接测试。Provider 按合法身份复用，不覆盖共享凭据；凭据忙、未知模型取值分别处理。
@@ -948,7 +948,7 @@ P1 首轮不提供“移除覆盖并恢复继承”的专门动作；未出现�
 
 回归测试应以实际失败场景构造，不只断言实现内部字段；主机未确认测试须观察网络未发出，恢复测试须有无关更改仍成功和相关更改拒绝两组对照。凭据重试测试要覆盖中间预览已成功、上传失败、同表单重试成功以及目标切换清空四个阶段。项目/全局通知同时检查其他会话收到更新和旧 run 快照不变。
 
-CFG-R13 补齐原 CFG-01 的发现合同：`inspect_configuration.installedConnectors` 必须由实际注册目录与服务端状态生成，不只返回能力名称或当前启用 ID。通用发现和旧专用提案描述复用同一资源目录；分别表达 installed、ready、原 run 已装配、Session 已保存、相关策略许可和 same-run 支持。未就绪不可被宣传为能立即启用。集成脚本必须先读取发现结果再选中资源、创建提案和验证同 run 完成；真实模型未产生正确提案不能算端到端通过。
+CFG-R13 补齐原 CFG-01 的发现合同：`configuration` 的 `search` / `describe` 资源页必须由实际注册目录与服务端状态生成，不只返回能力名称或当前启用 ID。按需发现复用同一资源目录；分别表达 installed、ready、原 run 已装配、Session 已保存、相关策略许可和 same-run 支持。未就绪不可被宣传为能立即启用。集成脚本必须先读取发现结果再选中资源、创建提案和验证同 run 完成；真实模型未产生正确提案不能算端到端通过。
 
 ### 21.1 模型目的地授权合同
 
@@ -965,3 +965,16 @@ CFG-R13 补齐原 CFG-01 的发现合同：`inspect_configuration.installedConne
 POST /api/models/{id}/test 保留 consent=true 和 compatibility，可选 expectedDestination={baseUrl, profileUpdatedAt} 只用于目标版本检查。客户端从本次表单与服务器返回模型比对后构造快照，不需要用户再次勾选。旧手动客户端只发送付费 consent 也能测试；空 body 仍返回明确提示。提供了错误/过期快照时返回 409；每次发送前复查保存版本和冻结目标，防止兼容性矩阵中途更换地址。
 
 回归覆盖 HTTP 表单无需额外勾选即可获取列表、付费同意前不生成、失败保留草稿并能重试、改地址撤销既有付费同意、已有模型按钮只保留原确认、错误目标/过期版本/测试中修改拦截，以及原 Agent 目的地保护。浏览器与公开 API 的本地假服务仅证明产品路径，不代表真实 OpenCSI 可连接；真实网络故障记录与这些回归结果分开。
+
+### 21.3 按需查询实施（CFG-R15 / CFG-Q01～Q08）
+
+1. agent-tools.ts 只注册 configuration。固定 action、query、capabilityId、targetId、cursor、limit、diagnosticCode、values、reason、scope；values 仅是传输对象，后端继续 registry.agentValues 与领域 normalizer 双重校验。移除主运行的兼容提案工具和资源列表说明。保留历史读取，不为新模型暴露旧工具别名。
+2. 独立 discovery 模块从服务端 registry、安装目录和有效设置投影：search 只匹配相关领域及资源；describe 只输出目标 capability 的 fields、当前值/有限来源与该领域资源页。未支持项只在与查询相关时返回有限原因。模型地址、凭据、handle、headers/env 和任意 plugin 配置不可出现在查询结果。
+3. 查询默认 5、最大 10 条；游标绑定查询与领域，拒绝不匹配或畸形游标。按 UTF-8 字节组装 JSON 页，超过 4/8 KiB 时缩小资源页，不切坏字符串/ID 或 JSON；单条不可容纳时明确报有界错误。提案回执预算 2 KiB。无查询动作可发网络或写设置。
+4. 模型历史投影放在 API-owned Native 组装边界，不能把配置领域放进 runtime-core。只保留最近两份查询详情，提案后同领域旧详情摘要化；仅改模型上下文副本并保留调用配对。工具原始输出、版本记录及持久用户决定保持原审计路径。失败提案不伪装为批准，也不能因摘要丢失而重复已拒绝的 need。
+5. 前端识别 configuration(propose) 的工具完成事件以及时刷新原卡片；search/describe 不触发卡片刷新。卡片 UI/密钥/决定接口不重写。旧事件继续能回放。
+6. 新测试验证 1 与大数量元数据下固定 schema、千条资源分页和多字节名称的预算、无关领域未加载、同领域字段白名单与跨 scope 拒绝、搜索无探测/写入、历史投影不丢协议 ID/非配置研究证据，以及真实 Native 队列、Stop、拒绝、重启和恢复。更新既有脚本模型使用按需协议；产品 API/浏览器旅程须观察实际发往模型的工具定义与结果预算，并验证用户决定后实际任务完成、清理精确 ID。局部测试不替代完整 WSL 构建和根回归。
+
+预计改动集中在 6～10 个生产文件及相应测试/文档，无配置库迁移，不重写七项适配器或修改手动模型接入。最终改动量与执行证据由状态 v11 回填。
+
+CFG-R15 的单入口范围是本功能的发现与提案。原有 configure_specialist_runtime 为独立的 Specialist 运行参数工具，保持原行为；它的固定参数不随本配置注册表扩张。后续迁移需要单独定义兼容与权限合同。

@@ -92,6 +92,7 @@ import { composeRuntime } from "../bootstrap/runtime.js";
 import { runLog } from "../logging.js";
 import { AgentVersionRecorder, jsonValue, type AgentVersioningOptions } from "./versioning.js";
 import { createRuntimePluginScope } from "../plugins/runtime.js";
+import { projectConfigurationHistory } from "../configuration/model-context.js";
 
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 240_000;
 export const DEFAULT_AGENT_TURN_TIMEOUT_MS = 0;
@@ -658,7 +659,7 @@ class NativeAgent implements NativeAgentHandle {
               this.inputStateTurn = input.turn;
             }
             await this.versionRecorder?.captureInputState(this.inputState, input.turn, [...input.history]);
-            return contextAssembler.assemble(input);
+            return contextAssembler.assemble({ ...input, history: projectConfigurationHistory(input.history) });
           },
         },
         modelClient: {

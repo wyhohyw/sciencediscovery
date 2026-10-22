@@ -34,10 +34,10 @@ async function approve(framework: ConversationalConfigurationFramework, view: Co
     { expectedRevision: view.revision, values: framework.service.getRecord(view.sessionId, view.id).input, selectedOptionId: "persist" }) : view;
   return framework.decide(view.sessionId, view.id, { revision: preview.revision, previewDigest: preview.previewDigest!, decision: "apply", ...(preview.protocolVersion === 3 ? { selectedOptionId: "persist" } : {}) });
 }
-test("CFG-T29/33: registry generates all registered Agent parameters and rejects fields belonging to another domain", async context => {
+test("CFG-T29/33: server registry keeps domain fields while the model transport stays constant", async context => {
   const h = await harness(context); const registry = h.framework.service.registry;
-  const parameters = JSON.stringify(registry.proposalParameters());
-  for (const item of registry.describe()) { assert.ok(parameters.includes(item.id)); for (const field of Object.keys(item.fields)) assert.ok(parameters.includes(field)); }
+  const parameters = JSON.stringify(createConfigurationAgentTools({ store: h.store, sessionId: h.session.id, runId: "test-run" })[0]!.parameters);
+  for (const item of registry.describe()) { assert.ok(!parameters.includes(item.id)); for (const field of Object.keys(item.fields)) assert.ok(registry.fields(item.id)[field]); }
   assert.equal(registry.describe().length, 7);
   assert.throws(() => registry.agentValues("model.select", { enabledSkillIds: ["literature"] }));
   assert.throws(() => registry.agentValues("thinking.configure", { command: "install" }));
@@ -131,15 +131,16 @@ test("CFG-T29/34/35: inspection exposes sources and unsupported domains, never m
   const h = await harness(context);
   await h.store.createModel({ name: "Private API", model: "plain", baseUrl: "https://sensitive-endpoint.example/v1", apiToken: "credential-must-never-appear" });
   const tools = createConfigurationAgentTools({ store: h.store, sessionId: h.session.id, runId: "test-run" });
-  const result = await tools[0]!.execute("inspect", {}); const raw = JSON.stringify(result);
+  const result = await tools[0]!.execute("inspect", { action: "describe", capabilityId: "thinking.configure" }); const raw = JSON.stringify(result);
   assert.ok(!raw.includes("credential-must-never-appear")); assert.ok(!raw.includes("sensitive-endpoint.example"));
   const output = JSON.parse(result.content[0]!.text);
-  assert.equal(output.current.skillSelectionMode, "all"); assert.ok(output.sources);
-  assert.ok(output.settingsInventory.some((row: { id: string; capabilities: string[] }) => row.id === "quotas" && row.capabilities.length === 0));
-  assert.equal(output.capabilities.find((item: { id: string }) => item.id === "thinking.configure").available, false);
+  assert.ok(output.current.supported); assert.ok(output.sources);
+  const unsupported = JSON.parse((await tools[0]!.execute("search", { action: "search", query: "quotas" })).content[0]!.text);
+  assert.ok(unsupported.items.some((row: { domain: string; available: boolean }) => row.domain === "quotas" && !row.available));
+  assert.equal(output.available, false); assert.ok(!output.settingsInventory);
   for (const code of ["NETWORK_ERROR", "TIMEOUT", "RATE_LIMITED", "NO_RESULTS", "UNKNOWN"]) assert.deepEqual(configurationDiagnostic(code).capabilityIds, []);
   assert.deepEqual(configurationDiagnostic("CONNECTOR_DISABLED").capabilityIds, ["connector.enable"]);
-  assert.deepEqual(tools.map(tool => tool.name), ["inspect_configuration", "propose_configuration"]);
+  assert.deepEqual(tools.map(tool => tool.name), ["configuration"]);
 });
 
 test("CFG-R13: inspection separates registered, ready, actually mounted, saved and policy-blocked sources", async context => {
@@ -155,11 +156,11 @@ test("CFG-R13: inspection separates registered, ready, actually mounted, saved a
   recordNativeRunChoiceContext({ store: h.store, sessionId: h.session.id, runId: run.id,
     enabledConnectorIds: ["arxiv"], plugins: run.settingsSnapshot.plugins, webSearchAvailable: false, toolCatalogFingerprint: "actual-mounted-arxiv" });
   const inspect = createConfigurationAgentTools({ store: h.store, sessionId: h.session.id, runId: run.id })[0]!;
-  const result = await inspect.execute("inspect", {});
+  const result = await inspect.execute("inspect", { action: "describe", capabilityId: "connector.enable" });
   const output = JSON.parse(result.content[0]!.text);
-  const byId = new Map<string, Record<string, unknown>>(output.installedConnectors.map((row: Record<string, unknown>) => [row.id, row]));
-  assert.deepEqual(output.current.enabledConnectorIds, ["arxiv"]);
-  assert.ok(output.current.snapshotEnabledConnectorIds.includes("pubmed"));
+  const byId = new Map<string, Record<string, unknown>>(output.items.map((row: Record<string, unknown>) => [row.id, row]));
+  assert.deepEqual(output.current.runtimeEnabled.ids, ["arxiv"]);
+  assert.ok(output.current.sessionSaved.ids.includes("pubmed"));
   assert.equal(byId.get("pubmed")?.installed, true); assert.equal(byId.get("pubmed")?.ready, false);
   assert.equal(byId.get("pubmed")?.runtimeEnabled, false); assert.equal(byId.get("pubmed")?.sessionEnabled, true);
   assert.equal(byId.get("pubmed")?.readinessReason, "MCP_CONNECTION_TIMEOUT"); assert.equal(byId.get("pubmed")?.canPropose, false);
@@ -169,17 +170,17 @@ test("CFG-R13: inspection separates registered, ready, actually mounted, saved a
   assert.equal(byId.get("chembl")?.unavailableReason, "CONNECTOR_POLICY_BLOCKED");
   const registered = h.framework.options.connectors(h.session.id);
   h.framework.options.connectors = () => registered.filter(row => row.id !== "uniprot");
-  const unavailable = JSON.parse((await inspect.execute("inspect-again", {})).content[0]!.text);
-  assert.equal(unavailable.capabilities.find((item: { id: string }) => item.id === "connector.enable").available, false);
-  assert.equal(unavailable.capabilities.find((item: { id: string }) => item.id === "connector.enable").unsupportedReason, "NO_READY_CONFIGURABLE_CONNECTOR");
-  assert.deepEqual(unavailable.sameRunCapabilities, []);
+  const unavailable = JSON.parse((await inspect.execute("inspect-again", { action: "describe", capabilityId: "connector.enable" })).content[0]!.text);
+  assert.equal(unavailable.available, false);
+  assert.equal(unavailable.unsupportedReason, "NO_READY_CONFIGURABLE_CONNECTOR");
+  assert.ok(!unavailable.items.some((row: { canPropose: boolean }) => row.canPropose));
 });
 test("CFG-T29/33: Agent proposals use protocol v3 and skip redundant all-mode Skill enablement", async context => {
   const h = await harness(context); const tools = createConfigurationAgentTools({ store: h.store, sessionId: h.session.id, runId: "test-run" });
-  const skipped = await tools[1]!.execute("all", { capabilityId: "skill.select", values: { enabledSkillIds: ["literature"] } });
+  const skipped = await tools[0]!.execute("all", { action: "propose", capabilityId: "skill.select", values: { enabledSkillIds: ["literature"] } });
   assert.equal(JSON.parse(skipped.content[0]!.text).status, "already_effective");
   assert.equal(h.framework.service.list(h.session.id).length, 0);
-  const proposed = await tools[1]!.execute("select", { capabilityId: "skill.select", values: { skillSelectionMode: "selected", enabledSkillIds: ["literature"] }, reason: "Use only literature methods for subsequent tasks" });
+  const proposed = await tools[0]!.execute("select", { action: "propose", capabilityId: "skill.select", values: { skillSelectionMode: "selected", enabledSkillIds: ["literature"] }, reason: "Use only literature methods for subsequent tasks" });
   const { requestId } = JSON.parse(proposed.content[0]!.text); const view = h.framework.service.get(h.session.id, requestId);
   assert.equal(view.protocolVersion, 3); assert.equal(view.activation.mode, "next_run");
   assert.deepEqual(view.options?.map(option => option.kind), ["persisted_apply", "dismiss"]);

@@ -3,6 +3,13 @@
 
 import type { ChatMessage, ConfigurationRequestView, ConnectorConfigurationRequest, SessionRun } from "@sciencediscovery/schema";
 
+/** Completed traces carry result details, not necessarily the original args. */
+export function isConfigurationProposalTrace(trace: { name: string; details?: unknown }): boolean {
+  if (["propose_connector_enable", "propose_configuration"].includes(trace.name)) return true;
+  return trace.name === "configuration" && trace.details !== null && typeof trace.details === "object"
+    && "configurationAction" in trace.details && trace.details.configurationAction === "propose";
+}
+
 /** Once a resolved v2 request has a persisted timeline notice, render its
  * disclosure there exactly once instead of adding a second legacy receipt. */
 export function genericConfigurationPresentation(
