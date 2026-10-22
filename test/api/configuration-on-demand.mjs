@@ -74,7 +74,9 @@ function modelResponse(body) {
     } else if (mode === "DECLINE") content = `${marker}:DECLINED_CONTINUED`;
     else if (!completed.has("cfg-find-tool")) call = action("tool_search", "cfg-find-tool", { query: "lookup" });
     else if (!completed.has("cfg-invoke")) {
-      const mounted = tools.find(tool => tool.function?.name?.startsWith("mcp__") && tool.function.name.endsWith("__lookup"));
+      const discovered = result(messages, "cfg-find-tool");
+      const selected = discovered.find?.(tool => tool.name?.startsWith(`mcp__${source.sourceId.replace(/[^A-Za-z0-9_-]/g, "_")}__`));
+      const mounted = tools.find(tool => selected && tool.function?.name === selected.name);
       assert.ok(mounted, "Approved MCP tool must be assembled before use");
       call = action(mounted.function.name, "cfg-invoke", {});
     } else { assert.ok(String(messages.find(message => message.tool_call_id === "cfg-invoke")?.content).includes("OWNED_RESEARCH_RESULT")); content = `${marker}:RESEARCH_COMPLETE`; }
