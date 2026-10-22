@@ -189,8 +189,13 @@ try {
     await step("Stop suppresses a pending configuration and never resumes it", async () => {
       const before = toolCalls, session = await createSession("STOP"); const { run, card } = await start(session, "STOP");
       await api(`/api/sessions/${session.id}/runs/${run.id}/cancel`, undefined, "POST", 200);
-      const current = await api(`/api/sessions/${session.id}/configuration-requests/${card.id}`);
-      assert.equal(current.state, "cancelled"); assert.equal(toolCalls, before);
+      const current = await until(async () => {
+        const value = await api(`/api/sessions/${session.id}/configuration-requests/${card.id}`);
+        return value.state === "cancelled" ? value : undefined;
+      }, "Stop lifecycle reconciliation");
+      assert.equal(current.state, "cancelled");
+      assert.equal((await api(`/api/sessions/${session.id}/runs`)).find(item => item.id === run.id).status, "cancelled");
+      assert.equal(toolCalls, before);
     });
     assert.ok(!metrics.some(item => item.fixtureError)); outcome = "PASS";
   }
