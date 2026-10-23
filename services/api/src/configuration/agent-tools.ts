@@ -51,13 +51,12 @@ export function createConfigurationAgentTools(input: { store: SessionStore; sess
       : id === "skill.select" && values.skillSelectionMode === undefined && values.enabledSkillLibraryIds === undefined && settings.skillSelectionMode === "all";
     if (alreadyEffective) return { content: [{ type: "text", text: JSON.stringify({ status: "already_effective", instruction: "This capability is already effective. Continue the task without requesting configuration." }) }] };
     const request = await framework.propose(sessionId, { protocolVersion: 3, capabilityId: id, values,
-      ...(id === "connector.enable" ? { runId } : {}),
+      runId,
       ...(args.scope ? { scope: args.scope === "project" ? { kind: "project" as const, id: session.projectId } : { kind: "session" as const, id: sessionId } } : {}),
       reason: typeof args.reason === "string" ? args.reason : "Requested configuration for the user's task" });
     return { content: [{ type: "text", text: JSON.stringify({ requestId: request.id, capabilityId: request.capabilityId, state: request.state,
       activationMode: request.activation.mode, scope: request.scope,
-      instruction: id === "connector.enable" ? "Configuration is pending. Yield at the safe tool-batch boundary; the system resumes this same task after the user's selected configuration, alternative or refusal. Do not produce a final task answer while waiting."
-        : "The card is ready. This is a future-run setting: this active task and already queued runs keep their frozen configuration. Never ask for credentials in chat." }) }] };
+      instruction: "Configuration is pending. Yield at the safe tool-batch boundary; the system resumes this same task after the user decision. Do not produce a final answer while waiting. Activation timing is independent: next_run settings do not change this task or already queued runs. Never ask for credentials in chat." }) }] };
 
   };
   const tool: AgentTool<typeof CONFIGURATION_TOOL_PARAMETERS> = { name: "configuration", label: "Find and propose settings",
@@ -76,7 +75,9 @@ export function createConfigurationAgentTools(input: { store: SessionStore; sess
         return result({ action: "propose", capabilityId: args.capabilityId, ...JSON.parse(output.content[0]!.text) }, CONFIGURATION_CONTEXT_LIMITS.propose);
       } catch (error) {
         return result({ error: error instanceof ConfigurationError ? error.code : "INVALID_CONFIGURATION_INPUT",
-          instruction: error instanceof ConfigurationError && error.code === "CONFIGURATION_NEED_ALREADY_DECIDED"
+          instruction: error instanceof ConfigurationError && error.code === "CONFIGURATION_DECISION_PENDING"
+            ? "An existing configuration decision is pending. Yield at the safe boundary and wait; do not make more proposals or finish the task."
+            : error instanceof ConfigurationError && error.code === "CONFIGURATION_NEED_ALREADY_DECIDED"
             ? "Respect the recorded choice or refusal. Continue using available alternatives; do not repeat this configuration need."
             : "Use search/describe for supported targets and fields. Do not write configuration files, bypass permissions or collect credentials in chat." }, CONFIGURATION_CONTEXT_LIMITS.propose);
       }

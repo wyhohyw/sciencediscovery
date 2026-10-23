@@ -7,6 +7,7 @@ import type { WorkspaceAgentOptions } from "@sciencediscovery/workspace";
 import type { SessionStore } from "../store.js";
 import type { ConfigurationApplyReceipt, ConfigurationRecord } from "./types.js";
 import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
+import { configurationDecisionReady } from "./interaction-wait.js";
 import { canonical, digest } from "./validation.js";
 import { nativeApprovedRunConnectorIds, nativeRunOverlay, validateNativeChoice, nativeExecutionDependenciesCurrent } from "./native-choices.js";
 
@@ -95,6 +96,15 @@ export function verifyNativeConfigurationToolAssembly(input: { store: SessionSto
       validateNativeChoice(input.store, record);
       if (!input.webSearchAvailable || !input.enabledConnectorIds.includes("web")) throw new Error("The selected Native alternative has no executable Web search tool");
     }
+    return;
+  }
+  if (record.plan.activationMode === "next_run" || record.plan.activationMode === "requires_restart") {
+    const saved = db.prepare("SELECT record_json FROM configuration_receipts_v2 WHERE request_id=? AND revision=?")
+      .get(record.view.id, record.view.revision) as { record_json: string } | undefined;
+    const receipt = saved ? JSON.parse(saved.record_json) as ConfigurationApplyReceipt : undefined;
+    if (!configurationDecisionReady(record) || !receipt || receipt.revision !== record.approvedRevision
+      || receipt.previewDigest !== record.approvedDigest || receipt.stopGeneration !== input.store.notifications.generation(input.sessionId))
+      throw new Error("The deferred configuration decision does not match its approved receipt");
     return;
   }
   if (!row) throw new Error("The V2 configuration has no prepared Native activation witness");

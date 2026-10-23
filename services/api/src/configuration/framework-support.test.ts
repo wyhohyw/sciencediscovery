@@ -32,3 +32,23 @@ test("CFG-T26 Native generic Web same-run proposal fails before creating either 
   assert.deepEqual(store.getSessionSettings(session.id), before, "No formal settings are changed before capability admission");
   assert.equal((await store.getSessionRun(session.id, run.id))!.status, "queued");
 });
+
+
+test("CFG-R16-F concurrent capabilities share one pending decision boundary", async context => {
+  const parent = resolve(process.cwd(), ".tmp"); const root = resolve(parent, `configuration-one-wait-${randomUUID()}`);
+  const store = new SessionStore(root); await store.load();
+  context.after(async () => { store.close(); assert.ok(root.startsWith(parent + sep)); await rm(root, { recursive: true, force: true }); });
+  const project = await store.createProject("One configuration decision");
+  const session = await store.createSession(project.id, "Single wait", {}, {}, { allowUnconfiguredModel: true });
+  const run = await store.createSessionRun({ sessionId: session.id, prompt: "Configure two settings", settingsSnapshot: store.resolveRuntimeSettings(session.id).effective });
+  const framework = new ConversationalConfigurationFramework(store, { nativeExecutor: true, connector: () => undefined });
+  const results = await Promise.allSettled([
+    framework.propose(session.id, { protocolVersion: 3, capabilityId: "idea_tree.configure", values: { maxNodes: 20 }, runId: run.id }),
+    framework.propose(session.id, { protocolVersion: 3, capabilityId: "quotas.configure", values: { maxConcurrentSubagents: 2 }, runId: run.id }),
+  ]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  const rejected = results.find(result => result.status === "rejected");
+  assert.ok(rejected?.status === "rejected"); assert.equal(rejected.reason.code, "CONFIGURATION_DECISION_PENDING");
+  assert.equal(framework.repository.list(session.id).length, 1);
+  assert.deepEqual(store.listConnectorConfigurationRequests(session.id), []);
+});

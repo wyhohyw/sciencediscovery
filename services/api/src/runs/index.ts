@@ -19,6 +19,7 @@ import { mainRuntimeConfigTool } from "../specialist-runtime/main-config.js";
 import { codexAgentFactory } from "../specialist-runtime/agent.js";
 import { createSessionTitleTool, sessionTitleInstructions } from "./session-title-tool.js";
 import { materializeArtifact } from "../artifacts/materialize.js";
+import { CONFIGURATION_PENDING_STATES, configurationDecisionReady, getConfigurationInteraction, listConfigurationInteractions } from "../configuration/interaction-wait.js";
 import { persistNativeConfigurationWait } from "../configuration/runtime-bridge.js";
 import { nativeToolFingerprint, verifyNativeConfigurationToolAssembly } from "../configuration/native-activation.js";
 import { nativeApprovedRunConnectorIds, nativeConfigurationChoiceRecord, nativeRunOverlay, recordNativeChoiceCheckpoint, recordNativeRunChoiceContext } from "../configuration/native-choices.js";
@@ -595,6 +596,11 @@ function nativeConfigurationDecisionPrompt(store: SessionStore, sessionId: strin
   const resume = run.configurationResume!;
   const record = nativeConfigurationChoiceRecord(store, sessionId, resume.requestId);
   const choice = record?.view.choiceReceipt;
+  if (record && record.view.capabilityId !== "connector.enable") {
+    const outcome = resume.decision === "dismiss" ? "The user declined the configuration; no change was saved."
+      : `The user approved and saved ${record.view.capabilityId}. Activation mode: ${record.plan.activationMode}. This task keeps its original frozen settings; the saved change applies to future tasks${record.plan.activationMode === "requires_restart" ? " after the required restart" : ""}.`;
+    return `${outcome} The pending configuration interaction is resolved. Continue the original task from this committed checkpoint, or finish reporting the configuration result if that was the original task. Do not repeat completed actions or request this same decision again (needKey=${record.view.needKey ?? resume.requestId}). Earlier pending tool results are historical. This is not a new user request.`;
+  }
   const result = choice?.kind === "alternative"
     ? `The user selected the verified existing Web search alternative (${choice.alternativeId}). Do not enable ${resume.connectorName}. Continue the original research using Web search, preserving the original goal and constraints; disclose source and coverage differences. This choice grants no network, tool or installation permissions.`
     : resume.decision === "apply"
@@ -660,14 +666,16 @@ async function executeAgentRun(
   const configurationResume = persistedRun?.configurationResume;
   const storedCheckpoint = persistedRun?.configurationCheckpoint;
   let checkpointHistory: AgentHistoryMessage[] = [];
+  let checkpointExecutionSettings: { timeouts: ReturnType<SessionStore["getTimeoutSettings"]>; quotas: ReturnType<SessionStore["getQuotaSettings"]> } | undefined;
   if (configurationResume && storedCheckpoint) {
     if (storedCheckpoint.historyRef) {
       const record = (await new VersionStore(store.dataDir).readRecord<{ requestId: string; stopGeneration: number;
-        history: AgentHistoryMessage[] }>(storedCheckpoint.historyRef, "ConfigurationCheckpoint")).value;
+        history: AgentHistoryMessage[]; executionSettings?: typeof checkpointExecutionSettings }>(storedCheckpoint.historyRef, "ConfigurationCheckpoint")).value;
       if (record.requestId !== storedCheckpoint.requestId || record.stopGeneration !== storedCheckpoint.stopGeneration) {
         throw new Error("Configuration checkpoint does not match its source run");
       }
       checkpointHistory = record.history;
+      checkpointExecutionSettings = record.executionSettings;
     } else checkpointHistory = (storedCheckpoint.history ?? []) as AgentHistoryMessage[];
     if (!checkpointHistory.length) throw new Error("Configuration checkpoint has no model history");
   }
@@ -883,7 +891,7 @@ async function executeAgentRun(
     await syncScientificEnvironmentCatalog(store, runnerClient, provenanceRecorder);
     scientificEnvironments = store.listEnvironments();
   }
-  const maxConcurrentSubagents = store.getQuotaSettings().maxConcurrentSubagents ?? DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+  const maxConcurrentSubagents = (checkpointExecutionSettings?.quotas ?? store.getQuotaSettings()).maxConcurrentSubagents ?? DEFAULT_MAX_CONCURRENT_SUBAGENTS;
   const systemPrompt = buildWorkspaceSystemPrompt(
     runtimeSkills,
     Boolean(scientificEnvironments),
@@ -907,8 +915,8 @@ async function executeAgentRun(
       throw new Error("Agent run cancelled");
     }
   };
-  const timeoutSettings = store.getTimeoutSettings();
-  const quotaSettings = store.getQuotaSettings();
+  const timeoutSettings = checkpointExecutionSettings?.timeouts ?? store.getTimeoutSettings();
+  const quotaSettings = checkpointExecutionSettings?.quotas ?? store.getQuotaSettings();
   // A turn the runtime woke on its own has no user-authored body, so it is
   // recorded as a wake notice rather than as something the researcher typed.
   const userMessage = configurationResume
@@ -2407,8 +2415,8 @@ async function executeAgentRun(
         sessionId, executionId: requestExecution.identity.executionId,
       }),
       runIdleTimeoutMs: timeoutSettings.gatewayIdleTimeoutMs,
-      suspendAfterTurn: () => store.listConnectorConfigurationRequests(sessionId).some((request) =>
-        request.runId === runId && request.state === "awaiting_confirmation"),
+      suspendAfterTurn: () => listConfigurationInteractions(store, sessionId).some((request) =>
+        request.runId === runId && CONFIGURATION_PENDING_STATES.has(request.state)),
       workspace: agentOptions,
     },
     profile: mainProfile,
@@ -2454,8 +2462,8 @@ async function executeAgentRun(
       purpose: "initial",
     });
     if (initialResult.suspended) {
-      const request = store.listConnectorConfigurationRequests(sessionId).find((item) =>
-        item.runId === runId && item.state === "awaiting_confirmation");
+      const request = listConfigurationInteractions(store, sessionId).find((item) =>
+        item.runId === runId && CONFIGURATION_PENDING_STATES.has(item.state));
       if (!request) throw new Error("Configuration suspension has no pending request");
       await flushWorkspaceRefresh();
       await persistNativeConfigurationWait({
@@ -2464,6 +2472,7 @@ async function executeAgentRun(
         commitCheckpoint: (stopGeneration, committedAt) => new VersionStore(store.dataDir).putRecord("ConfigurationCheckpoint", {
           requestId: request.id,
           history: closedModelContext(initialResult.finalMessages),
+          executionSettings: { timeouts: timeoutSettings, quotas: quotaSettings },
           stopGeneration,
           committedAt,
         }),
@@ -2571,8 +2580,8 @@ async function executeAgentRun(
     // The optional JiuwenSwarm executor does not yet expose the committed
     // suspension boundary. Preserve its legacy continuation rather than claim
     // the task finished while a configuration request remains pending.
-    return store.listConnectorConfigurationRequests(sessionId).some((request) =>
-      request.runId === runId && request.state === "awaiting_confirmation") ? "interrupted" : "completed";
+    return listConfigurationInteractions(store, sessionId).some((request) =>
+      request.runId === runId && CONFIGURATION_PENDING_STATES.has(request.state)) ? "interrupted" : "completed";
   } catch (error) {
     if (cancelledRuns.has(runId)) {
       if (!promptManifest && taskInvocationAttempted) {
@@ -3092,19 +3101,19 @@ export function computeSettingsSnapshot(store: SessionStore, sessionId: string):
   return snapshot;
 }
 
-/** Recovery-safe handoff for an applied connector request from an Agent task. */
-export async function ensureConnectorContinuation(
+/** Recovery-safe handoff for any resolved configuration interaction. */
+export async function ensureConfigurationContinuation(
   store: SessionStore, sessionId: string, requestId: string,
 ): Promise<SessionRun | undefined> {
-  const request = store.getConnectorConfigurationRequest(sessionId, requestId);
-  if (!request || (request.state !== "applied" && request.state !== "dismissed")
-    || request.runId.startsWith("user-request:")) return undefined;
-  const run = await store.ensureConnectorContinuationRun({
+  const run = await store.ensureConfigurationContinuationRun({
     sessionId, requestId,
   });
   if (run?.status === "queued") await publishRunEvent(store, sessionId, run.id, { run, type: "run.queued" });
   return run;
 }
+
+/** Compatibility export for historical connector callers. */
+export const ensureConnectorContinuation = ensureConfigurationContinuation;
 
 async function computeQueuedSettingsSnapshot(
   store: SessionStore,
@@ -3186,8 +3195,8 @@ export async function createQueuedRun(
   // A Stop received while validating/enqueuing this request wins over the earlier request.
   // A later user message may queue behind a parked run. It must not rotate the
   // Stop generation belonging to that run's still-actionable configuration card.
-  const pendingConfiguration = store.listConnectorConfigurationRequests(sessionId).some((request) =>
-    request.state === "awaiting_confirmation" && !request.runId.startsWith("user-request:"));
+  const pendingConfiguration = listConfigurationInteractions(store, sessionId).some((request) =>
+    CONFIGURATION_PENDING_STATES.has(request.state) && Boolean(request.runId) && !request.runId.startsWith("user-request:"));
   const resumingConfiguration = (await store.listSessionRuns(sessionId)).some((candidate) =>
     !isTerminalRunStatus(candidate.status) && (candidate.configurationWait || candidate.configurationResume));
   if (!pendingConfiguration && !resumingConfiguration) store.notifications.resume(sessionId, wakeGeneration);
@@ -3351,7 +3360,7 @@ export function scheduleSessionRuns(
           }
         }
         if (next.configurationResume) {
-          const request = store.getConnectorConfigurationRequest(sessionId, next.configurationResume.requestId);
+          const request = getConfigurationInteraction(store, sessionId, next.configurationResume.requestId);
           const choice = nativeConfigurationChoiceRecord(store, sessionId, next.configurationResume.requestId);
           const overlay = choice?.view.choiceReceipt?.kind === "run_overlay" ? nativeRunOverlay(store, sessionId, next.id, request?.id ?? "") : undefined;
           const approvedIds = nativeApprovedRunConnectorIds(store, next);
@@ -3359,7 +3368,8 @@ export function scheduleSessionRuns(
             && next.configurationCheckpoint?.requestId === request.id
             && next.configurationCheckpoint.stopGeneration === store.notifications.generation(sessionId)
             && store.notifications.canWake(sessionId)
-            && (request.state !== "applied" || (approvedIds.includes(request.connectorId)
+            && (!choice || configurationDecisionReady(choice))
+            && (request.state !== "applied" || !request.connectorId || (approvedIds.includes(request.connectorId)
               && (overlay || store.getSessionSettings(sessionId).effective.enabledConnectorIds.includes(request.connectorId))
               && (request.connectorId === "web" || mcpCatalog.getStatus(request.connectorId).status === "ready")));
           if (!valid) {
@@ -3548,9 +3558,9 @@ export async function recoverSessionRuns(store: SessionStore, memoryGraphClient:
       for (const run of await store.listSessionRuns(session.id)) {
         if (run.status !== "running" && run.status !== "blocked") continue;
         const pendingConfiguration = run.configurationWait && run.configurationCheckpoint
-          ? store.getConnectorConfigurationRequest(session.id, run.configurationCheckpoint.requestId)
+          ? getConfigurationInteraction(store, session.id, run.configurationCheckpoint.requestId)
           : undefined;
-        if (run.status === "running" && pendingConfiguration?.state === "awaiting_confirmation") {
+        if (run.status === "running" && CONFIGURATION_PENDING_STATES.has(pendingConfiguration?.state ?? "")) {
           const blocked = await store.updateSessionRunStatusIfCurrent(session.id, run.id, "running", "blocked");
           if (blocked) await publishRunEvent(store, session.id, run.id, {
             reason: "Waiting for configuration decision", run: blocked, status: "blocked", type: "run.status",
@@ -3558,7 +3568,7 @@ export async function recoverSessionRuns(store: SessionStore, memoryGraphClient:
           continue;
         }
         if (run.status === "blocked" && run.configurationWait
-          && ["awaiting_confirmation", "applied", "dismissed"].includes(pendingConfiguration?.state ?? "")) {
+          && (CONFIGURATION_PENDING_STATES.has(pendingConfiguration?.state ?? "") || ["applied", "dismissed", "expired"].includes(pendingConfiguration?.state ?? ""))) {
           continue;
         }
         // A crash before committing the checkpoint must not expose an old

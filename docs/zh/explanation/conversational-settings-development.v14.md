@@ -1,13 +1,13 @@
-# 对话内按需配置 · 完整开发文档 v13
+# 对话内按需配置 · 完整开发文档 v14
 
-- 日期：2026-10-22；产品依据：[完整设计 v23](conversational-settings.v23.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
+- 日期：2026-10-23；产品依据：[完整设计 v24](conversational-settings.v24.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
 - 本文保留[开发 v8](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v8.md)及[历史开发 v7](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v7.md)，延续完整章节和验收编号，按 [#278 维护者决策](https://github.com/openJiuwen-ai/sciencediscovery/issues/278#issuecomment-6238467927)更新 DEV-CFG-11～17 实施状态。第 19 节记录本轮 P0/P1 接线与未完成边界，第 20 节内嵌完整设置矩阵；最终结果见状态 v11，不由文档更新推定端到端全部通过。
 - 核对范围：隔离分支 `codex/conversational-settings-review-fixes` 本轮实现。最终提交标识与 WSL 结果见[状态 v11](conversational-settings-status.v11.md)；旧 `a88d9283` 只对应 2026-10-16 的历史真实模型用例。
 - 标记约定：“已接入”表示实际产品调用路径；“合同验证”表示接口/模拟器/故障测试已有，真实后端未贯通；“待开发/待集成”表示仍需本项目宿主工作或固定补丁集成，尚不能开放产品承诺。文档中的未来宿主接口不能当作已安装能力。
 
 ## 1. 交付范围与技术决策
 
-当前通用切片包含十个已注册适配器：`model.select`、`model.connect`、`model.repair_credential`、`connector.enable`、`skill.select`、`thinking.configure`、`review.configure`，以及部署级 `timeouts.configure`、`quotas.configure`、`idea_tree.configure`。后三项只接受正式边界内的数值和枚举，范围固定为整个部署，在后续运行读取时生效，不接续当前 run。公共服务处理版本化预览、用户批准、批准后验证、正式提交、receipt 与持久阶段；Native 连接器已接工具装配 witness 和同 run 调度。对话内无模型引导也使用统一持久请求；连接器预检/专用工具和旧 PubMed 计时器保留兼容。设置页继续使用原有模型管理接口。
+当前通用切片包含十个已注册适配器：`model.select`、`model.connect`、`model.repair_credential`、`connector.enable`、`skill.select`、`thinking.configure`、`review.configure`，以及部署级 `timeouts.configure`、`quotas.configure`、`idea_tree.configure`。后三项只接受正式边界内的数值和枚举，范围固定为整个部署，在后续运行读取时生效；当前 run 统一等待用户决定并在决定处理后接续，仍保留原冻结设置。公共服务处理版本化预览、用户批准、批准后验证、正式提交、receipt 与持久阶段；Native 所有提案共用同 run 等待与调度，已就绪 MCP 连接器另提供获准工具增量的装配 witness。对话内无模型引导也使用统一持久请求；连接器预检/专用工具和旧 PubMed 计时器保留兼容。设置页继续使用原有模型管理接口。
 
 本轮已经接入注册驱动的 Agent 发现/参数、v3 可信选项、Native 已就绪 MCP 运行级覆盖、结构化替代/拒绝结果及 P1 三项领域。最终测试结果见状态 v11；P2～P4 和实际 JiuwenSwarm 宿主仍按后续计划逐项开发。任意 REST API、STDIO、宿主部署设置不自动获得支持。
 
@@ -16,7 +16,7 @@
 1. 正式设置和凭据复用现有领域存储，提案不是第二套配置数据库。
 2. 配置机制放在 API 层；Runtime Core 只表达通用执行边界，不依赖 provider、配置 DTO 或 HTTP。
 3. Agent 有检查/提案能力，用户决定端点保持独立；不得向模型提供 bearer、凭据 handle 或批准工具。
-4. 当前原生连接器走同一 run 恢复；关联新 run 只用于旧记录与尚未接入暂停钩子的 JiuwenSwarm。
+4. Native 所有能力共用同一 run 恢复；当前仅已就绪 MCP 连接器支持本次运行激活。关联新 run 只用于旧记录与尚未接入暂停钩子的 JiuwenSwarm。
 5. 设置扩展使用有限能力目录和领域适配器，不提供任意 JSON Patch、写文件或执行命令接口。
 6. 单独记录配置、激活和恢复结果；`applied`、`queued`、`running`、`completed` 含义不同。
 7. 先复用现有模型/凭据/配置领域服务；JiuwenSwarm 执行路径优先桥接 core interrupt/resume，不另造 Python 中断引擎。Native 继续使用本项目现有检查点实现。
@@ -40,6 +40,7 @@
 | `configuration/framework.ts`、`http.ts`、`agent-tools.ts` | 领域装配、用户端点与只读/提案工具；Agent 不获得批准或凭据能力 |
 | `store.ts` 的配置事务 hooks | 共用目录 SQLite、设置写屏障、内存回滚、同步领域操作；不另建正式配置库 |
 | `configuration/native-activation.ts`、`activation-coordinator.ts` | 从冻结 run 加获准增量准备真实工具描述，保存 witness，并在实际工具重建后匹配 |
+| `configuration/interaction-wait.ts` | 所有能力共用待决定状态、结果就绪条件与兼容请求投影；不按设置新增等待引擎 |
 | `configuration/runtime-bridge.ts` | Native 持久等待顺序；JiuwenSwarm 精确中断身份/恢复合同，后者尚无实际宿主接入 |
 | `configuration/backend-capabilities.ts`、`backend-control.ts`、`operation-worker.ts` | 握手、能力门控、受控外部接口、SQLite journal 和超时查询恢复合同 |
 | `services/adapter/src/sciencediscovery_adapter/configuration_capabilities.py` | 认证后的实际 adapter 握手；未实现的条件写入与精确恢复报告为不支持 |
@@ -413,7 +414,7 @@ Specialist 的现有预设连接器仍可与会话设置组合；本功能不改
 
 ### 9.1 暂停顺序
 
-1. 创建持久连接器请求，提案工具返回 pending 结果。
+1. 所有能力创建相同协议的持久配置请求并绑定原 run，提案工具返回 pending 结果；连接器不再有独占的等待入口。
 2. 运行时的 `suspendAfterTurn` 在完整工具批次结束后交回控制，不依赖模型口头承诺停止。现有生命周期记录和工具结果应先提交。
 3. 关闭模型历史中的 assistant/tool-call 配对，通过 CAS 写不可变 `ConfigurationCheckpoint`，含 requestId、history、Stop generation 和 committedAt。
 4. run 写入匹配引用与 `configurationWait=true`，由调度器映射为非终态 blocked。
@@ -423,8 +424,8 @@ Specialist 的现有预设连接器仍可与会话设置组合；本功能不改
 
 ### 9.2 恢复顺序
 
-1. 人工或获准自动决定经同一服务复核请求、会话、基线、连接器与 generation。
-2. 记录所选方案与 receipt；持久保存更新 Session，run-only 写独立 overlay，替代/拒绝不写连接器。原历史 settingsSnapshot 保持不变，实际装配从冻结基础加批准增量读取。
+1. 人工或获准自动决定经同一服务复核请求、会话、领域基线、目标资源与 generation。
+2. 记录所选方案与 receipt；持久保存调用正式领域写入，run-only 写独立 overlay，替代/拒绝不写配置。后续生效的设置保存后即可返回决定并恢复原任务，不伪造当前已激活。原历史 settingsSnapshot 保持不变，实际装配从冻结基础加批准增量读取。
 3. 原 run 持久标记 `configurationResume` 并重新入队，保留原 ID、原始 userMessageId、事件流与检查点。
 4. 调度器在领取前复核决定状态、检查点关联和 generation；重建工具注册表，读取检查点历史并校验其 requestId/generation。
 5. 通过可信内部上下文明确告知保存/本次使用/可用替代/拒绝、needKey 与原目标；同 need 的已保存决定不能循环弹卡。旧工具结果中的“待确认”是历史，不能让模型重新等待同一卡。
@@ -500,7 +501,7 @@ JiuwenSwarm 与旧 `configurationContinuation` 继续使用有关联的后续 ru
 
 兼容会话字段 `autoApplyLowRiskConfiguration` 独立于 `approvalMode`，默认 false。`isAutoApplicableConnector` 当前仅允许 PubMed，服务端控制资格，模型不能新增白名单。
 
-仅历史 v2 Native PubMed 提案复用原 companion 的独立授权与 `autoApplyAt=createdAt+30s`；旧专用流程继续兼容。新 Agent/主动入口生成 v3 请求，撤回 companion 倒计时，framework 的自动授权检查明确拒绝 protocolVersion=3，不选第一个方案作为隐式同意。前端倒计时只展示；到期由服务端检查授权、基线、连接器/插件、会话、Stop generation 和任务状态，经同一决定服务应用并恢复。浏览器关闭不能取消服务端既有授权，进程重启应恢复未决计时。
+仅历史 v2 Native PubMed 提案复用原 companion 的独立授权与 `autoApplyAt=createdAt+30s`；旧专用流程继续兼容。新 Agent/主动入口生成 v3 通用请求，不再为新 v3 请求创建 legacy companion 或倒计时，framework 的自动授权检查明确拒绝 protocolVersion=3，不选第一个方案作为隐式同意。前端倒计时只展示；到期由服务端检查授权、基线、连接器/插件、会话、Stop generation 和任务状态，经同一决定服务应用并恢复。浏览器关闭不能取消服务端既有授权，进程重启应恢复未决计时。
 
 关闭授权应清除/抑制到期操作，使请求回到人工确认。到期与人工确认只有一个结果，重复扫描读取已有状态。拒绝、取消、Stop 或前提失效均阻止自动应用。启用后的工具仍按自身权限策略执行。
 
@@ -925,7 +926,7 @@ P1 首轮不提供“移除覆盖并恢复继承”的专门动作；未出现�
 
 诊断只接收结构化分类：缺模型、精确模型凭据缺失/认证拒绝、连接器未启用、Skill 被白名单排除、显式思考/审阅需求。未知故障、网络错误、超时、限流、无结果均不映射为修改 Key、代理或配额。目录提示是识别依据，不是用户授权，也不承诺已有全部工具错误都自动转换成诊断；新的工具领域仍需把可核实分类接到相应边界。
 
-主 Agent 的工具仍只有 inspect 与 propose；没有批准、密钥读取、配置文件写入、安装命令或授权策略修改。P1 保存结果明确 next_run，不借用连接器的同 run 恢复承诺。JiuwenSwarm 未通过真实宿主验证的 scoped 操作，在目录中明确不可用，并在提案、预览和写入边界拒绝。
+主 Agent 的工具仍只有 inspect 与 propose；没有批准、密钥读取、配置文件写入、安装命令或授权策略修改。P1 保存结果明确 next_run，统一等待决定并恢复当前 run，但不承诺当前 run 使用新的设置。JiuwenSwarm 未通过真实宿主验证的 scoped 操作，在目录中明确不可用，并在提案、预览和写入边界拒绝。
 
 会话审阅的 `automaticReviewEnabled` / `level` 原来由执行器和后台审阅 scheduler 读取实时 Session 偏好，单改配置表无法兑现“旧排队任务不变”。本轮因此在正式入队时写入 `settingsSnapshot.sessionReviewer`，运行器使用该冻结值；自动审阅通过 Artifact version 的 `turnId` 及 Subagent 的 `parentTurnId` 精确绑定原 root Run，`ReviewerAuditTask.sourceRunId` 保留该归属，合批按 source Run/level 分隔，后台执行继续读取原 Run 冻结值。Deep 审阅复用原 Run 的模型/工具运行快照；全局 Reviewer Specialist 开关继续作为独立实时总闸。没有来源绑定的历史产物、已存在但缺少新增快照的旧 Run，以及手动发起审阅保留原有当前偏好语义，不按时间猜测所属 Run。已经明确绑定 `sourceRunId` 后若来源 Run 丢失，审阅失效收束，不能借用当前 Session 偏好/模型继续。忙碌检查、检查点和 claim 的异步持久化完成后，在实际调用审阅执行器前再次核实来源与实时全局开关；手动审阅同样不能在全局关闭后新启动。
 
@@ -978,3 +979,27 @@ POST /api/models/{id}/test 保留 consent=true 和 compatibility，可选 expect
 实际改动为 11 个生产文件（289 行新增、128 行删除），另有专项测试、正式 E2E 驱动与版本化文档。无配置库迁移，不重写七项适配器或修改手动模型接入；执行证据见状态 v11。
 
 CFG-R15 的单入口范围是本功能的发现与提案。原有 configure_specialist_runtime 为独立的 Specialist 运行参数工具，保持原行为；它的固定参数不随本配置注册表扩张。后续迁移需要单独定义兼容与权限合同。
+
+## 统一配置决定等待（CFG-R16，2026-10-23）
+
+用户决定与设置生效时间是两个独立维度。所有 Agent 发起的配置修改，包括模型、凭据修复、连接器、Skill、思考、审阅、超时、配额和探索树，均使用同一请求服务和同一持久等待/恢复链路。不得让普通设置在未决定时结束原任务，也不得按能力再添加独立轮询或“发送一句继续”的恢复机制。
+
+```text
+configuration(propose)，绑定原 run
+  → 当前工具批次安全结束 → 保存模型历史与执行限额检查点
+  → 原 run blocked → 展示配置卡，等待用户处理
+  → 统一版本/摘要/Stop 校验 → 领域校验与事务写入，或拒绝
+  → 返回结构化决定 → 同一 run 从检查点继续 → 最终完成
+```
+
+复用权限申请的外部等待语义：服务端掌管等待，阻塞后不发起下一轮模型调用，不把用户等待计入执行超时，浏览器关闭不表示允许，Stop 必须使旧决定失效。Native 配置统一沿用已有 CAS 检查点与持久 outbox，以支持工具目录变化与重启恢复；不以长期内存 Promise 代替已有持久能力。权限授权记录与配置批准记录仍各自校验，不互相替代授权。
+
+- 同一 run 同时只接受一个未解决的配置请求；并行工具批次中的其他提案明确返回已有决定待处理，不能产生多个无法绑定的卡片。
+- 收集输入、等待确认、修正/验证失败都继续等待；错误必须允许用户修正或拒绝，不能假装任务完成。
+- `same_run` 获准增量仍先验证激活证据再恢复；`next_run` / `requires_restart` 保存后返回决定并恢复原任务，明确告知尚未在当前任务生效。不得为了恢复而伪造 active。
+- 恢复保留原模型、工具基础、Skill 与审阅快照，并保留暂停前的执行超时和配额；改变后续默认值不能误伤当前暂停任务。
+- 确认、拒绝、Stop、重复决定、连续多次配置、刷新/重启恢复均须覆盖；验证等待时无新模型调用、无 run.completed，同会话后续任务仍排队。
+- 无活动 run 的用户主动配置沿用同一请求/预览/决定/回执服务；没有原任务可暂停，不创建虚假 run。历史连接器 companion 只兼容读取，不再决定新请求的运行状态。
+- JiuwenSwarm 未接入可靠中断宿主时明确拒绝任务内提案，不伪装支持等待与恢复。
+
+验收编号：CFG-R16-A（普通设置确认与冻结快照）、B（拒绝）、C（凭据收集/失败重试）、D（连接器同 run）、E（Stop 与重复决定）、F（队列、连续提案及重启恢复）。

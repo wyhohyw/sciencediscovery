@@ -101,6 +101,8 @@ test("CFG-T35: opening the card without a change stays editable and shows the cu
   const h = await harness(context);
   const view = await h.framework.propose(h.session.id, { protocolVersion: 3, capabilityId: "timeouts.configure", values: {} });
   assert.equal(view.state, "collecting_input");
-  assert.equal(view.fields.find(field => field.id === "gatewayIdleTimeoutMs")?.value, h.store.getTimeoutSettings().gatewayIdleTimeoutMs);
+  const idle = view.fields.find(field => field.id === "gatewayIdleTimeoutMs");
+  assert.ok(idle && idle.kind !== "credential");
+  assert.equal(idle.value, h.store.getTimeoutSettings().gatewayIdleTimeoutMs);
   assert.equal(view.changes.length, 0);
 });

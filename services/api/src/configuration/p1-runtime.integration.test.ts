@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
-import type { ConfigurationRequestView, CommitSkillLibraryVersionResult, ModelProfile, Project, Session, SessionRun, SkillLibrary, ScientificArtifact, ScientificArtifactVersion, ReviewCheckpointResult } from "@sciencediscovery/schema";
+import type { ConfigurationCapabilityId, ConfigurationRequestView, CommitSkillLibraryVersionResult, ModelProfile, Project, Session, SessionRun, SkillLibrary, ScientificArtifact, ScientificArtifactVersion, ReviewCheckpointResult } from "@sciencediscovery/schema";
 import { createApiServer, closeApiServer } from "../http/index.js";
 import type { ServerConfig } from "../bootstrap/config.js";
 import { offlineMcpTransport } from "../mcp/offline-transport.fixture.js";
@@ -29,7 +29,7 @@ const nextTaskPrompt = "Use the configured workflow to review literature and loa
 const librarySkillId = "p1-runtime-method";
 const witness = "P1_LIBRARY_RUNTIME_WITNESS_739";
 
-async function fixture(context: TestContext, mode: "settings" | "review" = "settings") {
+async function fixture(context: TestContext, mode: "settings" | "review" | "capability" = "settings", proposal?: { capabilityId: ConfigurationCapabilityId; values: Record<string, unknown>; delayAfterDecisionMs?: number }) {
   const tmp = resolve(process.cwd(), ".tmp"); await mkdir(tmp, { recursive: true });
   const root = await mkdtemp(resolve(tmp, "configuration-p1-runtime-"));
   const oldExecutor = process.env.SCIENCE_AGENT_EXECUTOR; process.env.SCIENCE_AGENT_EXECUTOR = "native";
@@ -39,6 +39,10 @@ async function fixture(context: TestContext, mode: "settings" | "review" = "sett
   let reportVersionId: string | undefined;
   const provider = createServer(async (request, response) => {
     const input = await readRequest(request);
+    if (request.headers.authorization === "Bearer r16-bad-local-key") {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "mock credential rejected" } })); return;
+    }
     const task = Boolean(input.tools?.length);
     if (task) requests.push(input);
     const messages = input.messages ?? [];
@@ -47,7 +51,13 @@ async function fixture(context: TestContext, mode: "settings" | "review" = "sett
     let tool: string | undefined, id: string | undefined, args: unknown;
     let text = "Fixture title";
     const latestUser = messages.filter(message => message.role === "user").at(-1);
-    if (mode === "review" && task) {
+    if (mode === "capability" && task) {
+      assert.ok(proposal);
+      if (!completed.has("r16-search")) { tool = "configuration"; id = "r16-search"; args = { action: "search", query: proposal.capabilityId }; }
+      else if (!completed.has("r16-describe")) { tool = "configuration"; id = "r16-describe"; args = { action: "describe", capabilityId: proposal.capabilityId }; }
+      else if (!completed.has("r16-propose")) { tool = "configuration"; id = "r16-propose"; args = { action: "propose", capabilityId: proposal.capabilityId, values: proposal.values, reason: "Apply the user's bounded configuration and then finish the original task." }; }
+      else { if (proposal.delayAfterDecisionMs) await new Promise(done => setTimeout(done, proposal.delayAfterDecisionMs)); text = "R16_ORIGINAL_TASK_COMPLETE"; }
+    } else if (mode === "review" && task) {
       // Runtime review observations arrive as a later user-role data message.
       // Select the actual task instruction, not that observation or a quoted task.
       const taskInstruction = messages.filter(message => message.role === "user" && String(message.content).trim().startsWith("P1_REVIEW_")).at(-1);
@@ -100,7 +110,11 @@ async function fixture(context: TestContext, mode: "settings" | "review" = "sett
       assert.ok(root.startsWith(tmp + sep)); await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
-  api = createApiServer(config, { mcpTransport: offlineMcpTransport }); const origin = await listen(api);
+  api = createApiServer(config, { mcpTransport: offlineMcpTransport }); let origin = await listen(api);
+  async function restart() {
+    await closeApiServer(api!);
+    api = createApiServer(config, { mcpTransport: offlineMcpTransport }); origin = await listen(api);
+  }
   async function ok<T>(path: string, input?: unknown, method = input === undefined ? "GET" : "POST", expected = input === undefined ? 200 : 201): Promise<T> {
     const response = await fetch(origin + path, { method, headers: { authorization: "Bearer configuration-p1-runtime-token", "content-type": "application/json", "Idempotency-Key": randomUUID() },
       ...(input === undefined ? {} : { body: JSON.stringify(input) }), signal: AbortSignal.timeout(60_000) });
@@ -109,6 +123,12 @@ async function fixture(context: TestContext, mode: "settings" | "review" = "sett
   const model = await ok<ModelProfile>("/api/models", { name: "P1 native wire fixture", model: "p1-fixture", baseUrl: `${providerOrigin}/v1`, apiToken: "fixture-token",
     apiProtocol: "openai-chat-completions", apiVariant: "deepseek", thinkingMode: "disabled", thinkingEffort: "low",
     facts: { thinkingSupported: true, thinkingEfforts: ["low", "max"] } });
+  if (proposal?.values.modelId === "$current") proposal.values.modelId = model.id;
+  if (proposal?.values.baseUrl === "$provider") proposal.values.baseUrl = `${providerOrigin}/v1`;
+  if (proposal?.values.modelId === "$alternative") {
+    const alternate = await ok<ModelProfile>("/api/models", { name: "Alternate mock model", model: "alternate-fixture", baseUrl: `${providerOrigin}/v1`, apiToken: "fixture-token" });
+    proposal.values.modelId = alternate.id;
+  }
   assert.deepEqual(model.facts?.thinkingEfforts, ["low", "max"], "The fixture explicitly declares only the effort values accepted by its provider");
   await ok("/api/settings", { modelId: model.id, enabledConnectorIds: [], semanticReviewEnabled: false }, "PUT", 200);
   await ok<SkillLibrary>("/api/skill-libraries", { id: "p1-runtime-library", name: "P1 methods library" });
@@ -138,12 +158,19 @@ async function fixture(context: TestContext, mode: "settings" | "review" = "sett
     }
     throw new Error(`P1 run timed out: ${latest?.status}`);
   }
-  return { ok, path, requests, waitRun, releaseBlocker, libraryVersionId: committed.version.id };
+  return { ok, path, requests, waitRun, releaseBlocker, restart, get origin() { return origin; }, model, config, libraryVersionId: committed.version.id };
 }
 
 test("CFG-T33 Native /runs: confirmed Skill/Library and thinking cards change actual next-run tool context and provider wire fields", async context => {
   const f = await fixture(context);
   const original = await f.ok<SessionRun>(`${f.path}/runs`, { content: "For future research, use only the installed literature-searcher workflow and the P1 methods library, and enable maximum supported deep thinking. Work in the main Agent." });
+  for (const capabilityId of ["skill.select", "thinking.configure"]) {
+    const card = await waitPendingCard(f, original.id, capabilityId);
+    const before = f.requests.length;
+    await new Promise(done => setTimeout(done, 150));
+    assert.equal(f.requests.length, before, "No model round runs while the user's configuration decision is pending");
+    await decideCard(f, card, "persist");
+  }
   await f.waitRun(original.id);
   const originalRequests = [...f.requests];
   assert.ok(originalRequests.length >= 4);
@@ -151,15 +178,6 @@ test("CFG-T33 Native /runs: confirmed Skill/Library and thinking cards change ac
   const originalSystem = originalRequests.flatMap(request => request.messages ?? []).filter(message => message.role === "system").map(message => String(message.content)).join("\n");
   assert.equal(originalSystem.includes("<name>literature-searcher</name>"), false, "The original task cannot acquire a proposed future Skill before approval");
   assert.equal(originalSystem.includes(`<name>${librarySkillId}</name>`), false);
-  const cards = await f.ok<{ items: ConfigurationRequestView[] }>(`${f.path}/configuration-requests`);
-  assert.deepEqual(cards.items.map(card => card.capabilityId).sort(), ["skill.select", "thinking.configure"]);
-  for (const card of cards.items) {
-    assert.equal(card.protocolVersion, 3); assert.equal(card.activation.mode, "next_run");
-    const values = Object.fromEntries(card.fields.flatMap(field => field.kind !== "credential" && field.value !== undefined ? [[field.id, field.value]] : []));
-    const prepared = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${card.id}/preview`, { expectedRevision: card.revision, values, selectedOptionId: card.selectedOptionId }, "POST", 200);
-    const applied = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${card.id}/decision`, { revision: prepared.revision, previewDigest: prepared.previewDigest, selectedOptionId: prepared.selectedOptionId, decision: "apply" }, "POST", 200);
-    assert.equal(applied.state, "applied");
-  }
   const boundary = f.requests.length;
   const next = await f.ok<SessionRun>(`${f.path}/runs`, { content: nextTaskPrompt });
   const finished = await f.waitRun(next.id);
@@ -203,4 +221,139 @@ test("CFG-T33 Native /runs: queued quick and deep tasks consume their own frozen
   assert.equal(disabled.settingsSnapshot.sessionReviewer?.level, "deep");
   assert.ok(f.requests.slice(boundary).length);
   assert.ok(f.requests.slice(boundary).every(request => !request.tools?.some(tool => tool.function?.name === "review_checkpoint")), "Frozen Deep preferences cannot bypass the live global Reviewer Specialist gate");
+});
+
+
+type RuntimeFixture = Awaited<ReturnType<typeof fixture>>;
+async function waitPendingCard(f: RuntimeFixture, runId: string, capabilityId: string): Promise<ConfigurationRequestView> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const run = (await f.ok<SessionRun[]>(`${f.path}/runs`)).find(item => item.id === runId)!;
+    const card = (await f.ok<{ items: ConfigurationRequestView[] }>(`${f.path}/configuration-requests`)).items
+      .find(item => item.runId === runId && item.capabilityId === capabilityId && ["awaiting_confirmation", "collecting_input"].includes(item.state));
+    if (card && run.status === "blocked" && run.configurationWait && run.configurationCheckpoint?.requestId === card.id) return card;
+    assert.ok(!["completed", "failed", "cancelled", "interrupted"].includes(run.status), `Task ended before its decision: ${run.status} ${run.error ?? ""}`);
+    await new Promise(done => setTimeout(done, 30));
+  }
+  throw new Error(`Missing blocked configuration ${capabilityId}`);
+}
+async function decideCard(f: RuntimeFixture, card: ConfigurationRequestView, option: "persist" | "dismiss") {
+  const values = Object.fromEntries(card.fields.flatMap(field => field.kind !== "credential" && field.value !== undefined ? [[field.id, field.value]] : []));
+  const prepared = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${card.id}/preview`,
+    { expectedRevision: card.revision, values, selectedOptionId: option }, "POST", 200);
+  return f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${card.id}/decision`,
+    { revision: prepared.revision, previewDigest: prepared.previewDigest, selectedOptionId: option, decision: option === "dismiss" ? "dismiss" : "apply" }, "POST", 200);
+}
+
+for (const [capabilityId, values] of [
+  ["idea_tree.configure", { maxDepth: 4, maxNodes: 20 }],
+  ["model.select", { modelId: "$alternative" }],
+  ["timeouts.configure", { gatewayIdleTimeoutMs: 50 }],
+  ["quotas.configure", { maxConcurrentSubagents: 2 }],
+  ["review.configure", { automaticReviewEnabled: false, level: "quick" }],
+] as const) {
+  test(`CFG-R16-A/F Native /runs: ${capabilityId} waits, keeps the queue blocked and resumes the same task`, async context => {
+    const f = await fixture(context, "capability", { capabilityId, values, delayAfterDecisionMs: 250 });
+    const original = await f.ok<SessionRun>(`${f.path}/runs`, { content: `R16 configure ${capabilityId} then finish. Do not delegate.` });
+    const card = await waitPendingCard(f, original.id, capabilityId);
+    assert.equal(card.activation.mode, "next_run");
+    const queued = await f.ok<SessionRun>(`${f.path}/runs`, { content: "Independent later task" });
+    const count = f.requests.length;
+    await new Promise(done => setTimeout(done, 250));
+    assert.equal(f.requests.length, count);
+    const waiting = await f.ok<SessionRun[]>(`${f.path}/runs`);
+    assert.equal(waiting.find(item => item.id === original.id)?.status, "blocked");
+    assert.equal(waiting.find(item => item.id === queued.id)?.status, "queued");
+    assert.equal(waiting.find(item => item.id === queued.id)?.startedAt, undefined);
+    // Cancel this unrelated queued task; it must not invalidate the original decision.
+    await f.ok(`${f.path}/runs/${queued.id}/cancel`, {}, "POST", 200);
+    const saved = await decideCard(f, card, "persist");
+    assert.equal(saved.state, "applied");
+    assert.equal(saved.activation.state, "needs_user_action", "Do not pretend future settings were activated in this task");
+    const completed = await f.waitRun(original.id);
+    assert.equal(completed.id, original.id);
+    assert.deepEqual(completed.settingsSnapshot, original.settingsSnapshot);
+    assert.equal(completed.userMessageId !== undefined, true);
+    const events = await f.ok<Array<{ event: { type: string } }>>(`${f.path}/runs/${original.id}/events?after=0`);
+    assert.equal(events.filter(entry => entry.event.type === "run.completed").length, 1);
+    assert.ok(f.requests.some(request => JSON.stringify(request.messages).includes("The pending configuration interaction is resolved")));
+  });
+}
+
+test("CFG-R16-B Native /runs: declining ordinary configuration returns the decision to the original task", async context => {
+  const f = await fixture(context, "capability", { capabilityId: "idea_tree.configure", values: { maxDepth: 4, maxNodes: 20 } });
+  const original = await f.ok<SessionRun>(`${f.path}/runs`, { content: "R16 ask for an Idea Tree change" });
+  const card = await waitPendingCard(f, original.id, "idea_tree.configure");
+  const result = await decideCard(f, card, "dismiss");
+  assert.equal(result.state, "dismissed");
+  await f.waitRun(original.id);
+  assert.ok(f.requests.some(request => JSON.stringify(request.messages).includes("The user declined the configuration")));
+});
+
+test("CFG-R16-C/E Native /runs: collecting a model credential waits and Stop invalidates the decision", async context => {
+  const f = await fixture(context, "capability", { capabilityId: "model.connect", values: { name: "Mock connection", model: "mock-new", baseUrl: "https://api.openai.com/v1" } });
+  const original = await f.ok<SessionRun>(`${f.path}/runs`, { content: "R16 connect a new model using secure input" });
+  const card = await waitPendingCard(f, original.id, "model.connect");
+  assert.equal(card.state, "collecting_input");
+  const count = f.requests.length;
+  await new Promise(done => setTimeout(done, 250));
+  assert.equal(f.requests.length, count);
+  await f.ok(`${f.path}/runs/${original.id}/cancel`, {}, "POST", 200);
+  const response = await fetch(f.origin + `${f.path}/configuration-requests/${card.id}/preview`, { method: "POST",
+    headers: { authorization: "Bearer configuration-p1-runtime-token", "content-type": "application/json" },
+    body: JSON.stringify({ expectedRevision: card.revision, values: {}, selectedOptionId: "dismiss" }) });
+  assert.equal(response.status, 409);
+  assert.equal((await f.ok<SessionRun[]>(`${f.path}/runs`)).find(item => item.id === original.id)?.status, "cancelled");
+  assert.equal(f.requests.length, count);
+});
+
+
+for (const capabilityId of ["model.connect", "model.repair_credential"] as const) {
+  test(`CFG-R16-C Native /runs: ${capabilityId} keeps waiting through credential failure then resumes after verified repair`, async context => {
+    const values = capabilityId === "model.connect" ? { name: "New local mock", model: "new-local-mock", apiVariant: "deepseek" } : { modelId: "$current" };
+    const f = await fixture(context, "capability", { capabilityId, values });
+    const original = await f.ok<SessionRun>(`${f.path}/runs`, { content: `R16 prepare ${capabilityId} using secure credentials` });
+    let card = await waitPendingCard(f, original.id, capabilityId);
+    const count = f.requests.length;
+    if (capabilityId === "model.connect") {
+      const fields = Object.fromEntries(card.fields.flatMap(field => field.kind !== "credential" && field.value !== undefined ? [[field.id, field.value]] : []));
+      card = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${card.id}/preview`,
+        { expectedRevision: card.revision, values: { ...fields, baseUrl: f.model.baseUrl }, selectedOptionId: "persist" }, "POST", 200);
+    }
+    if (card.endpointAuthorization?.status === "required") card = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${card.id}/endpoint-consent`,
+      { revision: card.revision, endpointTarget: card.endpointAuthorization.endpointTarget }, "POST", 200);
+    for (const secret of ["r16-bad-local-key", "r16-good-local-key"]) {
+      const draft = await f.ok<{ handle: string }>(`${f.path}/configuration-requests/${card.id}/credentials`,
+        { expectedRevision: card.revision, fieldId: "apiToken", secret }, "POST", 200);
+      const fields = Object.fromEntries(card.fields.flatMap(field => field.kind !== "credential" && field.value !== undefined ? [[field.id, field.value]] : []));
+      card = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${card.id}/preview`,
+        { expectedRevision: card.revision, values: fields, credentialHandle: draft.handle, selectedOptionId: "persist" }, "POST", 200);
+      card = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${card.id}/decision`,
+        { revision: card.revision, previewDigest: card.previewDigest, selectedOptionId: "persist", decision: "apply" }, "POST", 200);
+      if (secret.includes("bad")) {
+        assert.equal(card.state, "needs_fix");
+        await new Promise(done => setTimeout(done, 150));
+        assert.equal(f.requests.length, count, "Credential validation failure must not release the waiting model loop");
+        assert.equal((await f.ok<SessionRun[]>(`${f.path}/runs`)).find(run => run.id === original.id)?.status, "blocked");
+      }
+    }
+    assert.equal(card.state, "applied");
+    const completed = await f.waitRun(original.id);
+    assert.equal(completed.settingsSnapshot.modelId, original.settingsSnapshot.modelId);
+    assert.ok(f.requests.every(request => !JSON.stringify(request).includes("r16-good-local-key")));
+  });
+}
+
+test("CFG-R16-F Native /runs: restart retains the ordinary configuration checkpoint and resumes its original run", async context => {
+  const f = await fixture(context, "capability", { capabilityId: "idea_tree.configure", values: { maxDepth: 4, maxNodes: 20 } });
+  const original = await f.ok<SessionRun>(`${f.path}/runs`, { content: "R16 ordinary configuration surviving API restart" });
+  const before = await waitPendingCard(f, original.id, "idea_tree.configure");
+  const count = f.requests.length;
+  await f.restart();
+  const after = await waitPendingCard(f, original.id, "idea_tree.configure");
+  assert.equal(after.id, before.id);
+  assert.equal(f.requests.length, count);
+  await decideCard(f, after, "persist");
+  await f.waitRun(original.id);
+  assert.equal((await f.ok<SessionRun[]>(`${f.path}/runs`)).length, 1, "Recovery does not create a replacement run");
 });

@@ -179,7 +179,9 @@ test("CFG-R13: inspection separates registered, ready, actually mounted, saved a
   assert.ok(!unavailable.items.some((row: { canPropose: boolean }) => row.canPropose));
 });
 test("CFG-T29/33: Agent proposals use protocol v3 and skip redundant all-mode Skill enablement", async context => {
-  const h = await harness(context); const tools = createConfigurationAgentTools({ store: h.store, sessionId: h.session.id, runId: "test-run" });
+  const h = await harness(context);
+  const run = await h.store.createSessionRun({ sessionId: h.session.id, prompt: "Select literature skills", settingsSnapshot: h.store.resolveRuntimeSettings(h.session.id).effective });
+  const tools = createConfigurationAgentTools({ store: h.store, sessionId: h.session.id, runId: run.id });
   const skipped = await tools[0]!.execute("all", { action: "propose", capabilityId: "skill.select", values: { enabledSkillIds: ["literature"] } });
   assert.equal(JSON.parse(skipped.content[0]!.text).status, "already_effective");
   assert.equal(h.framework.service.list(h.session.id).length, 0);

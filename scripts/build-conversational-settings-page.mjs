@@ -10,10 +10,10 @@ import { gfm, gfmHtml } from '../node_modules/.pnpm/node_modules/micromark-exten
 const root = new URL('../', import.meta.url);
 const docsRoot = new URL('docs/zh/explanation/', root);
 const sources = [
-  { id: 'design', label: '完整设计 v23 · 合入前审查修订', english: 'PRODUCT REVIEW · IMPLEMENTATION BOUNDARIES', filename: 'conversational-settings.v23.md', version: 'v23 / 七项能力与审查修订 · 2026.10.21', note: '第 17 节明确恢复依赖、用户专属端点授权、离线撤销与凭据重试等修订合同。当前分支结果独立记录，历史验证不代表本轮通过。' },
-  { id: 'development', label: '完整开发文档 v13', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v13.md', version: 'v13 / 审查修订与完整设置矩阵 · 2026.10.21', note: '保留七能力、v3 协议、完整设置矩阵和底座复用分析；第 21 节列明 CFG-R01–R13 的实现边界与验收。最终测试结果见状态 v11。' },
+  { id: 'design', label: '完整设计 v24 · 统一配置等待', english: 'PRODUCT REVIEW · IMPLEMENTATION BOUNDARIES', filename: 'conversational-settings.v24.md', version: 'v24 / 统一配置决定等待 · 2026.10.23', note: 'CFG-R16 明确所有配置共用决定等待、同 run 恢复与生效时间分离的合同。当前分支结果独立记录，历史验证不代表本轮通过。' },
+  { id: 'development', label: '完整开发文档 v14', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v14.md', version: 'v14 / 统一等待与恢复链路 · 2026.10.23', note: '十项能力共用决定等待与同 run 接续；保留 v3 协议、完整设置矩阵和底座复用分析，CFG-R16 列出具体接口与验收。结果见状态 v11。' },
   { id: 'research', label: '竞品与底座调研 v2', english: 'PRODUCT PATTERNS & FRAMEWORK REUSE', filename: 'conversational-settings-research.v2.md', version: 'v2 / 结论已纳入设计与开发 · 2026.10.19', note: '比较 Codex、OpenCode、WorkBuddy 与 openJiuwen core / WorkSwarm。区分产品行为、源码能力、依赖版本与接入建议，不把上游组件存在当作本项目集成已通过。' },
-  { id: 'status', label: '当前实现与实测 v11', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v11.md', version: 'v11 / 本轮验证独立记录 · 2026.10.21', note: '记录整合最新 main 后的专项、完整 WSL 与真实模型浏览器结果；未执行的不计通过。Docker/SSH 外部环境测试按用户指示跳过。' },
+  { id: 'status', label: '当前实现与实测 v11', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v11.md', version: 'v11 / CFG-R16 统一等待验证 · 2026.10.23', note: '记录本轮完整构建、全包回归与隔离浏览器证据，保留首次失败及补测结果；旧候选独立标记，4420 升级状态单列。' },
 ];
 
 const escapeHtml = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
@@ -90,7 +90,7 @@ for (const source of sources) {
   documents.push({ ...source, raw, sha256: createHash('sha256').update(raw).digest('hex'), sections });
 }
 
-const expectedSections = { design: 18, development: 22, research: 11, status: 8 };
+const expectedSections = { design: 19, development: 23, research: 11, status: 8 };
 for (const doc of documents) if (doc.sections.length !== expectedSections[doc.id]) {
   throw new Error(`Document structure changed: ${doc.filename}; update chapter links before rebuilding.`);
 }

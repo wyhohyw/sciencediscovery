@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import { canonical, ConfigurationError, integer, object, string } from "./validation.js";
 import { applyNativeRunOverlay, nativeConnectorChoiceOptions, validateNativeChoice, nativeExecutionDependencies, nativeExecutionDependenciesCurrent } from "./native-choices.js";
 import { configurationNeedKey } from "./need-key.js";
+import { CONFIGURATION_PENDING_STATES, configurationDecisionReady } from "./interaction-wait.js";
 import { ModelDestinationAuthorizer } from "./model-destination.js";
 import type { ConfigurationConnectorRegistration } from "./connector-directory.js";
 
@@ -47,6 +48,7 @@ export class ConversationalConfigurationFramework {
   readonly destinations: ModelDestinationAuthorizer;
   private readonly phaseQueues = new Map<string, Promise<unknown>>();
   private readonly decisionQueues = new Map<string, Promise<unknown>>();
+  private readonly proposalQueues = new Map<string, Promise<unknown>>();
   constructor(readonly store: SessionStore, public options: ConfigurationFrameworkOptions) {
     const database = store.getConfigurationDatabase();
     this.repository = new ConfigurationRepository(database);
@@ -119,6 +121,13 @@ export class ConversationalConfigurationFramework {
   }
 
   async propose(sessionId: string, input: ConfigurationProposalInput, key?: string): Promise<ConfigurationRequestView> {
+    const previous = this.proposalQueues.get(sessionId) ?? Promise.resolve();
+    const work = previous.catch(() => undefined).then(() => this.proposeSerial(sessionId, input, key));
+    this.proposalQueues.set(sessionId, work);
+    try { return await work; } finally { if (this.proposalQueues.get(sessionId) === work) this.proposalQueues.delete(sessionId); }
+  }
+
+  private async proposeSerial(sessionId: string, input: ConfigurationProposalInput, key?: string): Promise<ConfigurationRequestView> {
     const session = this.store.assertSessionWritable(sessionId);
     if (["skill.select", "thinking.configure", "review.configure"].includes(input.capabilityId) && !this.options.nativeExecutor)
       throw new ConfigurationError("CONFIGURATION_BACKEND_UNSUPPORTED", "These scoped settings have only been integrated with the Native executor. JiuwenSwarm host activation is not verified.", 409);
@@ -146,23 +155,31 @@ export class ConversationalConfigurationFramework {
       }
       if (bound?.configurationWait && bound.configurationCheckpoint && this.repository.get(bound.configurationCheckpoint.requestId, sessionId)?.view.state === "expired")
         throw new ConfigurationError("CONFIGURATION_REPLAN_UNAVAILABLE", "The original task remains paused after its proposal expired. Stop it before retrying; rebinding this checkpoint is not available yet.", 409);
-      if (!this.options.nativeExecutor || input.capabilityId !== "connector.enable") {
+      if (!this.options.nativeExecutor) {
         throw new ConfigurationError("CONFIGURATION_ACTIVATION_UNAVAILABLE", "This executor cannot change this setting and resume the same task. Use the conversation configuration entry for a future run.", 409);
       }
+      // One committed decision boundary per run, regardless of capability type.
+      const pending = this.repository.list(sessionId).find(record => record.view.runId === input.runId
+        && CONFIGURATION_PENDING_STATES.has(record.view.state));
+      if (pending) {
+        if (pending.view.capabilityId === input.capabilityId && canonical(pending.view.scope) === canonical(scope) && canonical(pending.input) === canonical(this.service.registry.get(input.capabilityId).normalize(input.values)))
+          return this.service.get(sessionId, pending.view.id);
+        throw new ConfigurationError("CONFIGURATION_DECISION_PENDING", "Wait for the existing configuration decision before proposing another change", 409);
+      }
+      if (input.capabilityId !== "connector.enable") return this.service.propose(sessionId, { ...input, scope }, key);
       const connectorId = typeof input.values.connectorId === "string" ? input.values.connectorId : "";
       if (connectorId === "web") throw new ConfigurationError("CONFIGURATION_ACTIVATION_UNAVAILABLE",
         "Same-run configuration currently supports ready MCP tool sources. Configure built-in Web for a future run.", 409);
       const connector = this.options.connector(sessionId, connectorId);
       if (!connector?.ready) throw new ConfigurationError("CONNECTOR_NOT_READY", "The installed connector is not ready for this session", 409);
+      if (input.protocolVersion === 3) return this.service.propose(sessionId, { ...input, scope }, key);
       const companion = this.store.proposeConnectorConfiguration({ sessionId, runId: input.runId,
-        connectorId, connectorName: connector.name, reason: "CONNECTOR_REQUIRED_FOR_TASK",
-        ...(input.protocolVersion === 3 ? { configurationProtocolVersion: 3 as const } : {}) });
+        connectorId, connectorName: connector.name, reason: "CONNECTOR_REQUIRED_FOR_TASK" });
       try {
         const view = await this.service.propose(sessionId, { ...input, scope, requestId: companion.id }, key);
-        if (input.protocolVersion !== 3 && companion.autoApplyAt && view.state === "awaiting_confirmation" && !view.autoApplyAt) {
+        if (companion.autoApplyAt && view.state === "awaiting_confirmation" && !view.autoApplyAt) {
           await this.update(view.id, row => { row.view.autoApplyAt = companion.autoApplyAt; });
         }
-        if (input.protocolVersion === 3) this.store.withdrawConnectorAutoApply(sessionId, companion.id);
         return this.service.get(sessionId, view.id);
       }
       catch (error) {
@@ -213,8 +230,9 @@ export class ConversationalConfigurationFramework {
     if (input.values && Object.keys(input.values).some(name => name.startsWith("restore"))) throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "Restoration fields cannot be supplied directly", 400);
     await this.reconcileLifecycle(sessionId, id);
     const old = this.service.getRecord(sessionId, id);
-    if (old.view.runId && this.service.registry.get(old.view.capabilityId).target(input.values) !== old.target)
-      throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "The connector bound to a paused task cannot be changed. Dismiss it and request the other connector separately.", 400);
+    const noWrite = old.view.options?.some(option => option.id === input.selectedOptionId && ["dismiss", "alternative"].includes(option.kind));
+    if (old.view.runId && old.plan.activationMode === "same_run" && !noWrite && this.service.registry.get(old.view.capabilityId).target(input.values) !== old.target)
+      throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "The target bound to a paused task cannot be changed. Dismiss it and propose the other target separately.", 400);
     return this.service.preview(sessionId, id, input, key);
   }
 
@@ -344,7 +362,7 @@ export class ConversationalConfigurationFramework {
     }
     const receipt = this.repository.getReceipt(id, record.view.revision);
     if (!receipt) return this.service.get(sessionId, id);
-    if (record.view.activation.state === "active") {
+    if (configurationDecisionReady(record)) {
       if (record.view.runId && ["pending", "failed"].includes(record.view.resumption.state)) await this.resume(record);
       return this.service.get(sessionId, id);
     }
@@ -373,7 +391,7 @@ export class ConversationalConfigurationFramework {
         }, () => {
           this.finishPhase(job, result.state === "failed" ? "pending" : result.state === "suppressed" ? "suppressed" : "done",
             result.evidence ? { activationEvidence: result.evidence } : {});
-          if (result.state === "active") this.enqueueResume(record);
+          if (result.state === "active" || result.state === "needs_user_action") this.enqueueResume(record);
         });
       },
       enqueueResume: source => this.resume(source),
@@ -385,16 +403,16 @@ export class ConversationalConfigurationFramework {
         await this.store.runConfigurationTransaction(sessionId, () => this.finishPhase(job, "pending"));
       throw error;
     }
+    const settled = this.service.getRecord(sessionId, id);
+    if (configurationDecisionReady(settled) && settled.view.activation.state === "needs_user_action" && settled.view.runId) await this.resume(settled);
     return this.service.get(sessionId, id);
   }
 
   private async resume(record: ConfigurationRecord): Promise<void> {
     const { sessionId, id } = record.view;
     if (!record.view.runId || !this.options.resume) return;
-    if (record.view.state === "applied" && record.view.activation.state !== "active") {
-      record = this.service.getRecord(sessionId, id);
-      if (record.view.activation.state !== "active") return;
-    }
+    record = this.service.getRecord(sessionId, id);
+    if (!configurationDecisionReady(record)) return;
     const job = await this.claimPhase(record, "resume");
     if (!job) return;
     try {

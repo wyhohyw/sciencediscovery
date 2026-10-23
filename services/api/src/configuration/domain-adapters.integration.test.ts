@@ -214,7 +214,7 @@ test("CFG-T28/31: a saved generic companion cannot bypass failed activation thro
   } });
   const saved = await h.framework.decide(h.session.id, view.id, { revision: view.revision, previewDigest: view.previewDigest!, selectedOptionId: view.selectedOptionId, decision: "apply" });
   assert.equal(saved.state, "applied"); assert.equal(saved.activation.state, "failed");
-  assert.equal(h.store.getConnectorConfigurationRequest(h.session.id, view.id)?.state, "applied");
+  assert.equal(h.store.getConnectorConfigurationRequest(h.session.id, view.id), undefined, "New requests use only the generic decision record");
   assert.equal(await h.store.ensureConnectorContinuationRun({ sessionId: h.session.id, requestId: view.id }), undefined);
   const stillPaused = await h.store.getSessionRun(h.session.id, run.id);
   assert.equal(stillPaused?.status, "blocked"); assert.equal(stillPaused?.configurationWait, true);

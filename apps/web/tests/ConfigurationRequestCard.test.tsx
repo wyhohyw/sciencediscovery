@@ -181,7 +181,7 @@ test("CFG quick configuration entry never creates a request until explicitly cho
     assert.ok(key.length > 10); choices.push(capability);
   } })); });
   assert.deepEqual(choices, []);
-  assert.equal(renderer!.root.findAllByType("button").length, 7);
+  assert.equal(renderer!.root.findAllByType("button").length, 10);
   await act(async () => { button(renderer!, "Repair model credentials").props.onClick(); });
   assert.deepEqual(choices, ["model.repair_credential"]);
   await act(async () => { renderer!.unmount(); });
@@ -583,7 +583,7 @@ test("CFG-R11 Chinese alternatives retain their distinct destinations and pendin
   await act(async () => renderer.unmount());
   let menu: ReactTestRenderer;
   await act(async () => { menu = create(createElement(QuickConfigurationMenu, { disabled: false, hiddenCapabilities: ["model.select", "model.connect", "model.repair_credential"], onRequest: async () => undefined })); });
-  assert.equal(menu!.root.findAllByType("button").length, 4);
+  assert.equal(menu!.root.findAllByType("button").length, 7);
   assert.equal(button(menu!, "Connect a model"), undefined);
   await act(async () => menu!.unmount());
 });

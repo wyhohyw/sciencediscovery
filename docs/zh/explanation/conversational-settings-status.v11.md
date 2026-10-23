@@ -1,14 +1,28 @@
 # 对话内按需配置 · 合入前修订与实测 v11
 
-- 日期：2026-10-22；分支：`codex/conversational-settings-review-fixes`。
-- 产品依据：[设计 v23](conversational-settings.v23.md)第 17 节；工程合同：[开发 v13](conversational-settings-development.v13.md)第 21 节，CFG-R01～R15。
+- 日期：2026-10-23；分支：`codex/conversational-settings-review-fixes`。
+- 产品依据：[设计 v24](conversational-settings.v24.md)第 17 节；工程合同：[开发 v14](conversational-settings-development.v14.md)第 21 节及 CFG-R16，CFG-R01～R16。
 - 上游整合基线：`7ee6c1d0`；修复前审查验收候选 E：`05efd5476e800fb66c6dcc92b80be5aac7bd0849`。原审阅基线 `f58c728b` 留作历史追溯，不代替当前验证。
 - CFG-R14 手动 HTTP 修复候选 F：`20acc0df682eca8fcccbdd1efdcc4cd53662a014`；本轮结果见第 1.1 节。以下 E 的原始证据属于修复前基线，分别保留原候选和计数。
 - E 的公共 HTTP 十步旅程、真实 Flash/浏览器场景与第 3 节根回归属于前轮记录；不能用它们替代 F 的手动连接回归。
 
 ## 1. 本轮修订范围
 
-本轮 CFG-R15 已完成单入口按需发现、查询分页和模型历史预算控制；当前验收见下表。以下 G/F/E 记录保留为历史证据，不代替 H 的验证。
+本轮 CFG-R16 将所有 Agent 配置修改统一接入持久等待与同 run 恢复，生效时间独立处理。基于个人 fork `523cdebd` 实施，继续使用独立目录和 `codex/conversational-settings-review-fixes` 分支；不以此前 H/G/F/E 的结果替代本轮验证。
+
+### CFG-R16 统一配置等待：本轮实测
+
+- 专项 36/36：覆盖 Skill/Library、思考、审阅、部署级超时/配额/探索树、模型选择、模型连接与凭据修复；等待时没有新模型请求；确认/拒绝后保持原 run；失败修正、Stop、并发提案和重启恢复通过。
+- 前端卡片 33/33：更新此前三项系统设置新增后遗漏的菜单数量断言，未改变前端产品交互。
+- WSL 完整构建、类型检查通过；架构检查 72/72，通过 291 个包源码边界检查。
+- 浏览器 1280×720，使用全新临时数据库及本地模拟模型。从真实输入框提交审阅配置：12:36:31 创建卡片，12:37:33 仍为 blocked/configurationWait，完成事件为 0；点击确认后 12:37:52 同一 run 完成。总 run 数始终为 1，完成事件只有 1 个，回执自动收起为一行。等待超过该模拟实例的 60 秒执行空闲上限仍能恢复，等待期间未新增模型调用。
+- 浏览器用例 project `af31817a-b8bd-4c7b-9a4e-4aaf17f8df78`、session `2cc3c38e-b6f7-44d1-95cc-e581f42a5f45`、run `76fd7428-5b4c-4676-84d0-33384a88ad15`；专属临时数据库与服务已清理。未调用用户真实模型 API，也未修改 4420 用户数据。
+- WSL 全量覆盖：完整构建后运行 `pnpm binary:test` 与 `pnpm --recursive test`，32 个测试进程共 3,719 项；首轮 3,713 pass、5 fail、1 skip。5 个失败均属于同一 Claude/ACP 沙箱传输组：主机 `/usr/local/bin/node` 链接到沙箱没有挂载的 `/opt/node`。在仅该测试进程可见的挂载命名空间中提供同一 Node 二进制后，整组 6/6 通过，生产源码与沙箱策略未修改。最终有效覆盖为 3,718 pass、1 skip，无未解决失败；这里保留首轮结果，不宣称一次全绿。
+- 唯一跳过项：`a real SSH machine without a runner is deployed to, connected, and used`，按用户此前指示跳过 Docker/SSH 外部环境测试。旧 Runner SEA 缓存身份不一致已重建；此前菜单旧断言已修复。
+- 文档：HTML 由最新完整文档生成，reader 9/9；147 个 Markdown 文件格式与本地链接通过。
+- 4420 升级：旧 PubMed run `036cd2fa-815d-41ec-98b3-e45d267e4a4c` 仍在等待工具权限，重启会中断它，已向用户请求是否结束旧任务并重启。在该决定前保留现有服务，不能把 4420 旧服务算作本轮新版验收。
+
+以下 CFG-R15 为上一轮历史证据，只对其标明的候选 H 有效。
 
 ### CFG-R15 按需查询：本轮实测
 

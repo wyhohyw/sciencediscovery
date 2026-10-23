@@ -287,7 +287,12 @@ test("CFG-T31: run-only uses real MCP tools after restart without changing sessi
   assert.equal(queued.settingsSnapshot.enabledConnectorIds.includes("pubmed"), false);
   const next = await f.ok<SessionRun>(`${f.path}/runs`, { content: "QUEUE_MARKER: ordinary later task." }); await f.waitRun(next.id, "completed");
   assert.equal(next.settingsSnapshot.enabledConnectorIds.includes("pubmed"), false);
-  const saved = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
+  let saved = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
+  const acknowledgedBy = Date.now() + 5_000;
+  while (["queued", "pending"].includes(saved.resumption.state) && Date.now() < acknowledgedBy) {
+    await new Promise(done => setTimeout(done, 50));
+    saved = await f.ok<ConfigurationRequestView>(`${f.path}/configuration-requests/${original.card.id}`);
+  }
   assert.equal(saved.choiceReceipt?.kind, "run_overlay"); assert.equal(saved.choiceReceipt?.configurationWritten, false);
   assert.equal(saved.activation.state, "active"); assert.equal(saved.resumption.state === "completed" || saved.resumption.state === "started", true);
 });

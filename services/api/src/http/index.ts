@@ -271,7 +271,7 @@ import {
   createNotificationRun,
   emptyMatch,
   emptyTrace,
-  ensureConnectorContinuation,
+  ensureConfigurationContinuation,
   getActiveSessionRun,
   publishApprovalModeChange,
   scheduleSessionRuns,
@@ -419,7 +419,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
     },
     activate: (record, receipt) => prepareNativeConnectorActivation({ store, record, receipt, registry: mcpRegistry, catalog: mcpCatalog }),
     resume: async (sessionId, requestId) => {
-      const continuation = await ensureConnectorContinuation(store, sessionId, requestId);
+      const continuation = await ensureConfigurationContinuation(store, sessionId, requestId);
       if (continuation?.status === "queued") scheduleSessionRuns(
         store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
         artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
@@ -2538,7 +2538,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           },
         });
         if ((decided.state === "applied" || decided.state === "dismissed") && !decided.runId.startsWith("user-request:")) {
-          const continuation = await ensureConnectorContinuation(store, sessionId, decided.id);
+          const continuation = await ensureConfigurationContinuation(store, sessionId, decided.id);
           if (continuation?.status === "queued") scheduleSessionRuns(
             store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
             artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,
@@ -3912,7 +3912,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             },
           });
           if (decided.state !== "applied") continue;
-          const continuation = await ensureConnectorContinuation(store, session.id, decided.id);
+          const continuation = await ensureConfigurationContinuation(store, session.id, decided.id);
           if (continuation?.status === "queued") scheduleSessionRuns(
             store, runnerClient, provenanceRecorder, mcpBroker, webBroker, mcpRegistry, mcpCatalog,
             artifactManager, paperService, remoteCompute, skillCatalog, skillLibraryCatalog,

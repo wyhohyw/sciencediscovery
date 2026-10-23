@@ -146,7 +146,7 @@ export class ConfigurationRequestService {
     return { fields, changes,
       impact: { resourceLocation: string(impact.resourceLocation, "resourceLocation", 500), effectiveScope: string(impact.effectiveScope, "effectiveScope", 500), message: string(impact.message, "impact.message", 2000) },
       verificationPlan: { targets, actions: verification.actions.map((action) => string(action, "verification action", 500)), maxRequests, mayCharge: verification.mayCharge },
-      activationMode: source.activationMode, ready: source.ready && !fields.some((field) => field.kind === "credential" && field.required && field.status !== "provided"),
+      activationMode: snapshot.runId && source.activationMode === "before_first_run" ? "next_run" : source.activationMode, ready: source.ready && !fields.some((field) => field.kind === "credential" && field.required && field.status !== "provided"),
       ...(source.endpointAuthorization ? { endpointAuthorization: structuredClone(source.endpointAuthorization) } : {}),
       ...(source.data ? { data: structuredClone(source.data) } : {}) };
   }
@@ -252,7 +252,8 @@ export class ConfigurationRequestService {
       // Alternative/dismiss previews intentionally project no editable fields.
       // A subsequent option switch (including after refresh) retains the server's
       // non-sensitive candidate rather than requiring the browser to cache it.
-      const values = record.view.protocolVersion === 3 && input.selectedOptionId !== undefined && record.plan.fields.length === 0
+      const noWrite = record.view.options?.some(option => option.id === input.selectedOptionId && ["dismiss", "alternative"].includes(option.kind));
+      const values = noWrite || record.view.protocolVersion === 3 && input.selectedOptionId !== undefined && record.plan.fields.length === 0
         && Object.keys(object(input.values, Object.keys(input.values ?? {}), "values")).length === 0 ? record.input : input.values;
       const adapter = this.registry.get(record.view.capabilityId); const normalized = adapter.normalize(values); const target = adapter.target(normalized);
       const snapshot = this.snapshot(sessionId, adapter.id, target, record.view.runId); this.checkWritable(snapshot);

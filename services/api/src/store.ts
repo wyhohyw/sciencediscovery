@@ -34,6 +34,7 @@ import type { ConfigurationSnapshot } from "./configuration/types.js";
 import { ConfigurationRepository } from "./configuration/repository.js";
 import { ConfigurationCredentialBridge } from "./configuration/credential-bridge.js";
 import { canonical as canonicalConfiguration } from "./configuration/validation.js";
+import { configurationDecisionReady } from "./configuration/interaction-wait.js";
 import { nativeConfigurationChoiceRecord, nativeRunOverlay } from "./configuration/native-choices.js";
 
 // Explicitly reviewed public, read-only source. New connectors are never auto-authorized by default.
@@ -2738,10 +2739,37 @@ export class SessionStore {
     });
   }
 
+  /** One durable decision handoff for every registered capability. */
+  async ensureConfigurationContinuationRun(input: { sessionId: string; requestId: string }): Promise<SessionRun | undefined> {
+    this.assertSessionWritable(input.sessionId);
+    const record = nativeConfigurationChoiceRecord(this, input.sessionId, input.requestId);
+    if (!record) return this.ensureConnectorContinuationRun(input); // historical protocol only
+    if (!record.view.runId || !configurationDecisionReady(record)) return undefined;
+    const runId = record.view.runId;
+    return this.mutateArray<SessionRun, SessionRun>(this.sessionRunsPath(input.sessionId), runs => {
+      const current = nativeConfigurationChoiceRecord(this, input.sessionId, input.requestId);
+      const source = runs.find(run => run.id === runId);
+      if (!current || !configurationDecisionReady(current) || current.view.runId !== runId
+        || !source || source.configurationCheckpoint?.requestId !== input.requestId)
+        throw new Error("Configuration checkpoint or decision is unavailable");
+      if (!this.notifications.canWake(input.sessionId) || current.stopGeneration !== this.notifications.generation(input.sessionId)
+        || source.configurationCheckpoint.stopGeneration !== current.stopGeneration)
+        throw new Error("Session was stopped before task continuation");
+      if (source.status !== "blocked" || !source.configurationWait) return structuredClone(source);
+      source.status = "queued";
+      source.configurationWait = false;
+      source.configurationResume = { requestId: input.requestId, decision: current.view.state === "applied" ? "apply" : "dismiss",
+        connectorName: current.view.capabilityId === "connector.enable" ? String(current.input.connectorId) : current.view.capabilityId };
+      source.configurationNoticeMessageId = `configuration:${input.requestId}`;
+      return structuredClone(source);
+    });
+  }
+
   /** The request ID gives the continuation a stable identity across retries and restarts. */
   async ensureConnectorContinuationRun(input: {
     sessionId: string; requestId: string;
   }): Promise<SessionRun | undefined> {
+    if (nativeConfigurationChoiceRecord(this, input.sessionId, input.requestId)) return this.ensureConfigurationContinuationRun(input);
     this.assertSessionWritable(input.sessionId);
     const proposal = this.getConnectorConfigurationRequest(input.sessionId, input.requestId);
     if (!proposal || (proposal.state !== "applied" && proposal.state !== "dismissed")
