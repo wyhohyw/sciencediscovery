@@ -1,14 +1,26 @@
 # 对话内按需配置 · 合入前修订与实测 v11
 
 - 日期：2026-10-23；分支：`codex/conversational-settings-review-fixes`。
-- 产品依据：[设计 v24](conversational-settings.v24.md)第 17 节；工程合同：[开发 v14](conversational-settings-development.v14.md)第 21 节及 CFG-R16，CFG-R01～R16。
+- 产品依据：[设计 v25](conversational-settings.v25.md)第 17 节及 CFG-R17；工程合同：[开发 v15](conversational-settings-development.v15.md)第 21 节及 CFG-R16～R17，CFG-R01～R17。
 - 上游整合基线：`7ee6c1d0`；修复前审查验收候选 E：`05efd5476e800fb66c6dcc92b80be5aac7bd0849`。原审阅基线 `f58c728b` 留作历史追溯，不代替当前验证。
 - CFG-R14 手动 HTTP 修复候选 F：`20acc0df682eca8fcccbdd1efdcc4cd53662a014`；本轮结果见第 1.1 节。以下 E 的原始证据属于修复前基线，分别保留原候选和计数。
 - E 的公共 HTTP 十步旅程、真实 Flash/浏览器场景与第 3 节根回归属于前轮记录；不能用它们替代 F 的手动连接回归。
 
 ## 1. 本轮修订范围
 
-本轮 CFG-R16 将所有 Agent 配置修改统一接入持久等待与同 run 恢复，生效时间独立处理。基于个人 fork `523cdebd` 实施，继续使用独立目录和 `codex/conversational-settings-review-fixes` 分支；不以此前 H/G/F/E 的结果替代本轮验证。
+本轮 CFG-R17 增加连续失败后的配置发现提醒，计数与注入由框架负责，原因分析与查询选择由 Agent 完成；不做后台配置匹配或自动修改。以下为本轮独立验证，不沿用 CFG-R16 的结果。继续使用独立目录和 `codex/conversational-settings-review-fixes` 分支。
+
+### CFG-R17 连续失败提醒：本轮范围
+
+- 同一注册工具连续两次失败后追加一次提醒，其他工具成功不清零，同工具成功清零；配置工具自身错误和取消不触发。每个执行段最多一次，沿用输出预算，不增加常驻配置目录、搜索调用或模型轮次。
+- Agent 根据原任务和真实错误决定查询网络、代理或其他设置，或者采取其他修复；不存在后台根据错误推荐连接器的规则。真实模型主动查询概率与机制测试分开评价。
+- WSL 专项 69/69：注册表首次/重复失败、恢复、并发、取消、未知工具和输出预算，以及 Native 原有模型轮次中选择查询或其他修复。类型检查通过，架构 72/72、291 个包源码边界通过。
+- 独立产品 API 端到端使用全新临时数据库和本地确定性模型。两次 read_file 失败之间穿插成功 list_files，第二次失败才出现一次提醒；查询路径经 search/describe/propose、blocked 等待、确认后同 run 完成；其他修复路径不产生卡片也能完成。模型轮次分别为 7 和 4，没有额外诊断模型调用；配置工具定义在各轮保持相同。两条路径通过，临时数据库和进程均已清理，未调用用户模型或改动 4420 数据。这些结果不代表真实模型的配置发现率。
+- 文档 reader 9/9；当前分支 147 份 Markdown 格式与链接通过。WSL 运行目录中的未跟踪历史版本保留，格式检查按当前分支文档清单执行；不为通过检查删除历史文件。
+- 完整 WSL `pnpm test` 退出 0：包含完整构建，32 个测试进程共 3,726 项，3,725 pass、0 fail、1 skip。唯一跳过项仍为用户已允许跳过的 Docker/SSH 外部用例。本轮延续进程级 Node 挂载命名空间，解决本机 `/usr/local/bin/node` 链接到沙箱不可见 `/opt/node` 的环境问题；未放宽生产沙箱策略。
+- 4420 已升级，API、4421 Runner、17675 内存服务健康。原有 3 个项目和 12 个模型的 ID 集合保持；待确认 run `2cafb4c3-a350-45a4-b344-fb76cf2289e0` 仍为 blocked/configurationWait，其检查点完整不变，卡片 `e11594a4-67fb-4d2b-a1ea-53f462de2aa4` 仍为 awaiting_confirmation、revision 1。未替用户确认或取消。数据库仅由当前 API 进程打开。
+
+以下 CFG-R16 是上一轮独立证据。
 
 ### CFG-R16 统一配置等待：本轮实测
 
@@ -20,7 +32,7 @@
 - WSL 全量覆盖：完整构建后运行 `pnpm binary:test` 与 `pnpm --recursive test`，32 个测试进程共 3,719 项；首轮 3,713 pass、5 fail、1 skip。5 个失败均属于同一 Claude/ACP 沙箱传输组：主机 `/usr/local/bin/node` 链接到沙箱没有挂载的 `/opt/node`。在仅该测试进程可见的挂载命名空间中提供同一 Node 二进制后，整组 6/6 通过，生产源码与沙箱策略未修改。最终有效覆盖为 3,718 pass、1 skip，无未解决失败；这里保留首轮结果，不宣称一次全绿。
 - 唯一跳过项：`a real SSH machine without a runner is deployed to, connected, and used`，按用户此前指示跳过 Docker/SSH 外部环境测试。旧 Runner SEA 缓存身份不一致已重建；此前菜单旧断言已修复。
 - 文档：HTML 由最新完整文档生成，reader 9/9；147 个 Markdown 文件格式与本地链接通过。
-- 4420 升级：旧 PubMed run `036cd2fa-815d-41ec-98b3-e45d267e4a4c` 仍在等待工具权限，重启会中断它，已向用户请求是否结束旧任务并重启。在该决定前保留现有服务，不能把 4420 旧服务算作本轮新版验收。
+- 4420 已于用户批准结束旧任务后升级 CFG-R16，API/Runner/内存服务健康。随后清理了仍打开同一数据库的无监听旧 API 残留；用既有 DeepSeek 模型在临时会话实测审阅提案、暂停、确认及同 run 完成，测试项目精确清理，原有 3 个项目和 12 个模型保持。该记录不代替 CFG-R17 验证。
 
 以下 CFG-R15 为上一轮历史证据，只对其标明的候选 H 有效。
 

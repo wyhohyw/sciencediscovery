@@ -60,7 +60,7 @@ export function createConfigurationAgentTools(input: { store: SessionStore; sess
 
   };
   const tool: AgentTool<typeof CONFIGURATION_TOOL_PARAMETERS> = { name: "configuration", label: "Find and propose settings",
-    description: "When a task needs a setting change, search relevant capabilities/resources; describe one capability for fields/current state; propose a user choice card. If a step fails, also search whether a setting change can supply what is missing and propose a card; that is an additional route, and other tools remain valid. Query first; never guess IDs or send secrets. Proposals do not approve changes. Read activation timing; do not repeat effective or declined changes. Network failures do not justify changing keys or permissions.",
+    description: "When a task needs a setting change, search relevant capabilities/resources; describe one capability for fields/current state; propose a user choice card. After repeated failures, reassess the task and actual errors; consider searching settings if your analysis suggests they could help. Other repairs remain valid. Query first; never guess IDs or send secrets. Proposals do not approve changes. Read activation timing; do not repeat effective or declined changes. Network failures do not justify changing keys or permissions.",
     parameters: CONFIGURATION_TOOL_PARAMETERS,
     execute: async (_id, args) => {
       try {

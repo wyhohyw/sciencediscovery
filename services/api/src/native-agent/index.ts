@@ -264,7 +264,7 @@ export function createToolRegistry(
 ): ToolRegistry<WireMessage> {
   const executionTools = buildTools(options);
   const errorGuidance = executionTools.some((tool) => tool.name === "configuration")
-    ? "configuration(search) is an additional route if a setting could supply what this step needs. Other tools remain valid."
+    ? "Repeated tool failures: reassess the original task and the actual errors before retrying. If a setting change could help, consider configuration(search) using a query based on your own analysis; other repairs remain valid. This reminder does not diagnose the cause or authorize any setting change."
     : undefined;
   // Retained per Session, not per AgentRun: a bounded result stays in the
   // replayed history of later runs, so its ref has to keep resolving for as

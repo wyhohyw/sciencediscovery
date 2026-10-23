@@ -1,6 +1,6 @@
-# 对话内按需配置 · 完整开发文档 v14
+# 对话内按需配置 · 完整开发文档 v15
 
-- 日期：2026-10-23；产品依据：[完整设计 v24](conversational-settings.v24.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
+- 日期：2026-10-23；产品依据：[完整设计 v25](conversational-settings.v25.md)，CFG-01～CFG-06、CFG-T01～CFG-T36；复用依据：[竞品与底座调研 v2](conversational-settings-research.v2.md)。
 - 本文保留[开发 v8](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v8.md)及[历史开发 v7](https://github.com/wyhohyw/sciencediscovery/blob/f58c728b4395ed32f7fa1161636e87c9d6123f5d/docs/zh/explanation/conversational-settings-development.v7.md)，延续完整章节和验收编号，按 [#278 维护者决策](https://github.com/openJiuwen-ai/sciencediscovery/issues/278#issuecomment-6238467927)更新 DEV-CFG-11～17 实施状态。第 19 节记录本轮 P0/P1 接线与未完成边界，第 20 节内嵌完整设置矩阵；最终结果见状态 v11，不由文档更新推定端到端全部通过。
 - 核对范围：隔离分支 `codex/conversational-settings-review-fixes` 本轮实现。最终提交标识与 WSL 结果见[状态 v11](conversational-settings-status.v11.md)；旧 `a88d9283` 只对应 2026-10-16 的历史真实模型用例。
 - 标记约定：“已接入”表示实际产品调用路径；“合同验证”表示接口/模拟器/故障测试已有，真实后端未贯通；“待开发/待集成”表示仍需本项目宿主工作或固定补丁集成，尚不能开放产品承诺。文档中的未来宿主接口不能当作已安装能力。
@@ -1003,3 +1003,15 @@ configuration(propose)，绑定原 run
 - JiuwenSwarm 未接入可靠中断宿主时明确拒绝任务内提案，不伪装支持等待与恢复。
 
 验收编号：CFG-R16-A（普通设置确认与冻结快照）、B（拒绝）、C（凭据收集/失败重试）、D（连接器同 run）、E（Stop 与重复决定）、F（队列、连续提案及重启恢复）。
+
+## 连续工具失败的按需反思（CFG-R17，2026-10-23）
+
+产品依据为设计 v25 的 CFG-R17。延续 `ToolRegistryOptions.errorGuidance` 应用注入端口，取代每次失败重复追加旧提示的行为，不新增设置诊断器或配置匹配规则。开发 v14 保留在 Git 历史中。
+
+1. `packages/tools/src/registry.ts` 仅对已注册、非 configuration 工具的失败结果按工具名计数。该工具成功删除其计数；其他工具成功不清零。第二次失败追加应用提供的提醒，并清空计数、锁定本执行段不再追加。结果按完成顺序观察；并行结果也只追加一次。中止状态不更新计数，未知工具名不产生无限增长状态。
+2. `services/api/src/native-agent/index.ts` 只在真实工具集中存在 configuration 时传入固定短文：重新评估原任务和错误，按自己的语义分析考虑配置查询，其他修复方式仍可使用。原工具错误原样保留，不在提示中添加资源、能力目录、候选设置或错误原因。
+3. 失败提醒不是指令批准，不调用搜索、网络或写设置，不改变权限，也不增加模型轮次。Agent 使用原有下一轮推理自行选择。`agent-tools.ts` 的工具说明相应改为重复失败后考虑查询，不要求每次失败必须搜索或提出卡片。
+4. 提醒在原始结果审计之前加入；已有 outputGuard 仍约束加入后的完整正文。不得因工具原结果标为 self-bounded 而跳过追加文本的预算检查。计数只是当前 registry 的有限内存状态，不进入常驻提示或数据库；检查点恢复创建新 registry 后重新计数。不能据此声称跨进程或跨恢复段只提醒一次。
+5. 不解析 shell 命令、URL、错误正文或任务词来推荐配置。两个失败也可能只是参数错误；提醒只请求 Agent 重新评估，不宣称配置一定相关、一定可修复，实际未支持的设置仍由查询结果如实返回。
+
+CFG-R17-A：首次失败无提醒，第二次有且只出现一次；B：无关成功不清零，同工具成功清零；C：配置自身错误、取消、未知工具及未提供提示端口不触发；D：并行失败只提示一次、加入后仍走输出预算；E：真实 Native 模型循环在原有下一轮收到提示，分别验证选择 configuration(search) 和继续其他修复，无额外诊断调用、不自动提案。公开 API 验证沿用现有配置发现、确认等待与同 run 恢复旅程；真实模型的主动发现概率单独记录。

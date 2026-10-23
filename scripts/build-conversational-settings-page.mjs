@@ -10,10 +10,10 @@ import { gfm, gfmHtml } from '../node_modules/.pnpm/node_modules/micromark-exten
 const root = new URL('../', import.meta.url);
 const docsRoot = new URL('docs/zh/explanation/', root);
 const sources = [
-  { id: 'design', label: '完整设计 v24 · 统一配置等待', english: 'PRODUCT REVIEW · IMPLEMENTATION BOUNDARIES', filename: 'conversational-settings.v24.md', version: 'v24 / 统一配置决定等待 · 2026.10.23', note: 'CFG-R16 明确所有配置共用决定等待、同 run 恢复与生效时间分离的合同。当前分支结果独立记录，历史验证不代表本轮通过。' },
-  { id: 'development', label: '完整开发文档 v14', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v14.md', version: 'v14 / 统一等待与恢复链路 · 2026.10.23', note: '十项能力共用决定等待与同 run 接续；保留 v3 协议、完整设置矩阵和底座复用分析，CFG-R16 列出具体接口与验收。结果见状态 v11。' },
+  { id: 'design', label: '完整设计 v25 · 连续失败后按需反思', english: 'PRODUCT REVIEW · IMPLEMENTATION BOUNDARIES', filename: 'conversational-settings.v25.md', version: 'v25 / 连续失败后的配置发现提醒 · 2026.10.23', note: 'CFG-R17 增加连续失败后的简短提醒，由 Agent 自行判断是否查询配置；CFG-R16 的统一等待与同 run 恢复保持不变。当前分支结果独立记录，历史验证不代表本轮通过。' },
+  { id: 'development', label: '完整开发文档 v15', english: 'COMPLETE ENGINEERING GUIDE', filename: 'conversational-settings-development.v15.md', version: 'v15 / 按需反思与统一等待 · 2026.10.23', note: '新增有界失败计数与一次提醒，不匹配配置、不自动查询；十项能力共用决定等待与同 run 接续；保留 v3 协议、完整设置矩阵和底座复用分析，CFG-R16 列出具体接口与验收。结果见状态 v11。' },
   { id: 'research', label: '竞品与底座调研 v2', english: 'PRODUCT PATTERNS & FRAMEWORK REUSE', filename: 'conversational-settings-research.v2.md', version: 'v2 / 结论已纳入设计与开发 · 2026.10.19', note: '比较 Codex、OpenCode、WorkBuddy 与 openJiuwen core / WorkSwarm。区分产品行为、源码能力、依赖版本与接入建议，不把上游组件存在当作本项目集成已通过。' },
-  { id: 'status', label: '当前实现与实测 v11', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v11.md', version: 'v11 / CFG-R16 统一等待验证 · 2026.10.23', note: '记录本轮完整构建、全包回归与隔离浏览器证据，保留首次失败及补测结果；旧候选独立标记，4420 升级状态单列。' },
+  { id: 'status', label: '当前实现与实测 v11', english: 'IMPLEMENTATION & EVIDENCE', filename: 'conversational-settings-status.v11.md', version: 'v11 / CFG-R17 连续失败提醒验证 · 2026.10.23', note: '记录连续失败提醒的专项、隔离 API 端到端与完整回归；此前统一等待和浏览器证据独立保留，4420 升级状态单列。' },
 ];
 
 const escapeHtml = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
@@ -90,7 +90,7 @@ for (const source of sources) {
   documents.push({ ...source, raw, sha256: createHash('sha256').update(raw).digest('hex'), sections });
 }
 
-const expectedSections = { design: 19, development: 23, research: 11, status: 8 };
+const expectedSections = { design: 20, development: 24, research: 11, status: 8 };
 for (const doc of documents) if (doc.sections.length !== expectedSections[doc.id]) {
   throw new Error(`Document structure changed: ${doc.filename}; update chapter links before rebuilding.`);
 }

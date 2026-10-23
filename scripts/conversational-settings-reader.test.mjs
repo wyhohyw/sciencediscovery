@@ -89,12 +89,12 @@ test('current documents expose the implemented local layer and distinguish block
   const page = await readFile(new URL('../docs/zh/explanation/conversational-settings.html', import.meta.url), 'utf8');
   const data = JSON.parse(page.split('<script type="application/json" id="document-data">')[1].split('</script>')[0]);
   const current = new Map(data.filter(doc => !doc.archived).map(doc => [doc.id, doc]));
-  assert.equal(current.get('design').filename, 'conversational-settings.v24.md');
-  assert.equal(current.get('development').filename, 'conversational-settings-development.v14.md');
+  assert.equal(current.get('design').filename, 'conversational-settings.v25.md');
+  assert.equal(current.get('development').filename, 'conversational-settings-development.v15.md');
   assert.equal(current.get('status').filename, 'conversational-settings-status.v11.md');
   assert.equal(current.get('research').filename, 'conversational-settings-research.v2.md');
-  assert.equal(current.get('design').sections.length, 19);
-  assert.equal(current.get('development').sections.length, 23);
+  assert.equal(current.get('design').sections.length, 20);
+  assert.equal(current.get('development').sections.length, 24);
   assert.equal(current.get('status').sections.length, 8);
   const implementation = current.get('development').sections.find(section => section.id === 'development-18');
   assert.ok(implementation);
@@ -114,7 +114,7 @@ test('current documents expose the implemented local layer and distinguish block
   for (const id of ['DEV-CFG-11', 'DEV-CFG-12', 'DEV-CFG-13', 'DEV-CFG-14', 'DEV-CFG-15', 'DEV-CFG-16', 'DEV-CFG-17']) assert.ok(p1.searchText.includes(id));
   assert.match(p1.searchText, /任意真实失败自动诊断仍未贯通/);
   assert.match(delivery.searchText, /旧 PubMed 的 30 秒预授权不迁移/);
-  assert.match(page, /阅读页 v13/);
+  assert.match(page, /阅读页 v15/);
   assert.match(page, /href="#design-16"/);
   assert.match(page, /href="#development-20"/);
   assert.equal(data.length, 4);
