@@ -93,7 +93,7 @@ test("CFG-T30: finite option metadata rejects duplicate IDs, executable extensio
 
 test("CFG-T30/36: new P1 capabilities require the v3 choice protocol while historical connector requests retain v2", async () => {
   const h = harness();
-  for (const capabilityId of ["skill.select", "thinking.configure", "review.configure"] as const)
+  for (const capabilityId of ["skill.select", "thinking.configure", "review.configure", "timeouts.configure", "quotas.configure", "idea_tree.configure"] as const)
     await assert.rejects(h.service.propose("session", { capabilityId, values: {} }), { code: "CONFIGURATION_PROTOCOL_REQUIRED" });
   assert.equal(h.service.list("session").length, 0);
   const legacy = await h.service.propose("session", proposal);

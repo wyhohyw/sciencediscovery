@@ -10,6 +10,8 @@ import { ConfigurationRequestService } from "./request-service.js";
 import { ConfigurationCredentialBridge } from "./credential-bridge.js";
 import { createConfigurationDomainAdapters } from "./domain-adapters.js";
 import { createP1ConfigurationAdapters } from "./p1-adapters.js";
+import { createSystemConfigurationAdapters } from "./system-adapters.js";
+import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationActivationCoordinator } from "./activation-coordinator.js";
 import type { ConfigurationApplyReceipt, ConfigurationOutboxRecord, ConfigurationProposalInput, ConfigurationRecord } from "./types.js";
 import type { ConfigurationActivationEvidence } from "./runtime-bridge.js";
@@ -52,7 +54,7 @@ export class ConversationalConfigurationFramework {
     this.destinations = new ModelDestinationAuthorizer(database);
     const registry = new ConfigurationRegistry();
     for (const adapter of [...createConfigurationDomainAdapters({ store, credentials: this.credentials, destinations: this.destinations,
-      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor)]) {
+      connector: (sessionId, id) => this.options.connector(sessionId, id) }), ...createSystemConfigurationAdapters(store), ...createP1ConfigurationAdapters(store, () => this.options.nativeExecutor)]) {
       if (adapter.id === "connector.enable") {
         const apply = adapter.apply!;
         adapter.apply = context => {
@@ -122,7 +124,10 @@ export class ConversationalConfigurationFramework {
       throw new ConfigurationError("CONFIGURATION_BACKEND_UNSUPPORTED", "These scoped settings have only been integrated with the Native executor. JiuwenSwarm host activation is not verified.", 409);
     await this.reconcileLifecycle(sessionId);
     if (Object.keys(input.values).some(name => name.startsWith("restore"))) throw new ConfigurationError("INVALID_CONFIGURATION_INPUT", "Restoration fields are reserved for receipt-based reversal", 400);
-    const scope = input.scope ?? (input.capabilityId === "model.repair_credential" ||
+    const systemCapability = (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(input.capabilityId);
+    if (systemCapability && input.scope && input.scope.kind !== "global")
+      throw new ConfigurationError("INVALID_CONFIGURATION_SCOPE", "Timeouts, quotas and Idea Tree settings apply to the whole deployment", 400);
+    const scope = input.scope ?? (systemCapability || input.capabilityId === "model.repair_credential" ||
       input.capabilityId === "model.connect" && this.store.listModels().length === 0
       ? { kind: "global" as const } : { kind: "session" as const, id: sessionId });
     if (input.runId) {

@@ -8,17 +8,22 @@ import { nativeRuntimeConnectorIds } from "./native-choices.js";
 import { thinkingChoices } from "./p1-adapters.js";
 import { configurationDiagnostic } from "./diagnostics.js";
 import { CONFIGURATION_SETTINGS_INVENTORY } from "./settings-catalog.js";
+import { SYSTEM_CONFIGURATION_CAPABILITIES } from "./agent-metadata.js";
 import { ConfigurationError, digest, invalid, string } from "./validation.js";
 import { CONFIGURATION_CONTEXT_LIMITS } from "./context-budget.js";
+import { configurationDiscoveryMatches } from "./discovery-match.js";
 
 const aliases: Record<ConfigurationCapabilityId, string> = {
   "model.select": "model select choose 模型 切换 选择",
   "model.connect": "model api connect provider 模型 接入 添加 接口 服务商",
   "model.repair_credential": "credential authentication key 凭据 认证 密钥 修复",
-  "connector.enable": "connector source pubmed arxiv 数据源 连接器 启用 检索 文献",
+  "connector.enable": "connector source pubmed arxiv literature paper papers 数据源 连接器 启用 检索 文献 论文",
   "skill.select": "skill library skills 工作流 技能 技能库",
   "thinking.configure": "thinking reasoning effort 思考 推理 强度 深度",
   "review.configure": "review reviewer semantic 审阅 审查 自动审查",
+  "timeouts.configure": "timeout timeouts 超时 等待 时限",
+  "quotas.configure": "quota quotas 配额 并发 上传 容量",
+  "idea_tree.configure": "idea tree 探索树 深度 轮次",
 };
 const domainAliases: Record<string, string> = { proxy: "代理", timeouts: "超时", quotas: "配额", memory: "记忆", web: "搜索服务", mcp: "安装MCP", environment: "环境", runner_registration: "注册Runner SSH", network_security: "权限 网络安全", plugins_and_specialists: "插件 专家", idea_tree: "探索树" };
 type Row = Record<string, unknown>;
@@ -27,9 +32,7 @@ export interface ConfigurationDiscoveryInput {
 }
 const text = (value: string, max = 180) => value.slice(0, max);
 function matches(query: string, value: string): boolean {
-  const target = value.toLocaleLowerCase();
-  return query.split(/\s+/u).some(term => term.length > 1 && target.includes(term))
-    || target.split(/\s+/u).some(term => term.length > 1 && query.includes(term));
+  return configurationDiscoveryMatches(query, value);
 }
 function normalizedQuery(value: unknown, required: boolean): string {
   if (value === undefined && !required) return "";
@@ -142,13 +145,21 @@ export async function discoverConfiguration(store: SessionStore, sessionId: stri
   else if (id === "thinking.configure") current = { thinkingMode: effective.thinkingMode ?? "model_default", thinkingEffort: effective.thinkingEffort ?? "model_default", supported: thinkingChoices(store.getModel(effective.modelId)) };
   else if (id === "review.configure") current = { reviewModelId: effective.reviewModelId ?? effective.modelId ?? null, semanticReviewEnabled: effective.semanticReviewEnabled,
     ...store.getSessionReviewerSpecialistSettings(sessionId), reviewerGloballyEnabled: store.getReviewerSpecialistSettings().enabled };
-  else current = { modelId: effective.modelId ?? null };
+  else if (id === "timeouts.configure") current = { ...store.getTimeoutSettings() };
+  else if (id === "quotas.configure") current = { ...store.getQuotaSettings() };
+  else if (id === "idea_tree.configure") {
+    const idea = store.getIdeaTreeSettings();
+    current = { explorationIntensity: idea.explorationIntensity, scoreDirection: idea.scoreDirection, maxRounds: idea.maxRounds, candidatesPerRound: idea.candidatesPerRound,
+      maxTokensPerCall: idea.maxTokensPerCall, maxDepth: idea.maxDepth, maxNodes: idea.maxNodes, maxSearchRounds: idea.maxSearchRounds };
+  } else current = { modelId: effective.modelId ?? null };
   const selected = (await resources(id)).filter(row => (!input.targetId || row.id === input.targetId) && (!query || matches(query, `${row.id} ${row.name} ${row.model ?? ""}`)));
   if (input.targetId && !selected.length) throw new ConfigurationError("CONFIGURATION_RESOURCE_UNAVAILABLE", "The requested installed resource was not found");
   const sourceFields = Object.keys(descriptor.fields).filter(field => !["name", "baseUrl", "model", "apiProtocol", "apiVariant", "tokenOptional"].includes(field));
   const sources = Object.fromEntries(sourceFields.filter(field => field in settings.sources).map(field => [field, settings.sources[field as keyof typeof settings.sources]]));
   return configurationPage({ action, ...await brief(id), ...(query ? { query } : {}), ...(input.targetId ? { targetId: input.targetId } : {}), whenNeeded: descriptor.whenNeeded, fields: framework.service.registry.fields(id),
-    scopes: descriptor.scopes.filter(scope => scope !== "global"), current, sources,
-    instruction: "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },
+    scopes: descriptor.scopes.filter(scope => (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id) || scope !== "global"), current, sources,
+    instruction: (SYSTEM_CONFIGURATION_CAPABILITIES as readonly string[]).includes(id)
+      ? "Only these registered fields may be proposed. This setting is deployment-wide: omit scope. 0 disables a timeout or byte quota. Do not set 0 unless the user asked to remove that limit. Prompts, secrets, install commands and permission switches are not fields here. Saved configuration does not rewrite a run that already read its settings."
+      : "Only these registered fields may be proposed. Resources are a bounded page. Enter secrets through the user's secure card. Saved configuration is not approval to change an active frozen task." },
     selected, input, [sessionId, action, id, query, input.targetId ?? ""], CONFIGURATION_CONTEXT_LIMITS.describe);
 }

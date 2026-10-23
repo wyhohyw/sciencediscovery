@@ -4981,7 +4981,8 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
                       }
                       const connectorId = connectors.find((item) => !session.enabledConnectorIds?.includes(item.id))?.id ?? connectors[0]?.id;
                       const values: Record<string, string> = capabilityId === "connector.enable" && connectorId ? { connectorId } : {};
-                      const request = await client.createConfigurationRequest(session.id, { protocolVersion: 3, capabilityId, values }, key);
+                      const deploymentWide = capabilityId === "timeouts.configure" || capabilityId === "quotas.configure" || capabilityId === "idea_tree.configure";
+                      const request = await client.createConfigurationRequest(session.id, { protocolVersion: 3, capabilityId, values, ...(deploymentWide ? { scope: { kind: "global" as const } } : {}) }, key);
                       receiveConfigurationRequest(request);
                       requestAnimationFrame(() => document.getElementById(`configuration-request-${request.id}`)?.scrollIntoView({ block: "nearest" }));
                     }} />

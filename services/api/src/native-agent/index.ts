@@ -263,6 +263,9 @@ export function createToolRegistry(
   hooks: { onProgress?: (call: import("@sciencediscovery/runtime-core").RuntimeToolCall, chunk: string) => void; recordResult?: (input: Parameters<NonNullable<ConstructorParameters<typeof ToolRegistry<WireMessage>>[1]["recordResult"]>>[0]) => Promise<void> } = {},
 ): ToolRegistry<WireMessage> {
   const executionTools = buildTools(options);
+  const errorGuidance = executionTools.some((tool) => tool.name === "configuration")
+    ? "configuration(search) is an additional route if a setting could supply what this step needs. Other tools remain valid."
+    : undefined;
   // Retained per Session, not per AgentRun: a bounded result stays in the
   // replayed history of later runs, so its ref has to keep resolving for as
   // long as that history does. Session deletion removes this directory.
@@ -289,6 +292,7 @@ export function createToolRegistry(
     },
     recordResult: hooks.recordResult,
     onProgress: hooks.onProgress,
+    ...(errorGuidance ? { errorGuidance } : {}),
     outputGuard: new ToolOutputGuard({
       maxBytes: toolOutputSettings.maxBytes,
       maxLines: toolOutputSettings.maxLines,

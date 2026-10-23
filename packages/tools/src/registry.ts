@@ -38,6 +38,11 @@ export interface ToolSpec {
 export interface ToolRegistryOptions<TMessage extends RuntimeMessage> {
   batchPolicies?: readonly ToolBatchPolicy[];
   createResultMessage(call: RuntimeToolCall, content: string, output?: ToolOutputRecord): TMessage;
+  /**
+   * Appended to a failed tool result when another route should stay visible.
+   * The configuration tool's own failures are left unchanged.
+   */
+  errorGuidance?: string;
   /** Optional run-scoped capability policy supplied by the application composition. */
   isAvailable?(tool: AgentTool): boolean;
   loopGuard?: ToolLoopGuard;
@@ -356,6 +361,9 @@ export class ToolRegistry<TMessage extends RuntimeMessage> implements ToolDispat
       isError = true;
     } else {
       ({ content, details, isError, selfBounded } = await this.executeRegistered(call, signal));
+    }
+    if (isError && this.options.errorGuidance && call.name !== "configuration") {
+      content = `${content}\n${this.options.errorGuidance}`;
     }
     const boundedDetails = details === undefined ? undefined : sanitizeToolDetails(details);
     if (this.options.recordResult) await this.options.recordResult({ call, content, ...(boundedDetails !== undefined ? { details: boundedDetails } : {}), isError, sequence });

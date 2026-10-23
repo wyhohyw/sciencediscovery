@@ -55,6 +55,17 @@ test("CFG-Q02: exact PubMed search returns relevant actual readiness without glo
   const unsupported = await h.query({ action: "search", query: "proxy" });
   assert.ok(unsupported.items.some((item: { domain: string; available: boolean }) => item.domain === "proxy" && !item.available));
 });
+test("CFG-Q02: task words match literature and ignore ASCII substrings", async context => {
+  const h = await fixture(context);
+  const papers = await h.query({ action: "search", query: "找几篇论文" });
+  assert.deepEqual(papers.items.map((item: { capabilityId?: string }) => item.capabilityId), ["connector.enable"]);
+  const joined = await h.query({ action: "search", query: "启用pubmed" });
+  assert.equal(joined.items.length, 1);
+  assert.equal(joined.items[0].resource.id, "pubmed");
+  const noise = await h.query({ action: "search", query: "validate the rapid citation" });
+  assert.ok(noise.items.every((item: { capabilityId?: string; resource?: { id?: string } }) => item.capabilityId === "skill.select" && item.resource?.id?.includes("citation")));
+  assert.doesNotMatch(noise.raw, /model\.connect|runner_registration|connector\.enable|timeouts\.configure|quotas\.configure/);
+});
 test("CFG-Q03: one-domain detail does not load unrelated resource catalogs or expose keys/URLs", async context => {
   const h = await fixture(context);
   h.store.configurationSkillResources = () => { throw new Error("Unrelated Skill catalog was loaded"); };

@@ -1376,16 +1376,23 @@ export class SessionStore {
       skills: version([[...this.skillIds].sort(), this.configurationSkillLibrarySource(), this.everySkillEverywhere]),
       reviewer: version([this.getSessionReviewerSpecialistSettings(sessionId), this.catalog.reviewerSpecialistEnabled]),
     };
+    const timeoutSettings = this.getTimeoutSettings();
+    const quotaSettings = this.getQuotaSettings();
+    const ideaTreeSettings = this.getIdeaTreeSettings();
+    let systemVersions: Record<string, string> | undefined;
+    if (capabilityId === "timeouts.configure") systemVersions = { timeouts: version(timeoutSettings) };
+    else if (capabilityId === "quotas.configure") systemVersions = { quotas: version(quotaSettings) };
+    else if (capabilityId === "idea_tree.configure") systemVersions = { ideaTree: version(ideaTreeSettings) };
     return {
       projectId: session.projectId, stopGeneration: this.notifications.generation(sessionId), writable: true,
       // A connector grant does not alter a model, credential, Skill or Reviewer.
       // Binding those unrelated records made a harmless standalone-model to
       // Provider grouping migration invalidate an already committed run overlay.
-      resourceVersions: capabilityId === "connector.enable" ? {
+      resourceVersions: systemVersions ?? (capabilityId === "connector.enable" ? {
         settings: resourceVersions.settings, connectors: resourceVersions.connectors,
         connectorCatalog: resourceVersions.connectorCatalog, policies: resourceVersions.policies,
         autoConfigurationPolicy: resourceVersions.autoConfigurationPolicy,
-      } : resourceVersions,
+      } : resourceVersions),
       data: {
         capabilityId, target, effective: structuredClone(settings.effective), overrides: structuredClone(session.settingsOverrides),
         globalOverrides: structuredClone(this.catalog.globalSettings), models: structuredClone(this.catalog.models),
@@ -1401,8 +1408,18 @@ export class SessionStore {
         effectiveModel: structuredClone(this.getModel(settings.effective.modelId)),
         sessionReviewer: this.getSessionReviewerSpecialistSettings(sessionId),
         reviewerGloballyEnabled: this.catalog.reviewerSpecialistEnabled,
+        timeoutSettings, quotaSettings, ideaTreeSettings,
       },
     };
+  }
+
+  /** Mutate the in-memory catalog inside the configuration transaction. The commit writes catalog_state. */
+  applySystemConfigurationSync(capabilityId: ConfigurationCapabilityId, values: ConfigurationValues): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Configuration domain writes require the shared transaction");
+    if (capabilityId === "timeouts.configure") this.catalog.timeoutSettings = normalizeTimeoutSettings({ ...this.getTimeoutSettings(), ...values });
+    else if (capabilityId === "quotas.configure") this.catalog.quotaSettings = normalizeQuotaSettings({ ...this.getQuotaSettings(), ...values });
+    else if (capabilityId === "idea_tree.configure") this.catalog.ideaTreeSettings = normalizeIdeaTreeSettings(values as Parameters<typeof normalizeIdeaTreeSettings>[0], this.getIdeaTreeSettings());
+    else throw new Error("Unsupported system configuration");
   }
 
   /** The same formal runtime settings and reviewer state as the settings pages, in the shared audit transaction. */

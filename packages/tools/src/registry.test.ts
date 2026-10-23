@@ -41,6 +41,28 @@ test("state commits are awaited and fail closed while observers remain isolated"
   await assert.rejects(make(true).execute({ id: "two", name: "echo", args: {} }, new AbortController().signal), /state commit failed/);
 });
 
+test("a failed tool result keeps the additional-route note, and a success does not", async () => {
+  const note = "configuration(search) is an additional route if a setting could supply what this step needs. Other tools remain valid.";
+  const registry = new ToolRegistry([
+    {
+      name: "echo", label: "echo", description: "echo", parameters: Type.Object({}),
+      async execute() { return { content: [{ type: "text" as const, text: "ok" }] }; },
+    },
+    {
+      name: "broken", label: "broken", description: "broken", parameters: Type.Object({}),
+      async execute() { return { isError: true, content: [{ type: "text" as const, text: "failed" }] }; },
+    },
+    {
+      name: "configuration", label: "configuration", description: "configuration", parameters: Type.Object({}),
+      async execute() { return { isError: true, content: [{ type: "text" as const, text: "unavailable" }] }; },
+    },
+  ], { createResultMessage: resultMessage, errorGuidance: note });
+  const signal = new AbortController().signal;
+  assert.equal((await registry.execute({ id: "ok", name: "echo", args: {} }, signal)).content, "ok");
+  assert.equal((await registry.execute({ id: "bad", name: "broken", args: {} }, signal)).content, `failed\n${note}`);
+  assert.equal((await registry.execute({ id: "cfg", name: "configuration", args: {} }, signal)).content, "unavailable");
+});
+
 test("executes tools and creates the canonical result message", async () => {
   const registry = new ToolRegistry([{
     name: "echo", label: "echo", description: "echo", parameters: Type.Object({ value: Type.String() }),

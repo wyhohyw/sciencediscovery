@@ -7,7 +7,7 @@
 
 ## 1. 交付范围与技术决策
 
-当前通用切片包含七个已注册适配器：`model.select`、`model.connect`、`model.repair_credential`、`connector.enable`、`skill.select`、`thinking.configure`、`review.configure`。公共服务处理版本化预览、用户批准、批准后验证、正式提交、receipt 与持久阶段；Native 连接器已接工具装配 witness 和同 run 调度。对话内无模型引导也使用统一持久请求；连接器预检/专用工具和旧 PubMed 计时器保留兼容。设置页继续使用原有模型管理接口。
+当前通用切片包含十个已注册适配器：`model.select`、`model.connect`、`model.repair_credential`、`connector.enable`、`skill.select`、`thinking.configure`、`review.configure`，以及部署级 `timeouts.configure`、`quotas.configure`、`idea_tree.configure`。后三项只接受正式边界内的数值和枚举，范围固定为整个部署，在后续运行读取时生效，不接续当前 run。公共服务处理版本化预览、用户批准、批准后验证、正式提交、receipt 与持久阶段；Native 连接器已接工具装配 witness 和同 run 调度。对话内无模型引导也使用统一持久请求；连接器预检/专用工具和旧 PubMed 计时器保留兼容。设置页继续使用原有模型管理接口。
 
 本轮已经接入注册驱动的 Agent 发现/参数、v3 可信选项、Native 已就绪 MCP 运行级覆盖、结构化替代/拒绝结果及 P1 三项领域。最终测试结果见状态 v11；P2～P4 和实际 JiuwenSwarm 宿主仍按后续计划逐项开发。任意 REST API、STDIO、宿主部署设置不自动获得支持。
 
@@ -898,17 +898,17 @@ P1 首轮不提供“移除覆盖并恢复继承”的专门动作；未出现�
 
 ### 20.2 已盘点但未开放 Agent 修改的设置
 
-以下各行可从有限目录识别为尚未集成；“本任务 / 后续任务 / 临时”均不作新支持承诺，禁止生成成功卡或以直接编辑配置文件绕过。
+以下各行里，超时、配额和探索树的有界字段已经注册为部署级后续运行能力。其余行仍可从有限目录识别为尚未集成；“本任务 / 后续任务 / 临时”均不作新支持承诺，禁止生成成功卡或以直接编辑配置文件绕过。
 
 | 设置入口 / 正式字段 | 真实范围与凭据归属 | 已有服务可复用 | 仍需开发与审核的边界 |
 |---|---|---|---|
 | Web：`fetchCacheTtlSeconds`、`fetchProvider`、`freeSearchEngines`、`paidSearchProviders`、`proxyPolicy`、`searchCacheTtlSeconds`、`providerApiKeys` | System；Key 在既有 `web_provider_secrets` | WebSettingsEditor、搜索/抓取领域 API 与 provider 状态 | P2：Native/Jiuwen 引擎字段差异；专用 Key 草稿；有界验证；付费供应商明确选择与费用 |
 | MCP 资源：`name`、`description`、`transport`、`enabled`、`url`、`headers`、STDIO `command`/`args`/`env`/`cwd`、`timeoutSeconds`、`authMode`、`oauth` | 共享 server 资源；既有 MCP 凭据/授权服务 | McpServerSettings、McpAuthorization、CustomMcpServerInput、连接与安装服务 | P2 修复与 P4 新增分离；条件写入、连接验证和共享影响；安装命令仍受执行授权，不作为普通字符串执行；OAuth 回调绑定 |
 | Proxy：`defaultPolicy`、server name/kind/url、各模块/服务器 proxy policy | System/共享 proxy；URL 可含敏感凭据，正式库加密 | ProxySettingsEditor、proxy registry、各 transport resolver | P3：部署全局影响、代理 URL 安全通道、实际 transport 探测和目标限制；不能伪装 Session/run-only |
-| Timeout：`gatewayIdleTimeoutMs`、`gatewayTurnTimeoutMs`、`kernelIdleTimeoutMs`、`permissionWaitTimeoutMs`、`runnerExecTimeoutMs` | System；无凭据 | SystemTimeoutSettings 和已有 getter/setter | P3：数值边界、生效节点与所有任务影响；0 可关闭限制，不能因一次超时自动放宽 |
-| Quota：`maxConcurrentSubagents`、`runnerMaxOutputBytes`、`runnerMaxWorkspaceBytes`、`uploadMaxFileBytes`、`uploadMaxRequestBytes` | System；无凭据 | SystemQuotaSettings 与 Runner/上传消费点 | P3：资源预算、并发 1～10 与 byte quota 的 0 语义；需要明确批准，不从工具权限继承 |
+| Timeout：`gatewayIdleTimeoutMs`、`gatewayTurnTimeoutMs`、`kernelIdleTimeoutMs`、`permissionWaitTimeoutMs`、`runnerExecTimeoutMs` | System；无凭据 | `timeouts.configure` 复用 `normalizeTimeoutSettings`，在配置事务内同步写入 catalog | 已注册。0 关闭单项限制；两个网关超时都非 0 时，单轮不得短于空闲。已开始的 run 保留启动时读到的值。不能因一次超时自动放宽 |
+| Quota：`maxConcurrentSubagents`、`runnerMaxOutputBytes`、`runnerMaxWorkspaceBytes`、`uploadMaxFileBytes`、`uploadMaxRequestBytes` | System；无凭据 | `quotas.configure` 复用 `normalizeQuotaSettings` | 已注册。字节 0 表示取消该项上限；并发保持 1～10。需要明确批准，不从工具权限继承 |
 | Memory graph：`enabled`、`backend`、`neo4jHttp`、`neo4jUser`、`neo4jPassword` | System；Neo4j 密码由既有 write-only store 管理 | MemoryGraphSettingsEditor、sidecar 状态与密码服务 | P3：local/neo4j 准备状态、外部连接和后端激活；保存密码不等于启用 |
-| Idea Tree：`templateId`、`explorationIntensity`、round/candidate/token/depth/node/search limits、`scoreDirection`、design/aggregator/propagate prompts、三个 assessor 配置 | System；不是 Session 设置；无凭据字段 | IdeaTreeSettingsEditor、正式权重/参数校验与后续 run 注入 | P3：结构化配置、权重和 token/search 预算；不能塞进任意 JSON；活动 run 不受保存影响 |
+| Idea Tree：`explorationIntensity`、`maxRounds`、`candidatesPerRound`、`maxTokensPerCall`、`maxDepth`、`maxNodes`、`maxSearchRounds`、`scoreDirection` | System；不是 Session 设置；无凭据字段 | `idea_tree.configure` 复用 `normalizeIdeaTreeSettings` | 已注册上述有界字段。提示词、assessor 文本、权重、template 和 `maxTokens` 仍只在设置页修改。进行中的探索树 run 保留启动时读到的设置 |
 | 环境来源 / 分配：`pipSource`、`condaSource`、`runnerIds`、`remoteRunnerHostIds` | 包源为 System；Runner 分配属于 Project/Session | EnvironmentSourceSettings、RunnerEnvironmentSettings 与正式会话/项目 API | P3：逐资源 scope、连接验证与实际生效，不把环境 revision 伪装成一个自由填写的字段 |
 | 环境创建 / 包操作：`baseEnvironmentId`、`language`、`name`、`channels`、`indexUrl`、`manager`、`packages` | Runner resource；无新凭据库 | CreateEnvironmentRequest、InstallEnvironmentRequest、UninstallEnvironmentRequest 和环境 revision 服务 | P3：安装副作用、包来源和预算；revision 是正式操作生成的审计对象，不是任意 JSON 配置 |
 | Runner 注册 / SSH：`id`、`runnerName`、`description`、`alias`、`connectionKind`、`endpoint`、`port`、`runnerCommand`、`token`、`username`、`password`、`passphrase`、`privateKeyPath`、`trustHostKey` | Runner 共享资源；凭据留在既有加密 store | RegisterRemoteHostRequest、Runner/SSH host 服务 | P3/P4：连接验证、host key 信任、密钥路径与凭据专用通道；命令仍需执行授权 |

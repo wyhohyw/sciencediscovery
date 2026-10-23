@@ -5,7 +5,7 @@ import type { ConfigurationCapabilityId } from "@sciencediscovery/schema";
 export interface ConfigurationAgentDescriptor {
   label: string;
   whenNeeded: string;
-  fields: Record<string, { kind: "string" | "boolean" | "ids"; maxLength?: number; choices?: readonly string[] }>;
+  fields: Record<string, { kind: "string" | "boolean" | "ids" | "integer"; maxLength?: number; minimum?: number; maximum?: number; choices?: readonly string[] }>;
   activation: "next_run" | "same_run_if_bound";
   diagnostics: readonly string[];
 }
@@ -21,11 +21,27 @@ export const CONFIGURATION_AGENT_DESCRIPTORS: Record<ConfigurationCapabilityId, 
   "skill.select": { label: "Select installed Skills and Libraries", whenNeeded: "The user requests a selection of installed Skills or Libraries. In all mode every installed Skill is already available; do not ask to enable it again.", fields: { skillSelectionMode: { kind: "string", choices: ["all", "selected"] }, enabledSkillIds: ids, enabledSkillLibraryIds: ids }, activation: "next_run", diagnostics: ["SKILL_EXCLUDED"] },
   "thinking.configure": { label: "Configure model thinking", whenNeeded: "The user explicitly requests a thinking mode or effort supported by the current model API variant. Applies to future runs, never the active frozen model.", fields: { thinkingMode: { kind: "string", choices: ["auto", "disabled", "enabled"] }, thinkingEffort: { kind: "string", choices: ["low", "medium", "high", "xhigh", "max"] } }, activation: "next_run", diagnostics: ["THINKING_REQUIREMENT"] },
   "review.configure": { label: "Configure session review", whenNeeded: "The user requests review model, semantic review, automatic review or review level for this session. The global Reviewer Specialist switch is separate and cannot be changed here.", fields: { reviewModelId: id, semanticReviewEnabled: boolean, automaticReviewEnabled: boolean, level: { kind: "string", choices: ["quick", "deep"] } }, activation: "next_run", diagnostics: ["REVIEW_REQUIREMENT"] },
+  "timeouts.configure": { label: "Configure deployment timeouts", whenNeeded: "The user explicitly asks to change a deployment-wide timeout. 0 disables that one limit. Do not widen a timeout because a single run timed out. Omit scope; this is not a session setting and does not resume the active run.", fields: {
+    gatewayIdleTimeoutMs: { kind: "integer", minimum: 0 }, gatewayTurnTimeoutMs: { kind: "integer", minimum: 0 }, kernelIdleTimeoutMs: { kind: "integer", minimum: 0 },
+    permissionWaitTimeoutMs: { kind: "integer", minimum: 0 }, runnerExecTimeoutMs: { kind: "integer", minimum: 0 },
+  }, activation: "next_run", diagnostics: [] },
+  "quotas.configure": { label: "Configure deployment quotas", whenNeeded: "The user explicitly asks to change a deployment-wide quota. 0 removes a byte cap. Concurrent subagents stay between 1 and 10. Omit scope; this does not resume the active run or inherit a tool permission.", fields: {
+    maxConcurrentSubagents: { kind: "integer", minimum: 1, maximum: 10 }, runnerMaxOutputBytes: { kind: "integer", minimum: 0 }, runnerMaxWorkspaceBytes: { kind: "integer", minimum: 0 },
+    uploadMaxFileBytes: { kind: "integer", minimum: 0 }, uploadMaxRequestBytes: { kind: "integer", minimum: 0 },
+  }, activation: "next_run", diagnostics: [] },
+  "idea_tree.configure": { label: "Configure Idea Tree limits", whenNeeded: "The user explicitly asks to change Idea Tree intensity, score direction, or a bounded round, candidate, token, depth, node, or search limit. Prompts, assessor text, weights, template, and maxTokens stay in Settings. Omit scope; an in-progress idea-tree run keeps the settings it already read.", fields: {
+    explorationIntensity: { kind: "string", choices: ["quick", "standard", "deep"] }, scoreDirection: { kind: "string", choices: ["maximize", "minimize"] },
+    maxRounds: { kind: "integer", minimum: 1, maximum: 100 }, candidatesPerRound: { kind: "integer", minimum: 1, maximum: 20 },
+    maxTokensPerCall: { kind: "integer", minimum: 256, maximum: 32768 }, maxDepth: { kind: "integer", minimum: 1, maximum: 20 },
+    maxNodes: { kind: "integer", minimum: 2, maximum: 10000 }, maxSearchRounds: { kind: "integer", minimum: 1, maximum: 10000 },
+  }, activation: "next_run", diagnostics: [] },
 };
+export const SYSTEM_CONFIGURATION_CAPABILITIES = ["timeouts.configure", "quotas.configure", "idea_tree.configure"] as const satisfies readonly ConfigurationCapabilityId[];
 export function descriptorValuesSchema(descriptor: ConfigurationAgentDescriptor): TSchema {
   return Type.Object(Object.fromEntries(Object.entries(descriptor.fields).map(([name, field]) => {
     const schema = field.kind === "ids" ? Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 500, uniqueItems: true })
       : field.kind === "boolean" ? Type.Boolean()
+      : field.kind === "integer" ? Type.Integer({ minimum: field.minimum ?? 0, ...(field.maximum === undefined ? {} : { maximum: field.maximum }) })
       : field.choices ? Type.Union(field.choices.map(value => Type.Literal(value))) : Type.String({ maxLength: field.maxLength ?? 200 });
     return [name, Type.Optional(schema)];
   })), { additionalProperties: false });
