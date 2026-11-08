@@ -66,7 +66,7 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const latestRequest = useRef(request);
-  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "webProvider", "operation"];
+  const targetFields = ["baseUrl", "apiProtocol", "apiVariant", "modelId", "model", "webProvider", "operation", "neo4jHttp", "neo4jUser"];
   const targetIdentity = (view: ConfigurationRequestView) => JSON.stringify([view.credentialTargetDigest ?? "", view.endpointAuthorization?.endpointTarget ?? "", ...targetFields.map(key => fieldValues(view)[key] ?? "")]);
   const previousTarget = useRef(targetIdentity(request));
   const previousRequestId = useRef(request.id);
@@ -105,7 +105,8 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const terminal = ["applied", "dismissed", "cancelled", "expired"].includes(request.state);
   const authorization = request.endpointAuthorization;
   const targetEdited = targetFields.some(key => JSON.stringify(values[key] ?? "") !== JSON.stringify(fieldValues(request)[key] ?? ""));
-  const needsEndpoint = ["model.connect", "model.repair_credential"].includes(request.capabilityId);
+  const needsEndpoint = ["model.connect", "model.repair_credential", "memory.connection"].includes(request.capabilityId)
+    || request.capabilityId === "memory.credential" && request.fields.some(field => field.kind === "credential");
   const endpointReady = authorization ? !targetEdited && ["trusted", "confirmed"].includes(authorization.status) : !needsEndpoint;
   const credentialReady = endpointReady && authorization?.classification !== "public_http";
   const editable = hasAction("preview") && !terminal && !busy && !readOnly && !mutationsBlocked
@@ -284,11 +285,14 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
   const stateLabel = request.choiceReceipt && !request.choiceReceipt.configurationWritten ? m.choiceCompleted : m.state[request.state];
   const savedForNextRun = request.state === "applied" && request.activation.mode === "next_run" && !request.runId
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
+  const savedForRestart = request.state === "applied" && request.activation.mode === "requires_restart"
+    && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
   const savedForNextRequest = request.state === "applied" && request.activation.mode === "next_request"
     && (!request.choiceReceipt || (request.choiceReceipt.kind === "persisted_apply" && request.choiceReceipt.configurationWritten));
-  const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "web.credential"
-    ? m.mode.domainNextRequest : m.mode[request.activation.mode];
-  const summary = savedForNextRun || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
+  const activationModeLabel = request.activation.mode === "next_request" && request.capabilityId === "memory.enable"
+    ? m.mode.memoryNextRequest : request.activation.mode === "next_request" && request.capabilityId === "web.credential"
+      ? m.mode.domainNextRequest : m.mode[request.activation.mode];
+  const summary = savedForNextRun || savedForRestart || savedForNextRequest ? `${title} · ${m.state.applied} · ${activationModeLabel}`
     : `${title} · ${choiceLabel ?? stateLabel}${request.state === "applied" || request.state === "dismissed" ? ` · ${m.resumption[request.resumption.state]}` : ""}`;
   const activationLabel = savedForNextRun && request.activation.state === "needs_user_action"
     ? m.waitingNextRun : m.activation[request.activation.state];
@@ -388,11 +392,13 @@ export function ConfigurationRequestCard({ request, actions, runActive: sourceRu
       {request.fields.map((field) => {
         const inputId = `${id}-${field.id}`;
         const descriptionId = `${inputId}-help`;
+        const translatedLabel = request.capabilityId === "memory.credential" && field.id === "apiToken" ? m.field.neo4jPassword
+          : request.capabilityId === "memory.credential" && field.id === "operation" ? m.field.neo4jOperation : request.capabilityId === "memory.enable" && field.id === "enabled" ? m.field.memoryEnabled : ownMessage(m.field, field.id, field.label);
         const common = { id: inputId, name: field.id, disabled: !editable, required: field.required,
           "aria-describedby": field.description || field.kind === "credential" ? descriptionId : undefined,
           "aria-invalid": request.error?.field === field.id || errorField === field.id || undefined };
         return <div className="configuration-field" key={field.id}>
-          <label htmlFor={inputId}>{ownMessage(m.field, field.id, field.label)}{field.required ? " *" : ""}</label>
+          <label htmlFor={inputId}>{translatedLabel}{field.required ? " *" : ""}</label>
           {field.kind === "credential" ? <>
             {credentialReady ? <input {...common} autoComplete="new-password" type="password" value={secrets[field.id] ?? ""}
               required={false} aria-required={field.required && field.status !== "provided"}

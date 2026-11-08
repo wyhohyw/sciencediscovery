@@ -680,7 +680,7 @@ export class SessionStore {
     this.dataDir = resolve(dataDir);
     this.initialTimeoutSettings = initialTimeoutSettings;
     this.initialQuotaSettings = initialQuotaSettings;
-    this.initialNeo4jPassword = initialNeo4jPassword?.trim() || undefined;
+    this.initialNeo4jPassword = initialNeo4jPassword?.trim() ? initialNeo4jPassword : undefined;
     this.memoryGraphAvailable = memoryGraphAvailable;
   }
 
@@ -2503,6 +2503,11 @@ export class SessionStore {
       const json = this.configurationJsonViewerSettings(sessionId);
       systemVersions = { jsonViewer: version([json.modes, installedPlugins.find(plugin => plugin.id === "artifact-json")]) };
     }
+    if (capabilityId === "memory.credential" || capabilityId === "memory.enable" ||
+        capabilityId === "memory.backend" || capabilityId === "memory.connection") systemVersions = {
+      memoryGraph: version(this.catalog.memoryGraphSettings),
+      memoryCredential: version(this.getConfigurationDatabase().prepare("SELECT id,encrypted_password FROM memory_graph_secret ORDER BY id").all()),
+    };
     const webCredentialVersion = () => version(this.getConfigurationDatabase().prepare("SELECT provider, encrypted_token FROM web_provider_secrets ORDER BY provider").all());
     const webProxyVersion = () => version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
       this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]);
@@ -2544,6 +2549,10 @@ export class SessionStore {
         timeoutSettings, quotaSettings, ideaTreeSettings,
         ...(capabilityId === "environment.sources" ? { environmentSourceSettings: this.getEnvironmentSourceSettings() } : {}),
         ...(capabilityId === "runner.assign" ? { runnerSelection: this.configurationRunnerSelection(sessionId), runnerResources: this.configurationRunnerResources() } : {}),
+        ...(capabilityId === "memory.credential" ? { memoryCredentialSettings: this.getMemoryGraphSettings() } : {}),
+        ...(capabilityId === "memory.enable" ? { memoryGraph: this.configurationMemoryGraph() } : {}),
+        ...(capabilityId === "memory.backend" ? { memoryGraph: this.configurationMemoryGraph() } : {}),
+        ...(capabilityId === "memory.connection" ? { memoryConnectionSettings: this.getMemoryGraphSettings() } : {}),
         ...(capabilityId === "web.credential" ? { webProviders: this.getWebSettings().providers } : {}),
         ...(capabilityId === "web.configure" ? { webSettings: this.getWebSettings(), webProxyPolicies: this.configurationWebProxyPolicies() } : {}),
 
@@ -3104,7 +3113,45 @@ export class SessionStore {
     return row ? this.decryptModelApiToken("memory-graph:neo4j", row.encrypted_password) : undefined;
   }
 
-  async updateMemoryGraphSettings(input: UpdateMemoryGraphSettingsRequest): Promise<Omit<MemoryGraphSettingsDetails, "memoryGraphStatus">> {
+  /** Safe discovery only; no old password decryption or raw connection projection. */
+  configurationMemoryCredential() {
+    const settings = this.getMemoryGraphSettings(); let destinationHost = "Unreviewed destination";
+    try { destinationHost = new URL(settings.neo4jHttp).host || destinationHost; } catch { /* Invalid legacy target remains unreviewed. */ }
+    return { enabled: settings.enabled, backend: settings.backend, destinationHost, hasPassword: settings.hasNeo4jPassword };
+  }
+
+  applyMemoryCredentialConfigurationSync(password: string | null): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Memory configuration requires the shared transaction");
+    this.applyMemoryGraphSettingsSync({ neo4jPassword: password });
+  }
+
+  /** Safe metadata for a backend choice: never decrypt credentials or project full URLs. */
+  configurationMemoryGraph(): { enabled: boolean; backend: "local" | "neo4j"; destinationHost: string } {
+    const settings = this.catalog.memoryGraphSettings;
+    let destinationHost = "Unreviewed destination";
+    try { destinationHost = new URL(settings.neo4jHttp).host || destinationHost; } catch { /* Preserve the explicit unreviewed state. */ }
+    return { enabled: settings.enabled, backend: settings.backend, destinationHost };
+  }
+
+  applyMemoryGraphParticipationSync(enabled: boolean): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Memory configuration requires the shared transaction");
+    if (typeof enabled !== "boolean") throw new Error("Memory enabled must be a boolean");
+    this.applyMemoryGraphSettingsSync({ enabled });
+  }
+
+  applyMemoryGraphBackendSync(backend: "local" | "neo4j"): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Memory configuration requires the shared transaction");
+    if (backend !== "local" && backend !== "neo4j") throw new Error("Invalid memory backend");
+    this.applyMemoryGraphSettingsSync({ backend });
+  }
+
+  applyMemoryConnectionConfigurationSync(input: Pick<UpdateMemoryGraphSettingsRequest, "neo4jHttp" | "neo4jUser">): void {
+    if (!this.getConfigurationDatabase().isTransaction) throw new Error("Memory configuration requires the shared transaction");
+    if (Object.keys(input).some(key => key !== "neo4jHttp" && key !== "neo4jUser")) throw new Error("Unsupported Memory connection field");
+    this.applyMemoryGraphSettingsSync(input);
+  }
+
+  private applyMemoryGraphSettingsSync(input: UpdateMemoryGraphSettingsRequest): void {
     const { neo4jPassword, ...settingsInput } = input;
     // 2B: fields are independent — only the keys present in the payload move.
     // Overlay provided fields on the current settings, then normalize. The
@@ -3121,16 +3168,19 @@ export class SessionStore {
       if (neo4jPassword === null) {
         this.database!.prepare("DELETE FROM memory_graph_secret WHERE id = 1").run();
       } else {
-        const trimmed = neo4jPassword.trim();
-        if (!trimmed) throw new Error("The Neo4j password cannot be empty");
-        if (trimmed.length > 16_384) throw new Error("The Neo4j password is too long");
-        const encrypted = this.encryptModelApiToken("memory-graph:neo4j", trimmed);
+        if (!neo4jPassword.trim()) throw new Error("The Neo4j password cannot be empty");
+        if (neo4jPassword.length > 16_384) throw new Error("The Neo4j password is too long");
+        const encrypted = this.encryptModelApiToken("memory-graph:neo4j", neo4jPassword);
         this.database!.prepare(
           "INSERT INTO memory_graph_secret (id, encrypted_password) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET encrypted_password = excluded.encrypted_password",
         ).run(encrypted);
       }
     }
     this.catalog.memoryGraphSettings = next;
+  }
+
+  async updateMemoryGraphSettings(input: UpdateMemoryGraphSettingsRequest): Promise<Omit<MemoryGraphSettingsDetails, "memoryGraphStatus">> {
+    this.applyMemoryGraphSettingsSync(input);
     await this.saveCatalog();
     return this.getMemoryGraphSettings();
   }
