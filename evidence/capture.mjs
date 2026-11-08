@@ -89,7 +89,7 @@ try {
   browser = await chromium.launch({ headless: true, channel: "chromium" });
   const captures = []; const evidence = resolve(".tmp", "pr770-ui-evidence-output"); await mkdir(evidence, {recursive:true});
   for (const locale of ["en", "zh-CN"]) {
-    context = await browser.newContext({ viewport: { width: 1440, height: 1800 }, deviceScaleFactor: 1 });
+    context = await browser.newContext({ viewport: { width: 1440, height: 2600 }, deviceScaleFactor: 1 });
     await context.route("**/*", route => { const url = new URL(route.request().url()); return ["http:", "https:"].includes(url.protocol) && url.origin !== origin ? route.abort() : route.continue(); });
     await context.addInitScript(({ token, origin, locale }) => { if (location.origin === origin) { localStorage.setItem("sciencediscovery-token", token); localStorage.setItem("sciencediscovery-locale", locale); } }, { token, origin, locale });
     const m = locale === "en" ? { allow: "Allow this exact endpoint", preview: "Refresh proposed changes", confirm: "Confirm choice and continue" } : { allow: "允许此精确端点", preview: "刷新修改方案", confirm: "确认选择并继续" };
@@ -97,7 +97,7 @@ try {
     page.on("request", request => { if (request.method() !== "POST") return; const body = request.postData() || ""; if (!request.url().endsWith("/credentials") && passwords.some(secret => body.includes(JSON.stringify(secret).slice(1,-1)))) ordinaryLeaks.push(true); });
     async function capture(name, locator) {
       await locator.scrollIntoViewIfNeeded(); await page.waitForTimeout(250);
-      assert.ok(passwords.every(secret => !(awaitText.includes(secret))));
+      assert.ok(passwords.every(secret => !awaitText.includes(secret.trim())));
       const filename = resolve(evidence, `${locale}-${name}.png`);
       await locator.screenshot({ path: filename, animations: "disabled", caret: "hide" });
       captures.push({ locale, name, filename, text: await locator.innerText() });
@@ -154,7 +154,7 @@ try {
     await context.close(); context = undefined;
   }
   assert.equal(ordinaryLeaks.length, 0);
-  await writeFile(resolve(evidence,"captures.json"), JSON.stringify({ sha, tree:git("rev-parse","HEAD^{tree}"), chromium:await browser.version(), viewport:{width:1440,height:1800}, deviceScaleFactor:1, boundary:"Actual product at exact target SHA; synthetic owned secrets and loopback MemoryGraph control stub; no real Neo4j authentication or model calls. Saving is not connectivity proof.", ordinaryLeaks:ordinaryLeaks.length, captures },null,2));
+  await writeFile(resolve(evidence,"captures.json"), JSON.stringify({ sha, tree:git("rev-parse","HEAD^{tree}"), chromium:await browser.version(), viewport:{width:1440,height:2600}, deviceScaleFactor:1, boundary:"Actual product at exact target SHA; synthetic owned secrets and loopback MemoryGraph control stub; no real Neo4j authentication or model calls. Saving is not connectivity proof.", ordinaryLeaks:ordinaryLeaks.length, captures },null,2));
   featurePushes = structuredClone(credentialPushes); outcome = "PASS";
 } catch (error) { console.error(redact(error.stack)); outcome = error instanceof Blocked ? "BLOCKED" : "FAIL"; process.exitCode = 1; }
 finally {
