@@ -1,0 +1,24 @@
+{
+  "publishedSourceSha": "e0bd41dd135edefe7d6c321031e5d36cd60eb846",
+  "sourceTree": "aaef2ecf571ab607a0600680c4d9c14d73e35f60",
+  "frontendBuildStamp": "6b392c349c7d34a8a665dac3db97459dba718f96",
+  "sourceEquivalence": "The local build and published commit have exactly the same Git tree. API source is unchanged from the previously compiled 7d28c6f3 backend.",
+  "width": 1212,
+  "height": 886,
+  "images": [
+    {
+      "size": 61909,
+      "gitBlob": "d7c78614366358a3deb0d3cce2d9809466b18eae",
+      "sha256": "f15bf3b8ea74b7e52fdc257c68ce1edbe742d86cc42d819cfffc5fd3527aad9a",
+      "name": "01-original-model-settings-zh.jpg"
+    },
+    {
+      "size": 65265,
+      "gitBlob": "448f0534739b467f7e281e9fe7a87fb40ddd5b7d",
+      "sha256": "e07e9391bc0678ab82a2aba8d1f6121f13f0fdfe8bc8d41307991079842246cd",
+      "name": "02-original-model-settings-en.jpg"
+    }
+  ],
+  "scenario": "Actual model.connect proposal card opens the original Models settings page. No injected request editor, return button or request banner. English capture uses the existing General language control.",
+  "boundary": "Original unedited native browser-window JPEGs. No credentials, model configuration save, connection test, model call or Run. Actual owned isolated API and Desktop build, no response or DOM simulation. Not a pinned Playwright or 1440/390 acceptance result."
+}
