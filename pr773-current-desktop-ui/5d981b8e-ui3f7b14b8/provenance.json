@@ -1,0 +1,12 @@
+{
+  "desktop": "3f7b14b807af5d8a697e9e7bc9d38cdb04d67d7a",
+  "boundary": "Navigation only. No apply, saved configuration, model calls, Runs, or runtime transport verification. Fresh isolated WSL data and disabled loopback MCP fixture. Original unedited screenshots.",
+  "viewport": {
+    "deviceScaleFactor": 1,
+    "height": 900,
+    "width": 1440
+  },
+  "flow": "Real mcp.metadata proposal, open original MCP settings, Escape to return, click existing disclosure",
+  "language": "zh-CN",
+  "backend": "5d981b8e67186cc044d75b2ce2d4afad2bc9d2b6"
+}
