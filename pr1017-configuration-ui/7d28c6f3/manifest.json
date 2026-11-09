@@ -1,0 +1,13 @@
+{
+  "sourceSha": "7d28c6f383ac8d2e25c83adf05495a4e62832731",
+  "captureMethod": "Native cloud Chromium GUI screenshot of actual API + Desktop Vite",
+  "screenshot": "01-timeout-pending-zh.jpg",
+  "width": 1180,
+  "height": 756,
+  "mimeType": "image/jpeg",
+  "sha256": "53e2dfaf148d2e91160d8686f855675aa92d0131feb8c5610e956f572aaab2ee",
+  "gitBlob": "1dff444bb3381aaba10c26f7dc2221991a9b0d60",
+  "size": 37164,
+  "scenario": "zh-CN timeout configuration confirmation, runnerExecTimeoutMs 90000",
+  "boundary": "Original unedited screenshot. Actual owned isolated public API proposal, no mocked responses, no DOM/CSS manipulation, no model call or Run. Not a pinned Playwright E2E pass; exact browser version not verified. Narrow 390px and delayed-input journey remain unverified."
+}
