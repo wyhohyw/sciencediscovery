@@ -1,0 +1,94 @@
+{
+  "backendSourceSha": "dd65eea719c076c0e893d3957d1cff0c5448e4cc",
+  "sharedUiSourceSha": "f5a5c2a7beaecb48311037c47e5f8d6a5503382d",
+  "combinationTree": "b9b6601baba4e728f339de4e7afb881840810f33",
+  "surface": "Current Desktop from public shared UI, not original Web",
+  "frontendServing": "Vite using exact public Desktop/shared source; no simplification patch",
+  "integration": "Three unused old-Web conflicts retain exact dd65 versions. Desktop and configuration-ui trees are byte-identical to f5a5; no simplification changes.",
+  "build": "Combined API, Runner and shared configuration UI built successfully; not a full-repository test claim.",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "unedited": true,
+  "fixture": "Fresh owned local data and synthetic project/session names. Real Runner ready. No real credentials or configured models.",
+  "memoryGraphService": "Not running/verified; saved participation is not service readiness.",
+  "results": [
+    {
+      "locale": "zh-CN",
+      "requestState": "applied",
+      "enabled": true,
+      "runs": 0,
+      "pendingTitleLines": 1,
+      "pendingScopeLines": 1,
+      "pendingDescriptionLines": 1,
+      "pendingCardHeight": 189.328125,
+      "pendingTimeElement": false,
+      "pendingVerificationPlan": false,
+      "pendingImpactMetadataBlock": false,
+      "pendingStageMetadataBlock": false,
+      "savedCollapsed": "Single summary row",
+      "savedExpanded": "Original detailed receipt, including impact, verification plan, stages and last update; not compacted."
+    },
+    {
+      "locale": "en",
+      "requestState": "applied",
+      "enabled": true,
+      "runs": 0,
+      "pendingTitleLines": 1,
+      "pendingScopeLines": 1,
+      "pendingDescriptionLines": 1,
+      "pendingCardHeight": 189.328125,
+      "pendingTimeElement": false,
+      "pendingVerificationPlan": false,
+      "pendingImpactMetadataBlock": false,
+      "pendingStageMetadataBlock": false,
+      "savedCollapsed": "Single summary row",
+      "savedExpanded": "Original detailed receipt, including impact, verification plan, stages and last update; not compacted."
+    }
+  ],
+  "images": [
+    {
+      "file": "01-memory-pending-zh.png",
+      "sha256": "5441ad60b66831ddd7b590aa950ac00004c4fc76e11b134fd6fa0fc675b51c49",
+      "width": 1440,
+      "height": 900,
+      "bytes": 72020
+    },
+    {
+      "file": "02-memory-saved-collapsed-zh.png",
+      "sha256": "f730bcd59a274638e758e7c67a11d891eeda9a5a1a34ae784d52e37b6ba25d73",
+      "width": 1440,
+      "height": 900,
+      "bytes": 57990
+    },
+    {
+      "file": "03-memory-saved-expanded-zh.png",
+      "sha256": "d6ed8006c67685321ea245a71501819d9dc5ebba369ea13b338dce724bf44e41",
+      "width": 1440,
+      "height": 900,
+      "bytes": 137349
+    },
+    {
+      "file": "04-memory-pending-en.png",
+      "sha256": "7bcb9ba93803be763e2d0b4c611a490c7830143044a4945d265afaad899be51e",
+      "width": 1440,
+      "height": 900,
+      "bytes": 74707
+    },
+    {
+      "file": "05-memory-saved-collapsed-en.png",
+      "sha256": "f938f778e88688c25e3d925f0cb25460d1b7b751d03788b3350e644f5e1c8b21",
+      "width": 1440,
+      "height": 900,
+      "bytes": 61473
+    },
+    {
+      "file": "06-memory-saved-expanded-en.png",
+      "sha256": "d8640a2e53b347d1f6e5c10a1e7d495e8a8049455f1c53c2c239052c739e6f31",
+      "width": 1440,
+      "height": 900,
+      "bytes": 137945
+    }
+  ]
+}
