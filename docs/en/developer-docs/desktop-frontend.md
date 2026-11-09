@@ -182,6 +182,30 @@ Tests cover the transport (bearer header, 401 classification, SSE framing includ
 
 `pnpm build` emits a separate chunk of about 3.2 MB for the structure browser (about 880 kB gzipped) against a main bundle of about 500 kB; only the former is downloaded when a structure file is opened, so that large chunk in the build output is not a startup cost.
 
+## 7. Conversational configuration cards
+
+`apps/web` and `apps/desktop` share the form, credential-draft, preview and confirmation
+logic in `packages/configuration-ui`. Hosts supply locale, API error identity, terminal
+record presentation and API actions. The desktop `app/use-configuration-requests.ts`
+loads and polls the current session, merges monotonic versions and rejects late responses
+from another session. A session without chat messages can still show a pending card.
+
+Exact destination consent, the dedicated credential channel, independent security-policy
+consent and final manual save stay separate. Saving refreshes settings and follows the
+server-created continuation without resending the user's message. Terminal receipts appear
+once at their persisted notice. Archived/evidence-only sessions and failed refreshes block writes.
+
+The shared renderer includes frontend compatibility for Memory, MCP, model/provider,
+security-policy and proxy modules. This does not register backend capabilities or imply
+that those modules are deployed. Corresponding backend adapters and endpoints are still
+required. When merging branches that edit the old Web card paths, retain their changes
+in the shared package instead of reintroducing two implementations.
+
+`test/journey-desktop-configuration.spec.ts` drives the actual public API and desktop entry
+through timeout preview, save, reload and refusal in both languages and a narrow window.
+It makes no live model or external-service calls. Missing browser/runtime prerequisites
+are a coverage gap, never a pass; component tests do not replace rendered screenshot review.
+
 ## Related documentation
 
 - [Web frontend](web-frontend.md) — the current root front end
