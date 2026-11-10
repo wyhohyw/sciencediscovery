@@ -1,0 +1,26 @@
+{
+  "sourceCommit": "318efca8cb9d8871bbdde296e6b7842ecc61e0de",
+  "sourceTree": "e91f4be1ed6428b7a7294acbaa95cbb014b37ec1",
+  "method": "Manual CUA screenshots of the real UI and real API with a synthetic session",
+  "qualification": "Not a pinned Playwright E2E pass or the 1440/390 acceptance matrix. No real provider or model calls. Images unedited.",
+  "files": [
+    {
+      "file": "01-zh-pending.png",
+      "scene": "Chinese: after opening model settings, awaiting explicit user answer",
+      "pixels": [
+        1180,
+        757
+      ],
+      "sha256": "8a251a372a6003a0c45086d1b7b66d97c6bfa80b8fa606376bd9e5002151f77b"
+    },
+    {
+      "file": "02-zh-answered.png",
+      "scene": "Chinese: compact record after choosing Not changed",
+      "pixels": [
+        1180,
+        757
+      ],
+      "sha256": "d6473c3093e11c667260597cdf68e22eb2b1ab81fbd87c9f681caedab0b34913"
+    }
+  ]
+}
