@@ -84,8 +84,18 @@ test("项目组合、会话覆盖与审批后的候选应用", {tag:"@mocked"},a
       const dialog=await openSettings("project");
       for(const id of ["plan","skill","mcp","scheduler","connector.uniprot","connector.pubmed"]) await expect(dialog.getByLabel(id+" plugin",{exact:true})).toHaveCount(0);
       await dialog.getByLabel("artifact-json plugin",{exact:true}).selectOption("disabled");
+      // Wait for this save, not the Plan override that was already false before
+      // clicking. Reloading earlier can abort the JSON-viewer write in flight.
+      const savedResponse=page.waitForResponse(response=>response.request().method()==="POST"
+        && response.url()===apiBaseUrl()+root+"/bridge"
+        && response.request().postDataJSON()?.input?.overrides?.plugins?.["artifact-json"]?.enabled===false);
       await dialog.getByRole("button",{name:/Save .*settings|保存.*设置/}).click();
-      await expect.poll(async()=> (await api(page,root)).settings.effective.plugins.plan.enabled).toBe(false);
+      expect((await savedResponse).ok()).toBe(true);
+      await expect.poll(async()=>{
+        const saved=await api(page,root);
+        return {json:saved.settings.overrides.plugins?.["artifact-json"]?.enabled,
+          effective:saved.settings.effective.plugins?.["artifact-json"]?.enabled,plan:saved.settings.effective.plugins.plan.enabled};
+      }).toEqual({json:false,effective:false,plan:false});
       await page.reload();
       await page.locator("details.plugin-settings > summary").click();
       await expect(page.getByLabel("connector.uniprot plugin",{exact:true})).toHaveCount(0);
