@@ -3,7 +3,7 @@ name: antigen-epitope-evolve
 description: Turn one named antigen into a one-time literature note, a 4.5 angstrom complex epitope, and an antibody-design input, then record local one-field design rounds. Use when the user wants antigen-antibody PDB evidence, glycoprotein or N-protein chain extraction, epitope hotspots, and a short optimization ledger. Not for launching NPU models or searching the literature again after the first package.
 compatibility: Requires Python 3 standard library only. Literature search and the antibody model run stay in their own skills.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Antigen epitope preparation and local rounds
@@ -40,37 +40,27 @@ A residue is an epitope residue when one of its non-hydrogen atoms is within the
 
 Read `antibody_pipeline/inputs/design_input.json`. If the command exits non-zero, report `epitope.json` field `error` and stop. Copy `antibody_pipeline/inputs/config.json` to `antibody_pipeline/config.json` only when handing the package to `antibody-design`.
 
-## One antibody-design run
+## Iteration
 
-This skill does not submit `run_npu_job`. When the user asks to design, select `antibody-design` and give it the copied config unchanged. Bring the screening score back as a number the user or that run actually produced. Do not invent a score, a sequence, or a PDB.
+The package writes `antibody_pipeline/inputs/evolve_start.json`. Pass that object to the existing evolve search. Do not run the local `round` ledger, and do not re-ask the evolve-design checkpoints. The editable range is already fixed.
 
-## Local rounds
+Read the whole mock program at `$SCIENCEDISCOVERY_SKILLS_DIR/antigen-epitope-evolve/scripts/mock_npu_evaluator.py` and pass that text as `evaluatorSource`. `hotspots` stays first in `editableFields` because the search probe damages the first field. Leave `designed_sequences` out until a real design run has produced sequences; then add only that field in a later run.
 
-Each round may change one field of the current accepted state:
-
-- L1 `hotspots`: a non-empty subset of `frozen.epitope_residues`.
-- L2, one of `num_designs`, `diffuser_t`, `final_step`, `protenix_n_sample`, `protenix_seeds`, `protenix_use_msa`. Keep `diffuser_t` at least 15 and `final_step` between 1 and `diffuser_t`.
-- L3 `designed_sequences`: edit sequences that already exist. The first package has an empty list, so L3 is refused until sequences from `antibody-design` are copied into the ledger. Put those sequences on `parent.designed_sequences` and leave every other parent field unchanged. If `antigen_epitope/rounds.json` does not exist yet, create it as `{"parent": <baseline with those sequences>, "seen": {}, "rounds": []}`. Do not use `round` to invent the first sequences.
-
-`literature_id`, `pdb_id`, chains, cutoff, and the full epitope list stay in `frozen`. A round that changes them, changes two fields, or repeats a state without a higher score is recorded and rejected.
-
-```sh
-python "$SCIENCEDISCOVERY_SKILLS_DIR/antigen-epitope-evolve/scripts/antigen_epitope.py" round \
-  --design-input antibody_pipeline/inputs/design_input.json \
-  --candidate antigen_epitope/candidate.json \
-  --score 0.42 \
-  --ledger antigen_epitope/rounds.json
+```text
+create_evolve_run(
+  mode="npu_job",
+  algorithm="puct",
+  statement="Raise the antibody-design score by editing only the named JSON fields.",
+  howScored="Mock NPU score from the candidate JSON. Higher is better. Hotspots must stay inside epitope_residues.",
+  startingPointText=<contents of evolve_start.json>,
+  editableFields=["hotspots", "num_designs", "diffuser_t", "final_step", "protenix_n_sample", "protenix_seeds", "protenix_use_msa"],
+  evaluatorSource=<contents of mock_npu_evaluator.py>,
+  expansions=4,
+  workers=1,
+  thinking="disabled"
+)
 ```
 
-Write `candidate.json` as a full copy of the current `parent` object with one field changed. Pass the measured score. The script does not score the candidate.
+Call it once and end the turn. The mock prints `device` `npu` and `mock` true. It walks the stage names RFdiffusion, ProteinMPNN, Protenix, and screening, then returns a deterministic score and placeholder sequences. It does not submit a model job. If `create_evolve_run` has no `npu_job` mode, stop and say this build cannot restrict an evolve run to JSON fields.
 
-After the requested rounds, write the summary:
-
-```sh
-python "$SCIENCEDISCOVERY_SKILLS_DIR/antigen-epitope-evolve/scripts/antigen_epitope.py" summarize \
-  --design-input antibody_pipeline/inputs/design_input.json \
-  --ledger antigen_epitope/rounds.json \
-  --output antigen_epitope/summary.md
-```
-
-Report the PDB, chain, changed fields, and which rounds were accepted. Do not describe a rejected edit as an improved antibody.
+For a real NPU test, keep the same `startingPointText` and `editableFields`. Replace `evaluatorSource` with a program that runs `antibody-design` and prints one JSON line whose `device` is `npu` and whose `score` is the measured screening score. Do not describe mock sequences as designed antibodies.

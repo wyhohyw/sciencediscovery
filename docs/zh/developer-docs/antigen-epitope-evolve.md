@@ -14,14 +14,8 @@
 
 `antibody_pipeline/config.json` 使用抽出的抗原链、同一复合物中的抗体链，以及这份热点。阈值、PDB、链和完整表位集合写在 `design_input.json` 的 `frozen` 里，后面的轮次不能改。
 
-## 轮次
+## 迭代
 
-每一轮相对当前已接受的状态只改一个字段：
+`evolve_start.json` 是交给现有 evolve 的那一份 JSON。`editableFields` 只包含 `hotspots`、`num_designs`、`diffuser_t`、`final_step`、`protenix_n_sample`、`protenix_seeds`、`protenix_use_msa`。文献、PDB、链、阈值和完整表位留在对象里，但不放进可编辑字段。`hotspots` 放在列表第一位。
 
-- L1：`hotspots`，而且必须是已算出表位的非空子集。
-- L2：`num_designs`、`diffuser_t`、`final_step`、`protenix_n_sample`、`protenix_seeds`、`protenix_use_msa` 之一。`diffuser_t` 至少为 15，`final_step` 在 1 和 `diffuser_t` 之间。
-- L3：`designed_sequences`。基线是空列表。抗体流水线返回真实序列后，先把这些序列写入账本的 `parent`，再允许修改，而且不能增减条数。`round` 不能用来凭空写下第一条序列。
-
-分数由外部传入。脚本不生成抗体，也不编造分数。改了两个字段、改了锁定信息、或同一个状态没有更高分数时，这一轮记为拒绝，不成为新的当前状态。
-
-多轮之后由 `summarize` 写出 PDB、链、每一轮的旧值新值和接受或拒绝原因。
+评分程序是 `mock_npu_evaluator.py`。它按 RFdiffusion、ProteinMPNN、Protenix、screening 的名字走一遍，打印 `device` 为 `npu`、`mock` 为 true 的一行 JSON。分数由候选 JSON 决定，坏掉的热点更低。它不提交模型作业。真卡测试时保留同一份 JSON 和同一组字段，只把评分程序换成实际调用 `antibody-design` 的程序。`designed_sequences` 等真实序列出现后再加入可编辑字段。

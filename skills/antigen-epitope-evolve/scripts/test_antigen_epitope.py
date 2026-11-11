@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -23,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import antigen_epitope  # noqa: E402
+import mock_npu_evaluator  # noqa: E402
 
 
 def atom(serial, name, residue, chain, number, x, y, z, element, alt="", insertion="", record="ATOM"):
@@ -81,6 +84,28 @@ class ContactTests(unittest.TestCase):
         self.assertIn("没有抗体链", result["error"])
 
 
+class MockNpuTests(unittest.TestCase):
+    def test_evolve_binding_prints_one_npu_measurement(self) -> None:
+        source = Path(mock_npu_evaluator.__file__).read_text(encoding="utf-8")
+        candidate = {
+            "epitope_residues": ["B10", "B11"],
+            "hotspots": "[B10,B11]",
+            "num_designs": 1,
+            "diffuser_t": 200,
+            "final_step": 160,
+        }
+        binding = "_EVOLVE_CANDIDATE = " + json.dumps(candidate)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exec(binding + "\n" + source, {"__name__": "evolve"})  # noqa: S102
+        line = stdout.getvalue().strip().splitlines()[-1]
+        payload = json.loads(line)
+        self.assertEqual(payload["device"], "npu")
+        self.assertTrue(payload["mock"])
+        self.assertEqual(payload["stages"], ["rfdiffusion", "proteinmpnn", "protenix", "screening"])
+        self.assertGreater(payload["score"], 0.2)
+
+
 class PackageAndRoundTests(unittest.TestCase):
     def test_package_writes_pipeline_config_and_round_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -94,6 +119,12 @@ class PackageAndRoundTests(unittest.TestCase):
             self.assertEqual(design["frozen"]["epitope_residues"], ["B10", "B11"])
             self.assertEqual(design["config"]["target_pdb"], "antibody_pipeline/inputs/target_antigen.pdb")
             self.assertEqual(design["config"]["hotspots"], "[B10,B11]")
+            self.assertEqual(design["evolve_start"]["epitope_residues"], ["B10", "B11"])
+            self.assertEqual(design["evolve_editable"][0], "hotspots")
+            start = json.loads((root / "inputs" / "evolve_start.json").read_text(encoding="utf-8"))
+            self.assertEqual(start["hotspots"], "[B10,B11]")
+            self.assertLess(mock_npu_evaluator.score_candidate({**start, "hotspots": start["hotspots"] + "-damaged"}),
+                            mock_npu_evaluator.score_candidate(start))
             self.assertIn("ATOM", (root / "inputs" / "antibody_framework.pdb").read_text(encoding="utf-8"))
             self.assertNotIn("NAG", (root / "inputs" / "target_antigen.pdb").read_text(encoding="utf-8"))
 

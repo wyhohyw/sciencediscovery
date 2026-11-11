@@ -385,9 +385,40 @@ def build_package(
         "force": False,
     }
     design["config"] = config
+    design["evolve_start"] = evolve_start(design)
+    design["evolve_editable"] = list(EVOLVE_EDITABLE)
     write_json(output_dir / "design_input.json", design)
     write_json(output_dir / "config.json", config)
+    write_json(output_dir / "evolve_start.json", design["evolve_start"])
     return design
+
+
+EVOLVE_EDITABLE = (
+    "hotspots",
+    "num_designs",
+    "diffuser_t",
+    "final_step",
+    "protenix_n_sample",
+    "protenix_seeds",
+    "protenix_use_msa",
+)
+
+
+def evolve_start(design: dict[str, Any]) -> dict[str, Any]:
+    """One JSON object for create_evolve_run. Unlisted keys stay fixed."""
+    frozen = design["frozen"]
+    start = {
+        "literature_id": frozen["literature_id"],
+        "pdb_id": frozen["pdb_id"],
+        "antigen_chain": frozen["antigen_chain"],
+        "antibody_chains": list(frozen["antibody_chains"]),
+        "cutoff_angstrom": frozen["cutoff_angstrom"],
+        "epitope_residues": list(frozen["epitope_residues"]),
+        "target_pdb": frozen["target_pdb"],
+        "framework_pdb": frozen["framework_pdb"],
+    }
+    start.update(design["baseline"])
+    return start
 
 
 def normalize_state(state: dict[str, Any]) -> dict[str, Any]:

@@ -97,7 +97,7 @@ export const SKILL_LIMITS = {
 
 const BUILT_IN_VERSIONS: Record<(typeof BUNDLED_SKILL_IDS)[number], string> = {
   "antibody-design": "1.0.0",
-  "antigen-epitope-evolve": "1.0.0",
+  "antigen-epitope-evolve": "1.1.0",
   "assessment-screening": "1.0.0",
   "code-engineer": "1.0.0",
   "computation-reviewer": "1.0.0",
