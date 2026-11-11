@@ -3850,6 +3850,7 @@ test("skill lifecycle APIs author, import, edit, select, audit impact, and delet
   assert.equal(initial.response.status, 200);
   assert.deepEqual(initial.body.map((item) => item.id), [
     "antibody-design",
+    "antigen-epitope-evolve",
     "assessment-screening",
     "citation-reviewer",
     "code-engineer",
