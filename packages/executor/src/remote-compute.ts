@@ -141,6 +141,12 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+/** Forwarded only when this control plane asked for host directories inside the sandbox. */
+function sandboxBindEnv(): string {
+  const raw = process.env.SCIENCE_AGENT_SANDBOX_RO_BINDS?.trim();
+  return raw ? ` SCIENCE_AGENT_SANDBOX_RO_BINDS=${shellQuote(raw)}` : "";
+}
+
 /**
  * The SSH destination the user typed. An SSH config alias, a hostname and an
  * IPv4 address are all the same thing here, so this only rejects values that
@@ -779,7 +785,7 @@ export class RemoteComputeClient {
     const script = [
       "set -eu",
       "test \"$(uname -s)\" = Linux",
-      `exec env SCIENCE_AGENT_RUNNER_SOCKET=${shellQuote(socketPath)} SCIENCE_AGENT_RUNNER_TOKEN=${shellQuote(token)} SCIENCE_AGENT_DATA_DIR=${shellQuote(prepared.dataDir)} ${prepared.startCommand}`,
+      `exec env SCIENCE_AGENT_RUNNER_SOCKET=${shellQuote(socketPath)} SCIENCE_AGENT_RUNNER_TOKEN=${shellQuote(token)} SCIENCE_AGENT_DATA_DIR=${shellQuote(prepared.dataDir)}${sandboxBindEnv()} ${prepared.startCommand}`,
       "",
     ].join("\n");
 

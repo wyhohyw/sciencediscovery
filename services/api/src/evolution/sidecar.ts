@@ -25,6 +25,7 @@
  */
 
 import type { EvolveEventRecord } from "@sciencediscovery/schema";
+import { request } from "undici";
 
 export interface EvolveRunSpec {
   algorithm: string;
@@ -147,25 +148,34 @@ export class EvolveSidecarClient {
     worsened: number | null;
   }> {
     const { url, internalToken } = await this.connection();
-    const response = await fetch(`${url}/probe`, {
+    // Node's global fetch stops waiting for headers after 300s. An NPU baseline
+    // stays silent longer than that, so the probe came back as "fetch failed"
+    // while the card was still scoring and the search was never registered.
+    // Zero disables both timers. The sidecar still stops the job at
+    // candidate_timeout_seconds, so a hung card cannot hold this request open
+    // past that budget.
+    const response = await request(`${url}/probe`, {
       body: JSON.stringify(this.body(spec)),
+      bodyTimeout: 0,
       headers: { authorization: `Bearer ${internalToken}`, "content-type": "application/json" },
+      headersTimeout: 0,
       method: "POST",
     });
-    if (!response.ok) {
+    const text = await response.body.text();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
       // The sidecar's own sentence, not its response body. A probe refusal is
       // the one sidecar error a user is expected to read and act on — it is
       // what stands between them and starting a run — and pasting
       // `{"detail":{"code":"probe_failed","message":"…"}}` onto the screen
       // hands them the wrapper and buries the sentence inside it.
       throw new EvolveSidecarError(
-        response.status === 401 || response.status === 403
+        response.statusCode === 401 || response.statusCode === 403
           ? "Evolve authentication failed. Check the configured service or retry Init Evolve."
-          : await refusal(response, "the discrimination probe could not be taken"),
-        response.status,
+          : refusalText(text, response.statusCode, "the discrimination probe could not be taken"),
+        response.statusCode,
       );
     }
-    return await response.json() as {
+    return JSON.parse(text) as {
       baseline: number; flat: boolean; label: string; worsened: number | null;
     };
   }
@@ -281,8 +291,7 @@ function parseRecord(line: string, warn?: EvolveSidecarWarning): EvolveEventReco
  * All three read as noise on a screen, and the sentence a user needs is one
  * level in.
  */
-export async function refusal(response: Response, prefix: string): Promise<string> {
-  const text = await response.text().catch(() => "");
+export function refusalText(text: string, status: number, prefix: string): string {
   try {
     const body = JSON.parse(text) as { detail?: unknown };
     const detail = body.detail;
@@ -294,5 +303,10 @@ export async function refusal(response: Response, prefix: string): Promise<strin
   } catch {
     // Not JSON at all — a proxy page, an empty body. Falls through.
   }
-  return `${prefix} (${response.status})${text ? `: ${text.slice(0, 300)}` : ""}`;
+  return `${prefix} (${status})${text ? `: ${text.slice(0, 300)}` : ""}`;
+}
+
+export async function refusal(response: Response, prefix: string): Promise<string> {
+  const text = await response.text().catch(() => "");
+  return refusalText(text, response.status, prefix);
 }

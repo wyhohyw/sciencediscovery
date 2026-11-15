@@ -169,6 +169,31 @@ test("actual probe refusals classify 401/403 safely and preserve non-auth diagno
   } finally { server.closeAllConnections(); await new Promise<void>(done => server.close(() => done())); }
 });
 
+test("a probe still returns when the sidecar is silent past a normal header wait", async () => {
+  const { createServer } = await import("node:http");
+  const { EvolveSidecarClient } = await import("./sidecar.js");
+  const server = createServer((request, response) => {
+    request.resume();
+    setTimeout(() => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ baseline: 0.081, flat: false, label: "changed hotspots", worsened: 0.05 }));
+    }, 1_200);
+  });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  try {
+    const client = new EvolveSidecarClient({
+      url: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+      internalToken: "synthetic-probe-only",
+    });
+    const result = await client.probe({ algorithm: "puct", expansions: 1, scorecardHash: "fixture", searchId: "fixture" });
+    assert.equal(result.baseline, 0.081);
+    assert.equal(result.worsened, 0.05);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(done => server.close(() => done()));
+  }
+});
+
 test("run stream refusals name Evolve and retain status without exposing upstream bodies", async () => {
   const { createServer } = await import("node:http");
   const { EvolveSidecarClient, EvolveSidecarError } = await import("./sidecar.js");

@@ -15,6 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { constants } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Readable } from "node:stream";
 import { access, mkdir, mkdtemp, open, readdir, realpath, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
@@ -893,6 +894,16 @@ export async function resolveProfileChdir(
   return workspaceBinds.chdir;
 }
 
+/** Host directories named by SCIENCE_AGENT_SANDBOX_RO_BINDS, mounted at the same path. */
+export function hostPathBindArgs(raw = process.env.SCIENCE_AGENT_SANDBOX_RO_BINDS): string[] {
+  const args: string[] = [];
+  for (const entry of (raw ?? "").split(":")) {
+    if (!entry.startsWith("/") || !existsSync(entry)) continue;
+    args.push("--bind", entry, entry);
+  }
+  return args;
+}
+
 export function buildSandboxLaunch(options: {
   chdir: string;
   disableUserns: boolean;
@@ -949,6 +960,7 @@ export function buildSandboxLaunch(options: {
       ...(options.disableUserns ? ["--disable-userns"] : []),
       "--cap-drop", "ALL",
       "--ro-bind", "/usr", "/usr",
+      ...hostPathBindArgs(),
       ...options.hostRuntimeSupport.bindArgs,
       "--symlink", "usr/bin", "/bin",
       "--symlink", "usr/lib", "/lib",

@@ -265,7 +265,17 @@ def npu_domain(
         return score_for_search(metrics)
 
     def prompt(program: Program) -> str:
-        return f"{statement}\n{program.code}"
+        goal = " ".join(statement.split())
+        if len(goal) > 80:
+            goal = goal[:80].rstrip() + "..."
+        if not goal:
+            goal = "Raise the score."
+        return (
+            f"{goal}\n"
+            "Higher is better. Change one allowed field. "
+            "Reply with one JSON object and nothing else.\n"
+            f"{program.code}"
+        )
 
     def task_prompt(shard: int) -> str:
         return f"NPU job does not use shard {shard}"

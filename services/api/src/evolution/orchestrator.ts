@@ -176,6 +176,13 @@ export interface EvolveOrchestratorOptions {
    * side that can read it.
    */
   publishResult?: (input: { run: EvolveRun; winnerCodeHash: string }) => Promise<void>;
+  /**
+   * Save the best measured design's sequence and structure.
+   *
+   * Separate from `publishResult`: a seed that nothing beat is still a design
+   * the reader should be able to open, and it is not an improved program.
+   */
+  publishMeasurement?: (input: { run: EvolveRun; codeHash: string }) => Promise<void>;
 }
 
 export interface StartEvolveRunInput {
@@ -760,20 +767,30 @@ export class EvolveOrchestrator {
    * was busy would lose the far more valuable fact.
    */
   private async publishWinner(runId: string, bestNodeIndex: number): Promise<void> {
-    if (!this.options.publishResult) return;
+    if (!this.options.publishResult && !this.options.publishMeasurement) return;
     try {
       const run = await this.store.readRun(runId);
       if (!run) return;
       const records = await this.store.readEvents(runId);
-      // The winning node's own source. `seeded` carries one too, and node 0
-      // winning means nothing beat the seed — there is no result to save.
+      // The winning node's own source. Node 0 winning means nothing beat the
+      // seed, so the program artifact stays unpublished. The measured design
+      // is still saved: a sequence and a structure the reader can open.
       let winnerCodeHash: string | undefined;
+      let measuredCodeHash: string | undefined;
       for (const { event } of records) {
         const candidate = event as { codeHash?: string; nodeIndex?: number; type?: string };
-        if (candidate.type !== "expanded" || candidate.nodeIndex !== bestNodeIndex) continue;
-        winnerCodeHash = candidate.codeHash;
+        if (candidate.nodeIndex !== bestNodeIndex || !candidate.codeHash) continue;
+        if (candidate.type === "expanded") winnerCodeHash = candidate.codeHash;
+        if (candidate.type === "expanded" || candidate.type === "seeded") measuredCodeHash = candidate.codeHash;
       }
-      if (!winnerCodeHash) return;
+      if (measuredCodeHash && this.options.publishMeasurement) {
+        try {
+          await this.options.publishMeasurement({ run, codeHash: measuredCodeHash });
+        } catch (error) {
+          apiLog.warn("evolve_publish_measurement_failed", { reason: String(error), runId });
+        }
+      }
+      if (!winnerCodeHash || !this.options.publishResult) return;
       await this.options.publishResult({ run, winnerCodeHash });
     } catch (error) {
       apiLog.warn("evolve_publish_result_failed", { reason: String(error), runId });

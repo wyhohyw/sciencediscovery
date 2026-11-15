@@ -108,7 +108,7 @@ def bound_domain(domain: Domain, baseline_code: str, direction: Optional[Mapping
     def bounded_prompt(program):
         return (
             f"{prompt(program)}\n"
-            f"Change only these fields: {editable}. Leave every other field as it is."
+            f"Change only: {editable}."
         )
 
     return replace(domain, evaluate=bounded_evaluate, prompt=bounded_prompt)

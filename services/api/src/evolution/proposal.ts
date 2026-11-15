@@ -508,7 +508,7 @@ async function assembleGoal(
       ? { allowUnisolated: true }
       : {}),
     budget: {
-      candidateTimeoutSeconds: 180,
+      candidateTimeoutSeconds: proposal.mode === "npu_job" ? 1_500 : 180,
       expansions: proposal.expansions,
       maxCostCents: 0,
       maxSeconds: DEFAULT_MAX_SECONDS,
@@ -601,7 +601,7 @@ async function measureOf(
         kind: "custom_script", scriptCas: scoringCas, split, timeoutSeconds: 180,
       };
     case "npu_job":
-      return { kind: "npu_job", scriptCas: scoringCas, timeoutSeconds: 180 };
+      return { kind: "npu_job", scriptCas: scoringCas, timeoutSeconds: 1_500 };
     case "llm_judge":
       return {
         blind: true,

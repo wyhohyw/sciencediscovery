@@ -121,6 +121,8 @@ class PackageAndRoundTests(unittest.TestCase):
             self.assertEqual(design["config"]["hotspots"], "[B10,B11]")
             self.assertEqual(design["evolve_start"]["epitope_residues"], ["B10", "B11"])
             self.assertEqual(design["evolve_editable"][0], "hotspots")
+            self.assertNotIn("protenix_seeds", design["evolve_editable"])
+            self.assertEqual(design["config"]["protenix_seeds"], "42")
             start = json.loads((root / "inputs" / "evolve_start.json").read_text(encoding="utf-8"))
             self.assertEqual(start["hotspots"], "[B10,B11]")
             self.assertLess(mock_npu_evaluator.score_candidate({**start, "hotspots": start["hotspots"] + "-damaged"}),
@@ -151,6 +153,11 @@ class PackageAndRoundTests(unittest.TestCase):
             outside["hotspots"] = "[B99]"
             rejected = antigen_epitope.decide_round(design, outside, 0.9, accepted)
             self.assertIn("不在已计算的表位内", rejected["decision"]["reason"])
+
+            seeded = dict(accepted["parent"])
+            seeded["protenix_seeds"] = "43"
+            rejected = antigen_epitope.decide_round(design, seeded, 0.9, accepted)
+            self.assertIn("不在可编辑范围内", rejected["decision"]["reason"])
 
             sequences = dict(accepted["parent"])
             sequences["designed_sequences"] = ["AAAA"]

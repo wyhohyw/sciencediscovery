@@ -1,6 +1,6 @@
 # 抗原复合物表位试跑
 
-版本：1.0。基线是主仓 `openJiuwen-ai/sciencediscovery` 的 `main` `0763aba2f`。这一版只准备 `antibody-design` 的输入，并在本地记下按字段修改的轮次。它不提交 NPU 作业，也不在后续轮次里重新检索文献。
+版本：1.1。基线是主仓 `openJiuwen-ai/sciencediscovery` 的 `main` `0763aba2f`。这一版只准备 `antibody-design` 的输入，并在本地记下按字段修改的轮次。它不提交 NPU 作业，也不在后续轮次里重新检索文献。1.0 把四轮证明的短配置写成了后续测试的配置；1.1 把两者分开。
 
 ## 一次文献
 
@@ -16,6 +16,8 @@
 
 ## 迭代
 
-`evolve_start.json` 是交给现有 evolve 的那一份 JSON。`editableFields` 只包含 `hotspots`、`num_designs`、`diffuser_t`、`final_step`、`protenix_n_sample`、`protenix_seeds`、`protenix_use_msa`。文献、PDB、链、阈值和完整表位留在对象里，但不放进可编辑字段。`hotspots` 放在列表第一位。
+`evolve_start.json` 是交给现有 evolve 的那一份 JSON。`editableFields` 只包含 `hotspots`、`num_designs`、`diffuser_t`、`final_step`、`protenix_n_sample`、`protenix_use_msa`。文献、PDB、链、阈值、完整表位和 `protenix_seeds` 留在对象里，但不放进可编辑字段。种子固定为起始值 `42`。`hotspots` 放在列表第一位。
 
-评分程序是 `mock_npu_evaluator.py`。它按 RFdiffusion、ProteinMPNN、Protenix、screening 的名字走一遍，打印 `device` 为 `npu`、`mock` 为 true 的一行 JSON。分数由候选 JSON 决定，坏掉的热点更低。它不提交模型作业。真卡测试时保留同一份 JSON 和同一组字段，只把评分程序换成实际调用 `antibody-design` 的程序。`designed_sequences` 等真实序列出现后再加入可编辑字段。
+评分程序是 `mock_npu_evaluator.py`。它按 RFdiffusion、ProteinMPNN、Protenix、screening 的名字走一遍，打印 `device` 为 `npu`、`mock` 为 true 的一行 JSON。分数由候选 JSON 决定，坏掉的热点更低。它不提交模型作业。`designed_sequences` 等真实序列出现后再加入可编辑字段。
+
+四轮证明可以关掉 MSA，并把 `num_designs`、`protenix_n_sample` 都设为 1，`diffuser_t` 留在 15 到 30。实际测试不沿用这组限制：`protenix_use_msa` 为 true，`num_designs` 从 4 起，`protenix_n_sample` 仍为 1。种子继续固定为 `42`。

@@ -115,17 +115,13 @@ class EditMemory:
             if key not in self.best:
                 return ""
             score = self.best[key]
-            total = len(self.best)
             recent = list(islice(reversed(self.best.items()), RECENT_EDIT_LIMIT))
             seen = [f"{_preview(item)} (score {value:g})" for item, value in recent]
         summary = _preview(self.summary_for(code) or "the same JSON")
         return (
-            "This edit was already measured and does not take another run: "
-            f"{summary}; {_preview(key)} (score {score:g}). "
-            f"Recent measured edits ({len(seen)} of {total}; long values truncated): "
-            + "; ".join(seen) + ". "
-            "Propose a different JSON. Change an editable field to a new value. "
-            "Every measured edit is still checked, including those omitted from this preview."
+            "This edit was already measured and does not take another run. "
+            f"{summary}. Score {score:g}. Recent: " + "; ".join(seen) + ". "
+            "Return a different JSON."
         )
 
     def hold(self, code: str, direction: Optional[Mapping[str, Any]] = None) -> Tuple[str, str]:
@@ -146,8 +142,7 @@ class EditMemory:
         if not isinstance(parsed, dict):
             return (
                 "this reply is not a JSON object, so it does not take a run; asking again",
-                "The reply was not a JSON object, so it does not take a run. "
-                "Return one JSON object and nothing else. Change only an editable field.",
+                "The reply was not a JSON object. Return one JSON object and nothing else.",
             )
         if not self.baseline:
             return "", ""
@@ -156,8 +151,7 @@ class EditMemory:
             return "", ""
         return (
             "this edit is outside the declared fields, so it does not take a run; asking again",
-            "This edit is not run: " + why + ". "
-            "Return one JSON object. Change only an editable field and leave every other field as it is.",
+            "Not run: " + why + ". Return one JSON object. Change only an editable field.",
         )
 
     def summary_for(self, code: str) -> str:

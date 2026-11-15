@@ -194,6 +194,7 @@ async function startFakeSidecar(options: {
 async function harness(sidecarUrl: string, name: string, options: {
   apiOrigin?: string;
   cas?: { read: (hash: string) => Promise<Buffer> };
+  publishMeasurement?: (input: { run: EvolveRun; codeHash: string }) => Promise<void>;
   publishResult?: (input: { run: EvolveRun; winnerCodeHash: string }) => Promise<void>;
   runTokens?: RunTokenRegistry;
   workspacePath?: (sessionId: string) => string;
@@ -819,6 +820,33 @@ test("nothing is published when the seed won", async () => {
   const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
   await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to finish");
 
+  assert.deepEqual(published, []);
+});
+
+test("a seed that won still publishes the measured design", async () => {
+  const sidecar = await startFakeSidecar({
+    events: [
+      { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" },
+      { baselineScore: 0.5, codeHash: "sha256:seed", nodeIndex: 0, type: "seeded" },
+      { codeHash: "sha256:worse", depth: 1, nodeIndex: 1, parentIndex: 0,
+        score: 0.2, type: "expanded", valid: true },
+      FINISHED("succeeded", 0),
+    ],
+  });
+  cleanup(() => sidecar.close());
+
+  const measured: string[] = [];
+  const published: string[] = [];
+  const { orchestrator, store } = await harness(sidecar.url, "publish-seed-design", {
+    publishMeasurement: async ({ codeHash }) => { measured.push(codeHash); },
+    publishResult: async ({ winnerCodeHash }) => { published.push(winnerCodeHash); },
+  });
+
+  const run = await orchestrator.start({ goal: goal(), sessionId: "s1" });
+  await waitFor(async () => (await store.readRun(run.id))?.status === "succeeded", "the run to finish");
+  await waitFor(() => measured.length > 0, "the measured design to be published");
+
+  assert.deepEqual(measured, ["sha256:seed"]);
   assert.deepEqual(published, []);
 });
 

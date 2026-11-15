@@ -1,25 +1,22 @@
 ---
 name: antigen-epitope-evolve
-description: Turn one named antigen into a one-time literature note, a 4.5 angstrom complex epitope, and an antibody-design input, then record local one-field design rounds. Use when the user wants antigen-antibody PDB evidence, glycoprotein or N-protein chain extraction, epitope hotspots, and a short optimization ledger. Not for launching NPU models or searching the literature again after the first package.
+description: From one antigen name, search the literature once, take a 4.5 angstrom epitope from an antibody complex, and start one evolve search. Use when the user wants that antigen-to-antibody-design loop. Not for a second literature search, and not for a model process of your own.
 compatibility: Requires Python 3 standard library only. Literature search and the antibody model run stay in their own skills.
 metadata:
-  version: 1.1.0
+  version: 1.2.0
 ---
 
-# Antigen epitope preparation and local rounds
+# 抗原表位和抗体设计
 
-Prepare the inputs for `antibody-design`. Do not launch that pipeline from this skill, and do not infer an epitope for an antigen that has no antibody chain in the chosen structure.
+用户给一个抗原名。你查一次文献，算出表位，然后只发起一次 evolve。查完不要再查。
 
-## Once, before any round
+## 文献
 
-1. Ask for the antigen name and whether the chain of interest is the glycoprotein or the N protein. Optional: a PDB ID the user already trusts, a design count, and a run name.
-2. Select `literature-searcher` and search once. The topic is antigen-antibody complexes for that antigen, plus antigen-only and antibody-only PDB entries. Save the deduplicated source package at `antigen_epitope/literature_sources.json`.
-3. Select `report-writer` and write `antigen_epitope/literature_review.md` from that source package only. Name the complex PDB, the antigen chain, and the antibody chains, and quote the coverage gaps. Do not run another literature search to fill those gaps.
-4. Stop if the package does not identify one antigen-antibody complex that contains the requested glycoprotein or N-protein chain. Say what is missing. Do not switch to a surface prediction on an antigen-only structure.
+先问抗原名。用户已经给了就直接做。选 `literature-searcher`，查这个抗原的抗原抗体复合物，以及单独的抗原、抗体 PDB。来源记在 `antigen_epitope/literature_sources.json`。选 `report-writer`，只根据这份来源写 `antigen_epitope/literature_review.md`。写明复合物 PDB、抗原链、抗体链。没有这样的复合物就停，说缺什么。不要改去预测单独抗原的表面。
 
-## Structure package
+## 表位
 
-Run the bundled script on the local complex PDB. Do not copy the script or search the disk for another copy.
+把复合物 PDB 放到 `antigen_epitope/complex.pdb`，再跑：
 
 ```sh
 python "$SCIENCEDISCOVERY_SKILLS_DIR/antigen-epitope-evolve/scripts/antigen_epitope.py" package \
@@ -34,33 +31,29 @@ python "$SCIENCEDISCOVERY_SKILLS_DIR/antigen-epitope-evolve/scripts/antigen_epit
   --cutoff 4.5
 ```
 
-Replace the chain IDs, PDB ID, and run name with the values from the review. The cutoff stays 4.5 unless the user sets a different one before this command. Later rounds must not change it.
+链号、PDB、run name 换成综述里的。cutoff 保持 4.5。表位是抗原和抗体非氢原子距离小于 4.5 Å 的残基。失败就报 `epitope.json` 里的 error，然后停。
 
-A residue is an epitope residue when one of its non-hydrogen atoms is within the cutoff of a non-hydrogen atom on an antibody chain. The script keeps the first model and blank or A alternate locations. Water and other solvents are ignored. Glycans within the cutoff are listed in `epitope.json` and are not hotspots. Hotspots use the original antigen chain and residue numbers, for example `[B45,B46]`. Residues with insertion codes are reported separately and are left out of `hotspots`.
+`framework_pdb` 用 `/home/lujiale/antibody_pipeline/resources/presets/6DZM/3dwt_HLT.pdb`。不要用复合物里拆出来的抗体链。`target_pdb` 用 `/workspace/target_antigen.pdb`。
 
-Read `antibody_pipeline/inputs/design_input.json`. If the command exits non-zero, report `epitope.json` field `error` and stop. Copy `antibody_pipeline/inputs/config.json` to `antibody_pipeline/config.json` only when handing the package to `antibody-design`.
+## 搜索
 
-## Iteration
-
-The package writes `antibody_pipeline/inputs/evolve_start.json`. Pass that object to the existing evolve search. Do not run the local `round` ledger, and do not re-ask the evolve-design checkpoints. The editable range is already fixed.
-
-Read the whole mock program at `$SCIENCEDISCOVERY_SKILLS_DIR/antigen-epitope-evolve/scripts/mock_npu_evaluator.py` and pass that text as `evaluatorSource`. `hotspots` stays first in `editableFields` because the search probe damages the first field. Leave `designed_sequences` out until a real design run has produced sequences; then add only that field in a later run.
+读 `antibody_pipeline/inputs/evolve_start.json`。选了 NPU runner 时，`evaluatorSource` 用 `real_npu_evaluator.py` 的全文；否则用 `mock_npu_evaluator.py` 的全文。只调用一次 `create_evolve_run`，然后结束这次对话。
 
 ```text
 create_evolve_run(
   mode="npu_job",
   algorithm="puct",
-  statement="Raise the antibody-design score by editing only the named JSON fields.",
-  howScored="Mock NPU score from the candidate JSON. Higher is better. Hotspots must stay inside epitope_residues.",
-  startingPointText=<contents of evolve_start.json>,
-  editableFields=["hotspots", "num_designs", "diffuser_t", "final_step", "protenix_n_sample", "protenix_seeds", "protenix_use_msa"],
-  evaluatorSource=<contents of mock_npu_evaluator.py>,
+  statement="把抗体设计的分数做高。",
+  howScored="分数越高越好。热点必须是表位的子集。",
+  startingPointText=<evolve_start.json 的全文>,
+  editableFields=["hotspots", "num_designs", "diffuser_t", "final_step", "protenix_n_sample", "protenix_use_msa"],
+  evaluatorSource=<上面选定的脚本全文>,
   expansions=4,
   workers=1,
   thinking="disabled"
 )
 ```
 
-Call it once and end the turn. The mock prints `device` `npu` and `mock` true. It walks the stage names RFdiffusion, ProteinMPNN, Protenix, and screening, then returns a deterministic score and placeholder sequences. It does not submit a model job. If `create_evolve_run` has no `npu_job` mode, stop and say this build cannot restrict an evolve run to JSON fields.
+`hotspots` 放在第一位。种子保持 `"42"`，不要放进可改字段。可改范围：`num_designs` 1 到 8，`protenix_n_sample` 1 到 4，`diffuser_t` 15 到 30，`final_step` 从 1 到 `diffuser_t`，`protenix_use_msa` 是布尔值。短验证用 1 个设计、1 个样本、MSA 关。正式测试用 MSA 开、`num_designs` 4、`protenix_n_sample` 1。
 
-For a real NPU test, keep the same `startingPointText` and `editableFields`. Replace `evaluatorSource` with a program that runs `antibody-design` and prints one JSON line whose `device` is `npu` and whose `score` is the measured screening score. Do not describe mock sequences as designed antibodies.
+搜索结束时，最佳设计的序列和结构会记成产物。不要另起模型进程，也不要自己再跑一轮流水线。

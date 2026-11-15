@@ -39,7 +39,6 @@ LEVELS = {
     "diffuser_t": "L2",
     "final_step": "L2",
     "protenix_n_sample": "L2",
-    "protenix_seeds": "L2",
     "protenix_use_msa": "L2",
     "designed_sequences": "L3",
 }
@@ -360,7 +359,7 @@ def build_package(
         },
         "editable": {
             "L1": ["hotspots"],
-            "L2": ["num_designs", "diffuser_t", "final_step", "protenix_n_sample", "protenix_seeds", "protenix_use_msa"],
+            "L2": ["num_designs", "diffuser_t", "final_step", "protenix_n_sample", "protenix_use_msa"],
             "L3": ["designed_sequences"],
         },
         "baseline": baseline,
@@ -399,7 +398,6 @@ EVOLVE_EDITABLE = (
     "diffuser_t",
     "final_step",
     "protenix_n_sample",
-    "protenix_seeds",
     "protenix_use_msa",
 )
 
@@ -470,8 +468,6 @@ def _validate_change(parent: dict[str, Any], candidate: dict[str, Any], field: s
             raise ScriptError("diffuser_t 不能小于 15")
         if not isinstance(final_step, int) or isinstance(final_step, bool) or not 1 <= final_step <= diffuser_t:
             raise ScriptError("final_step 必须在 1 和 diffuser_t 之间")
-    if field == "protenix_seeds" and (not isinstance(new, str) or not new.strip()):
-        raise ScriptError("protenix_seeds 必须是非空字符串")
     if field == "protenix_use_msa" and not isinstance(new, bool):
         raise ScriptError("protenix_use_msa 必须是布尔值")
 

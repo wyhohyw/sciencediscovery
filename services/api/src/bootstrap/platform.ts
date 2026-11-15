@@ -54,6 +54,7 @@ import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import { stopEvolveRunForSession } from "../evolution/stop-run.js";
 import { readEvolveDirection } from "@sciencediscovery/schema";
+import { publishMeasuredDesign, registerStagedDesigns } from "../evolution/design-artifacts.js";
 import { isEvolveCommand, evolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
@@ -299,6 +300,17 @@ export function createPlatformServices(
   const evolveCandidates = new CandidateSources(
     config.dataDir, process.env.SCIENCE_AGENT_EVOLVE_CANDIDATE_DIR?.trim() || undefined,
   );
+  const remoteCompute = dependencies.remoteCompute ?? new RemoteComputeClient(
+    config.sshConfigPath,
+    async (hostId) => store.remoteHostSshAccess(hostId),
+    {
+      logger: apiLog,
+      // Machines on an isolated network cannot fetch the environment
+      // provisioner themselves; this installation keeps one per architecture
+      // and hands it over when it deploys their Runner.
+      provisionerCacheDir: resolve(config.dataDir, "provisioners"),
+    },
+  );
   const evolveOrchestrator = new EvolveOrchestrator(
     evolutionStore,
     new EvolveSidecarClient({ internalToken: config.evolve.internalToken, url: config.evolve.url, connection: () => evolveAvailability.connection() }),
@@ -392,6 +404,19 @@ export function createPlatformServices(
           ],
           searchId: run.id,
           sessionId: run.sessionId,
+        });
+      },
+      publishMeasurement: async ({ run, codeHash }) => {
+        const code = await evolveCandidates.read(run.id, codeHash);
+        if (code === undefined) return;
+        await publishMeasuredDesign({
+          code,
+          notify: (input) => provenanceRecorder.notifyArtifactRegistered(input),
+          put: (bytes) => evolveCas.put(bytes),
+          remoteCompute,
+          runId: run.id,
+          sessionId: run.sessionId,
+          store,
         });
       },
     },
@@ -586,20 +611,7 @@ export function createPlatformServices(
     paperService,
     permissionDecisions: new PermissionDecisionQueue(),
     provenanceRecorder,
-    // Credentials and trusted host keys live in the store, so the compute
-    // client asks for them per machine instead of inheriting an ambient SSH
-    // agent or the user's known_hosts.
-    remoteCompute: dependencies.remoteCompute ?? new RemoteComputeClient(
-      config.sshConfigPath,
-      async (hostId) => store.remoteHostSshAccess(hostId),
-      {
-        logger: apiLog,
-        // Machines on an isolated network cannot fetch the environment
-        // provisioner themselves; this installation keeps one per architecture
-        // and hands it over when it deploys their Runner.
-        provisionerCacheDir: resolve(config.dataDir, "provisioners"),
-      },
-    ),
+    remoteCompute,
     runnerClient,
     skillCatalog,
     store,
@@ -646,6 +658,15 @@ export async function initializePlatformServices(
   store.setAvailableSkillIds(skillCatalog.ids());
   await initializeComponent("custom_mcp_servers", () => services.customMcpServers.load());
   await initializeComponent("session_store", () => store.load());
+  // A search can finish before its structure files are pulled. Register any
+  // design the workspace already holds so the panel is not empty after a restart.
+  await registerStagedDesigns({
+    notify: (input) => provenanceRecorder.notifyArtifactRegistered(input),
+    put: (bytes) => provenanceRecorder.cas.put(bytes),
+    store,
+  }).catch((error: unknown) => {
+    apiLog.warn("design_artifact_register_failed", { errorMessage: shortErrorMessage(error) });
+  });
   // A first install opens on one real Session rather than an empty sidebar.
   // It goes in before run recovery so the sample's own runs are read from
   // disk like any other; both are finished, so recovery leaves them alone.
