@@ -21,7 +21,7 @@ import assert from "node:assert/strict";
 // scope even though the app itself is built with the automatic one.
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { EvolveRun } from "@sciencediscovery/schema";
+import type { EvolveEventRecord, EvolveRun } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "../src/api/client.js";
 import type { EvolveStatus } from "../src/api/evolve.js";
@@ -526,6 +526,77 @@ test("a round with no score yet is a blank spinning node and a stage bar", () =>
   assert.equal(bar.includes("%"), false);
   assert.equal((bar.match(/is-done/g) ?? []).length, 4);
   assert.equal((bar.match(/is-current/g) ?? []).length, 1);
+  const waiting = renderToStaticMarkup(<RoundProgress since={new Date().toISOString()} />);
+  assert.match(waiting, /正在计算/);
+  assert.equal(waiting.includes('role="progressbar"'), false);
+});
+
+test("the live panel pulls only new events and keeps an interrupted round closed", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const currentRun = run();
+  currentRun.goal.scorecard.criteria = [{
+    direction: "maximize",
+    id: "score",
+    measure: { kind: "npu_job", scriptCas: "sha256:script", timeoutSeconds: 120 },
+    name: "Score",
+    normalize: { kind: "identity" },
+    weight: 1,
+  }];
+  const record = (sequence: number, event: EvolveEventRecord["event"]): EvolveEventRecord => ({
+    createdAt: new Date().toISOString(),
+    event,
+    sequence,
+  });
+  const seeded = record(1, { baselineScore: 0.2, nodeIndex: 0, type: "seeded" });
+  const selected = record(2, { ancestorVisits: [{ nodeIndex: 0, visits: 1 }], nodeIndex: 0, type: "selected" });
+  const stage = record(3, { level: "info", message: "npu stage: protenix", type: "log" });
+  const expanded = record(4, { depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.4, type: "expanded", valid: true });
+  const interrupted = record(5, { ancestorVisits: [], nodeIndex: 1, type: "selected" });
+  const paths: string[] = [];
+  const reads = [[seeded], [selected, stage], [expanded, interrupted]];
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const api = {
+    fetchStream: async (_path: string, init: RequestInit) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        stream = controller;
+        init.signal?.addEventListener("abort", () => controller.close(), { once: true });
+      },
+    })),
+    request: async (path: string) => {
+      paths.push(path);
+      return reads.shift() ?? [];
+    },
+  } as unknown as ApiClient;
+  let reportFailure!: () => void;
+  function Harness() {
+    const [status, setStatus] = React.useState(currentRun.status);
+    reportFailure = () => setStatus("failed");
+    return <EvolveDetail client={api} onError={assert.fail} onRunChanged={() => {}}
+      run={{ ...currentRun, status }} />;
+  }
+  let panel!: ReturnType<typeof create>;
+  try {
+    await act(async () => { panel = create(<Harness />); });
+    await act(async () => {
+      stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(selected)}\n\n`));
+    });
+    assert.equal(panel.root.findByType(RoundProgress).props.stage, "draft");
+    assert.ok(panel.root.findAllByProps({ className: "evolve-tree-spinner" }).length > 0);
+
+    await act(async () => { context.mock.timers.tick(2_000); });
+    assert.equal(panel.root.findByType(RoundProgress).props.stage, "protenix");
+
+    await act(async () => { reportFailure(); });
+    assert.deepEqual(paths.map((path) => new URL(path, "http://localhost").searchParams.get("after")), ["0", "2", "3"]);
+    assert.equal(panel.root.findAllByProps({ className: "evolve-round-track" }).length, 0);
+    assert.equal(panel.root.findAllByProps({ className: "evolve-tree-spinner" }).length, 0);
+    assert.equal(panel.root.findByType(EvolveTree).props.candidates.length, 2);
+    await act(async () => { context.mock.timers.tick(2_000); });
+    assert.equal(paths.length, 3);
+  } finally {
+    await act(async () => { panel?.unmount(); });
+    context.mock.timers.reset();
+  }
 });
 
 /** The drawing coordinate under a screen point, mirroring where the canvas

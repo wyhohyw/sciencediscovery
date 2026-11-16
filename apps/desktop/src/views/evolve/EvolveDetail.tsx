@@ -70,7 +70,12 @@ export interface EvolveDetailProps {
 }
 
 export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetailProps) {
-  const [view, setView] = useState<EvolveRunView>(() => ({ ...emptyRunView(), status: run.status }));
+  const [eventView, setView] = useState<EvolveRunView>(() => ({
+    ...emptyRunView(),
+    algorithm: run.algorithm,
+    status: run.status,
+  }));
+  const cursor = useRef(0);
   const [selectedIndex, setSelectedIndex] = useState<number>();
   const [stopping, setStopping] = useState(false);
   /** Re-render once a second while the run is live, for the elapsed clock. */
@@ -85,30 +90,33 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
 
   useEffect(() => {
     const controller = new AbortController();
-    setView({ ...emptyRunView(), status: run.status });
+    cursor.current = 0;
+    setView({ ...emptyRunView(), algorithm: run.algorithm, status: run.status });
     setSelectedIndex(undefined);
     // Open from 0: the log is the source of truth, and replaying it is how a
     // panel opened after the fact renders exactly what a panel that watched the
     // whole search shows. A reconnect resumes from the last sequence folded.
-    let cursor = 0;
     let resumes = 0;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const connect = () => {
       let received = 0;
-      void subscribeEvolveEvents(client, run.id, cursor, (record) => {
+      void subscribeEvolveEvents(client, run.id, cursor.current, (record) => {
+        if (disposed) return;
         received += 1;
-        if (record.sequence > cursor) cursor = record.sequence;
+        if (record.sequence <= cursor.current) return;
+        cursor.current = record.sequence;
         setView((current) => reduceEvolveRecord(current, record));
       }, controller.signal)
         .then(() => {
+          if (disposed) return;
           // Re-read the record however the stream ended: a run whose sidecar
           // died settles without an event, and only the record's status says so.
           callbacks.current.onRunChanged();
           // A close that delivered nothing is the server saying the log is
           // complete, so it is not retried.
-          if (disposed || received === 0 || resumes >= RESUME_ATTEMPTS) return;
+          if (received === 0 || resumes >= RESUME_ATTEMPTS) return;
           resumes += 1;
           connect();
         })
@@ -137,37 +145,43 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
     setView((current) => adoptRunStatus(current, run.status));
   }, [run.status]);
 
-  // The event stream replays whatever was on disk when the panel connected and
-  // then waits. A small later write can sit behind the dev proxy, so the tree
-  // stays on the last node that had already landed and the round in progress
-  // never appears. The JSON log is the same record the stream replays; reading
-  // it on a short interval is what keeps the running node and its stage moving.
-  // Records at or below the watermark are ignored, so this cannot double-count
-  // a frame the stream also delivered.
+  // Small SSE frames can sit behind the proxy. The JSON fallback shares the
+  // stream cursor and waits for each request to finish before polling again.
+  // Read once more on a terminal status to pick up the last persisted events.
   useEffect(() => {
-    let stopped = false;
-    const pull = () => {
-      void client.request<EvolveEventRecord[]>(
-        `/api/evolve/runs/${encodeURIComponent(run.id)}/events?after=0`,
-      ).then((rows) => {
-        if (stopped || !Array.isArray(rows) || rows.length === 0) return;
-        setView((current) => reduceEvolveRecords(current, rows));
-      }).catch(() => undefined);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const pull = async () => {
+      try {
+        const rows = await client.request<EvolveEventRecord[]>(
+          `/api/evolve/runs/${encodeURIComponent(run.id)}/events?after=${cursor.current}`,
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted || !Array.isArray(rows)) return;
+        const fresh = rows.filter((record) => record.sequence > cursor.current);
+        for (const record of fresh) cursor.current = Math.max(cursor.current, record.sequence);
+        if (fresh.length > 0) setView((current) => reduceEvolveRecords(current, fresh));
+      } catch {
+        // A transient read failure leaves the cursor in place for the next pull.
+      } finally {
+        if (!controller.signal.aborted && isEvolveRunActive(run.status)) {
+          timer = setTimeout(() => void pull(), 2_000);
+        }
+      }
     };
-    pull();
-    if (!isEvolveRunActive(run.status)) return () => { stopped = true; };
-    const timer = window.setInterval(pull, 2_000);
+    void pull();
     return () => {
-      stopped = true;
-      window.clearInterval(timer);
+      controller.abort();
+      clearTimeout(timer);
     };
   }, [client, run.id, run.status]);
 
+  const view = adoptRunStatus(eventView, run.status);
   const active = isEvolveRunActive(view.status);
   useEffect(() => {
     if (!active) return;
-    const timer = window.setInterval(() => setClock((tick) => tick + 1), 1_000);
-    return () => window.clearInterval(timer);
+    const timer = setInterval(() => setClock((tick) => tick + 1), 1_000);
+    return () => clearInterval(timer);
   }, [active]);
 
   const budget = run.goal.budget;
@@ -188,7 +202,10 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
   const scored = view.candidates.filter((candidate) => !candidate.running);
   const valid = scored.filter((candidate) => candidate.valid).length;
   const total = scored.length;
-  const running = view.candidates.find((candidate) => candidate.running);
+  const stage = algorithm === "puct"
+    && run.goal.scorecard.criteria?.some((criterion) => criterion.measure.kind === "npu_job")
+    ? view.stage
+    : undefined;
   const selected = selectedIndex === undefined
     ? undefined
     : view.candidates.find((candidate) => candidate.nodeIndex === selectedIndex);
@@ -197,7 +214,7 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
     : view.candidates.find((candidate) => candidate.nodeIndex === selected.parentIndex);
   const children = selected === undefined
     ? 0
-    : view.candidates.filter((candidate) => candidate.parentIndex === selected.nodeIndex).length;
+    : scored.filter((candidate) => candidate.parentIndex === selected.nodeIndex).length;
 
   const stop = () => {
     setStopping(true);
@@ -261,7 +278,7 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
         </div>
       </section>
 
-      {running || view.stage ? <RoundProgress since={view.roundStartedAt} stage={view.stage ?? "draft"} /> : null}
+      {stage || view.roundStartedAt ? <RoundProgress since={view.roundStartedAt} stage={stage} /> : null}
 
       <section className="evolve-section">
         <h3 className="evolve-section-title">{TEXT.evolve.detail.chartTitle}</h3>
@@ -332,9 +349,9 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
 /** The current round, as the stages the job has actually reached.
  *  Named steps, not a percentage: a stage arrives when that step starts, and
  *  the bar does not guess how far through it the card is. */
-export function RoundProgress({ since, stage }: { since?: string; stage: NpuStage }) {
-  const index = Math.max(0, NPU_STAGES.indexOf(stage));
-  const label = TEXT.evolve.detail.stages[stage];
+export function RoundProgress({ since, stage }: { since?: string; stage?: NpuStage }) {
+  const index = stage === undefined ? -1 : NPU_STAGES.indexOf(stage);
+  const label = stage === undefined ? TEXT.evolve.detail.pendingNode : TEXT.evolve.detail.stages[stage];
   const started = since === undefined ? Number.NaN : Date.parse(since);
   const seconds = Number.isFinite(started) ? Math.max(0, (Date.now() - started) / 1000) : null;
   const elapsed = seconds === null ? "" : span(seconds);
@@ -343,7 +360,7 @@ export function RoundProgress({ since, stage }: { since?: string; stage: NpuStag
       <span>{TEXT.evolve.detail.progressTitle} · {label}</span>
       {elapsed ? <span>{elapsed}</span> : null}
     </div>
-    <div
+    {stage === undefined ? null : <div
       aria-valuemax={NPU_STAGES.length}
       aria-valuemin={1}
       aria-valuenow={index + 1}
@@ -357,7 +374,7 @@ export function RoundProgress({ since, stage }: { since?: string; stage: NpuStag
       >
         {TEXT.evolve.detail.stages[name]}
       </span>)}
-    </div>
+    </div>}
   </section>;
 }
 

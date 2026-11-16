@@ -396,6 +396,7 @@ test("a chosen parent grows a blank node until the round lands", () => {
   assert.equal(pending?.parentIndex, 0);
   assert.equal(pending?.score, null);
   assert.equal(started.stage, "draft");
+  assert.equal(started.roundStartedAt, "2026-01-01T00:00:00.000Z");
   assert.equal(bestCandidate(started)?.nodeIndex, 0);
 
   const moving = reduceEvolveRecord(started, record(3, {
@@ -420,6 +421,35 @@ test("a chosen parent grows a blank node until the round lands", () => {
 
   const settled = adoptRunStatus({ ...landed, status: "running" }, "succeeded");
   assert.equal(settled.candidates.some((candidate) => candidate.running), false);
+});
+
+test("OpenEvolve selects an iteration without adding a parent or a waiting node", () => {
+  const view = [
+    record(1, { algorithm: "openevolve", scorecardHash: "sha256:card", type: "search_started" }),
+    record(2, { baselineScore: 0.2, nodeIndex: 0, type: "seeded" }),
+    record(3, { ancestorVisits: [], nodeIndex: 7, type: "selected" }),
+  ].reduce(reduceEvolveRecord, emptyRunView());
+  assert.deepEqual(view.candidates.map((candidate) => candidate.nodeIndex), [0]);
+  assert.equal(view.stage, undefined);
+  assert.equal(view.roundStartedAt, undefined);
+  assert.equal(view.lastSequence, 3);
+});
+
+test("replaying history into a terminal run still folds results and leaves the round cleared", () => {
+  const view = [
+    record(1, { algorithm: "puct", scorecardHash: "sha256:card", type: "search_started" }),
+    record(2, { baselineScore: 0.2, nodeIndex: 0, type: "seeded" }),
+    record(3, { ancestorVisits: [{ nodeIndex: 0, visits: 1 }], nodeIndex: 0, type: "selected" }),
+    record(4, { depth: 1, nodeIndex: 1, parentIndex: 0, score: 0.4, type: "expanded", valid: true }),
+    record(5, { ancestorVisits: [{ nodeIndex: 0, visits: 2 }], nodeIndex: 0, type: "selected" }),
+    record(6, { level: "info", message: "npu stage: protenix", type: "log" }),
+  ].reduce(reduceEvolveRecord, adoptRunStatus(emptyRunView(), "failed"));
+  assert.equal(view.status, "failed");
+  assert.equal(view.expansions, 1);
+  assert.equal(view.stage, undefined);
+  assert.equal(view.roundStartedAt, undefined);
+  assert.deepEqual(view.candidates.map((candidate) => candidate.nodeIndex), [0, 1]);
+  assert.equal(adoptRunStatus(view, "running"), view);
 });
 
 test("an empty before-side reads as all new", () => {

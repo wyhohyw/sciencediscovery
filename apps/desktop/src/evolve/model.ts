@@ -26,12 +26,13 @@
  * stream.
  */
 
-import type {
-  EvolveEvent,
-  EvolveEventRecord,
-  EvolveRejectionCategory,
-  EvolveRun,
-  EvolveRunStatus,
+import {
+  isEvolveRunActive,
+  type EvolveEvent,
+  type EvolveEventRecord,
+  type EvolveRejectionCategory,
+  type EvolveRun,
+  type EvolveRunStatus,
 } from "@sciencediscovery/schema";
 
 export interface EvolveCandidateView {
@@ -138,19 +139,13 @@ export function reduceEvolveRecords(
 
 export function reduceEvolveRecord(state: EvolveRunView, record: EvolveEventRecord): EvolveRunView {
   if (record.sequence <= state.lastSequence) return state;
-  const next = applyEvent(state, record.event);
-  const stamped = record.event.type === "selected"
-    ? { ...next, roundStartedAt: record.createdAt }
-    : next;
-  return stamped === state
-    ? { ...state, lastSequence: record.sequence }
-    : { ...stamped, lastSequence: record.sequence };
+  return { ...applyEvent(state, record.event, record.createdAt), lastSequence: record.sequence };
 }
 
-function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
+function applyEvent(state: EvolveRunView, event: EvolveEvent, createdAt: string): EvolveRunView {
   switch (event.type) {
     case "search_started":
-      return { ...state, algorithm: event.algorithm, status: "running" };
+      return { ...adoptRunStatus(state, "running"), algorithm: event.algorithm };
 
     case "seeded":
       return withCandidate(state, event.nodeIndex, (candidate) => ({
@@ -166,6 +161,9 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
       }), { baselineScore: event.baselineScore });
 
     case "selected": {
+      // OpenEvolve reports the new iteration number here. PUCT reports the
+      // existing parent node and its updated visit counts.
+      if (state.algorithm === "openevolve") return state;
       // Absolute counts, so this is an assignment rather than an increment —
       // which is what makes a replayed record harmless.
       let next = state;
@@ -177,7 +175,8 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
         ...candidate,
         ...(event.puct === undefined ? {} : { selectedPuct: event.puct }),
       }));
-      return attachPending({ ...next, rootVisits: root?.visits ?? next.rootVisits }, event.nodeIndex);
+      next = { ...next, rootVisits: root?.visits ?? next.rootVisits };
+      return isEvolveRunActive(state.status) ? attachPending(next, event.nodeIndex, createdAt) : next;
     }
 
     case "expanded": {
@@ -247,12 +246,13 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
         ...(event.bestTestScore === undefined ? {} : { bestTestScore: event.bestTestScore }),
         ...(event.stopReason === undefined ? {} : { stopReason: event.stopReason }),
         ...(event.expansionsPlanned === undefined ? {} : { expansionsPlanned: event.expansionsPlanned }),
-        status: event.status,
+        status: isEvolveRunActive(state.status) ? event.status : state.status,
       });
 
     case "log": {
       const match = STAGE_LINE.exec(event.message);
-      const stage = match?.[1] !== undefined && isNpuStage(match[1]) ? match[1] : undefined;
+      const stage = isEvolveRunActive(state.status) && state.algorithm !== "openevolve"
+        && match?.[1] !== undefined && isNpuStage(match[1]) ? match[1] : undefined;
       return {
         ...state,
         ...(stage === undefined ? {} : { stage }),
@@ -277,12 +277,13 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
  */
 export function adoptRunStatus(state: EvolveRunView, status: EvolveRunView["status"]): EvolveRunView {
   if (state.status === status) return state;
-  const next = { ...state, status };
-  return status === "running" || status === "pending" ? next : clearRound(next);
+  if (!isEvolveRunActive(status)) return clearRound({ ...state, status });
+  if (status === "running" && state.status === "pending") return { ...state, status };
+  return state;
 }
 
 /** The blank child drawn from the moment a parent is chosen until its score exists. */
-function attachPending(state: EvolveRunView, parentIndex: number): EvolveRunView {
+function attachPending(state: EvolveRunView, parentIndex: number, startedAt: string): EvolveRunView {
   const parent = state.candidates.find((candidate) => candidate.nodeIndex === parentIndex);
   const running: EvolveCandidateView = {
     depth: (parent?.depth ?? 0) + 1,
@@ -295,7 +296,7 @@ function attachPending(state: EvolveRunView, parentIndex: number): EvolveRunView
   };
   const candidates = [...state.candidates.filter((candidate) => !candidate.running), running]
     .sort((left, right) => left.nodeIndex - right.nodeIndex);
-  return { ...state, candidates, stage: "draft" };
+  return { ...state, candidates, roundStartedAt: startedAt, stage: "draft" };
 }
 
 /** A finished round, or a finished search, has no blank node and no stage left. */
