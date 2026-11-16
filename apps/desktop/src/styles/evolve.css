@@ -1274,114 +1274,149 @@
    drawn from the outside, where an outline over a dense drawing is legible. */
 .evolve-tree-node:focus-visible .evolve-tree-ring { stroke: #1968f0; stroke-width: 2.5; }
 .evolve-tree-ring { fill: none; stroke: transparent; stroke-width: 2; }
-.evolve-tree-node:hover .evolve-tree-ring { stroke: #a9c6ff; }
+.evolve-tree-node:not(.is-running):hover .evolve-tree-ring { stroke: #a9c6ff; }
 .evolve-tree-node.is-selected .evolve-tree-ring { stroke: #7aa7ff; stroke-width: 2.5; }
 .evolve-tree-node.is-best.is-selected .evolve-tree-ring { stroke: #1968f0; }
 
 .evolve-tree-node.is-running { cursor: default; }
-.evolve-tree-node.is-running .evolve-tree-disc { fill: #f4f7fb; stroke: #d5deea; }
+.evolve-tree-node.is-running .evolve-tree-disc {
+  fill: var(--primary-softer);
+  stroke: var(--primary-border-soft);
+}
+
+.evolve-tree-spinner,
+.evolve-tree-spinner-track {
+  fill: none;
+  stroke-width: 2;
+}
+
+.evolve-tree-spinner-track { stroke: var(--primary-border-soft); }
 
 .evolve-tree-spinner {
+  stroke: var(--primary-strong);
+  stroke-linecap: round;
+  stroke-dasharray: 30 70;
   transform-box: fill-box;
   transform-origin: center;
-  animation: evolve-spin 0.9s linear infinite;
+  animation: evolve-spin 1s linear infinite;
 }
 
-.evolve-tree-spinner circle {
-  fill: none;
-  stroke: #1968f0;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-dasharray: 16 46;
+.evolve-node-row.is-running,
+.evolve-node-row.is-running:hover {
+  cursor: default;
+  background: var(--primary-softer);
+  box-shadow: inset 2px 0 var(--primary-border-soft);
 }
 
-.evolve-node-row.is-running { cursor: default; }
-.evolve-node-row.is-running:hover { background: transparent; }
+.evolve-node-row.is-running .evolve-node-title { color: var(--primary-strong); }
+.evolve-node-row.is-running .evolve-node-gen { color: var(--muted); }
+
 .evolve-node-row.is-running .evolve-node-dot {
+  box-sizing: border-box;
+  flex-basis: 11px;
+  width: 11px;
+  height: 11px;
+  margin-inline: -2px;
   background: transparent;
-  border: 1.5px solid #1968f0;
-  border-right-color: transparent;
-  animation: evolve-spin 0.9s linear infinite;
+  border: 1.5px solid var(--primary-border-soft);
+  border-top-color: var(--primary-strong);
+  animation: evolve-spin 1s linear infinite;
 }
 
 .evolve-round {
-  margin: 4px 0 18px;
+  padding: 13px 15px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-m);
+  background: var(--surface);
 }
 
 .evolve-round-head {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  color: #3c4553;
-  font-size: 13px;
-  font-weight: 500;
 }
 
-.evolve-round-head span:last-child {
-  color: #7d8794;
+.evolve-round-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+}
+
+.evolve-round-title,
+.evolve-round-elapsed {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.evolve-round-stage {
+  color: var(--primary-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.evolve-round-elapsed {
   font-variant-numeric: tabular-nums;
-  font-weight: 400;
+  white-space: nowrap;
 }
 
 .evolve-round-track {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px 6px;
+  margin-top: 11px;
 }
 
 .evolve-round-step {
-  display: inline-flex;
-  align-items: center;
-  min-height: 26px;
-  padding: 3px 8px;
-  border-radius: 99px;
-  background: #eef1f6;
-  color: #7d8794;
-  font-size: 12px;
-  line-height: 1.2;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
 }
 
-.evolve-round-step.is-done {
-  background: #e8f0ff;
-  color: #1968f0;
+.evolve-round-step::before {
+  content: "";
+  display: block;
+  height: 4px;
+  margin-bottom: 4px;
+  border-radius: 2px;
+  background: var(--surface-sunk);
 }
+
+.evolve-round-step.is-done { color: var(--text-secondary); }
+.evolve-round-step.is-done::before { background: var(--primary-border-soft); }
 
 .evolve-round-step.is-current {
-  background: #1968f0;
-  color: #fff;
+  color: var(--primary-strong);
+  font-weight: 600;
 }
 
-.evolve-round-step.is-current::before {
-  content: "";
-  width: 10px;
-  height: 10px;
-  margin-right: 6px;
-  box-sizing: border-box;
-  border: 1.5px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 50%;
-  animation: evolve-spin 0.9s linear infinite;
-}
+.evolve-round-step.is-current::before { background: var(--primary); }
 
 @keyframes evolve-spin {
   to { transform: rotate(360deg); }
 }
 
 .evolve-tree-wait {
-  fill: #1968f0;
+  fill: var(--primary-strong);
   font-size: 11px;
   font-weight: 600;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .evolve-tree-spinner,
-  .evolve-node-row.is-running .evolve-node-dot,
-  .evolve-round-step.is-current::before {
+  .evolve-node-row.is-running .evolve-node-dot {
     animation: none;
   }
+}
 
-  .evolve-round-step.is-current { background: #1968f0; }
+@container (max-width: 560px) {
+  .evolve-round-track { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 .evolve-tree-node.is-quiet .evolve-tree-disc { fill: #e9edf5; }

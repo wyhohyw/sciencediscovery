@@ -66,7 +66,6 @@ export function EvolveNodeList({ bestIndex, candidates, onSelect, selectedIndex 
                   <span className="evolve-node-title">{TEXT.evolve.detail.pendingNode}</span>
                   <span className="evolve-node-gen">{TEXT.evolve.detail.generation(candidate.depth)}</span>
                 </span>
-                <span className="evolve-node-score" />
               </div>
             </li>;
           }

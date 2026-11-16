@@ -357,10 +357,14 @@ export function RoundProgress({ since, stage }: { since?: string; stage?: NpuSta
   const elapsed = seconds === null ? "" : span(seconds);
   return <section className="evolve-round">
     <div className="evolve-round-head">
-      <span>{TEXT.evolve.detail.progressTitle} · {label}</span>
-      {elapsed ? <span>{elapsed}</span> : null}
+      <div className="evolve-round-heading">
+        <span className="evolve-round-title">{TEXT.evolve.detail.progressTitle}</span>
+        <strong className="evolve-round-stage">{label}</strong>
+      </div>
+      {elapsed ? <span className="evolve-round-elapsed">{elapsed}</span> : null}
     </div>
     {stage === undefined ? null : <div
+      aria-label={TEXT.evolve.detail.progressTitle}
       aria-valuemax={NPU_STAGES.length}
       aria-valuemin={1}
       aria-valuenow={index + 1}

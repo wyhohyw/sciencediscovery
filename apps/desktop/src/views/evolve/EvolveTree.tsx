@@ -424,12 +424,15 @@ export function EvolveTree({ bestIndex, candidates, onSelect, selectedIndex }: E
             >
               <circle className="evolve-tree-ring" r={RADIUS + 4} />
               <circle className="evolve-tree-disc" r={RADIUS} />
-              {candidate.running ? <g aria-hidden="true" className="evolve-tree-spinner">
-                <circle r={RADIUS - 8} />
-              </g> : null}
-              {candidate.running ? <text className="evolve-tree-wait" textAnchor="middle" y={4}>
-                {TEXT.evolve.detail.pendingNode}
-              </text> : null}
+              {candidate.running ? <>
+                <g aria-hidden="true" transform="translate(0 -7)">
+                  <circle className="evolve-tree-spinner-track" r={8} />
+                  <circle className="evolve-tree-spinner" pathLength={100} r={8} />
+                </g>
+                <text className="evolve-tree-wait" textAnchor="middle" y={17}>
+                  {TEXT.evolve.detail.pendingNode}
+                </text>
+              </> : null}
               {tone === "best" ? <g className="evolve-tree-badge" transform="translate(20 -20)">
                 <circle r={8.5} />
                 <g transform="translate(-7 -7)"><CrownGlyph size={14} /></g>
