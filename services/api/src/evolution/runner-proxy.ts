@@ -75,6 +75,7 @@ export interface EvolveRunnerSession {
 export interface EvolveRunnerCaller {
   cancelShellExecution(id: string, owner: ExecutionOwner): Promise<unknown>;
   getShellExecution(id: string, owner: ExecutionOwner): Promise<unknown>;
+  shellExecutionLogs(id: string, owner: ExecutionOwner, cursor?: number): Promise<unknown>;
   startShellExecution(request: ShellExecutionRequest): Promise<unknown>;
 }
 
@@ -163,11 +164,12 @@ export async function handleEvolveRunner(
   deps: EvolveRunnerDeps,
 ): Promise<boolean> {
   const match = url.pathname.match(
-    /^\/internal\/evolve-runner\/([^/]+)\/shell-executions(?:\/([^/]+)(?:\/(cancel))?)?$/,
+    /^\/internal\/evolve-runner\/([^/]+)\/shell-executions(?:\/([^/]+)(?:\/(logs|cancel))?)?$/,
   );
   if (!match) return false;
   const runId = decodeURIComponent(match[1]!);
   const executionId = match[2] ? decodeURIComponent(match[2]) : undefined;
+  const logs = match[3] === "logs";
   const cancel = match[3] === "cancel";
   const grant = deps.grants.resolve(runId, bearer(request));
   if (!grant) {
@@ -221,7 +223,12 @@ export async function handleEvolveRunner(
       }
       const caller = deps.runnerClient(runnerId);
       if (cancel) sendJson(response, 202, await caller.cancelShellExecution(executionId, owner));
-      else sendJson(response, 200, await caller.getShellExecution(executionId, owner));
+      else if (logs) {
+        const cursor = Number(url.searchParams.get("cursor") ?? "0");
+        sendJson(response, 200, await caller.shellExecutionLogs(
+          executionId, owner, Number.isFinite(cursor) && cursor > 0 ? cursor : 0,
+        ));
+      } else sendJson(response, 200, await caller.getShellExecution(executionId, owner));
       return true;
     }
     sendError(response, 404, "Not found");

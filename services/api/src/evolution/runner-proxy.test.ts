@@ -70,6 +70,7 @@ function deps(overrides: Partial<EvolveRunnerDeps> = {}): EvolveRunnerDeps & { s
     runnerClient: () => ({
       cancelShellExecution: async () => ({ state: "cancelled" }),
       getShellExecution: async () => ({ state: "completed", result: { stdout: "{\"device\":\"npu\",\"score\":1}\n" } }),
+      shellExecutionLogs: async () => ({ chunks: [], nextCursor: 0 }),
       startShellExecution: async (request) => {
         started.push(request);
         return { state: "queued" };
@@ -179,6 +180,7 @@ test("poll and cancel stay on the accepting runner after runner and card selecti
   context.runnerClient = (id) => ({
     startShellExecution: async (request) => { calls.push(`start:${id}:${request.npuDevices?.join(",")}`); return { state: "queued" }; },
     getShellExecution: async (executionId, owner) => { calls.push(`get:${id}:${executionId}:${owner.sessionId}`); return { state: "running" }; },
+    shellExecutionLogs: async () => ({ chunks: [], nextCursor: 0 }),
     cancelShellExecution: async (executionId) => { calls.push(`cancel:${id}:${executionId}`); return { state: "cancelled" }; },
   });
   const token = context.grants.issue("run-1", "session", 30);
@@ -194,12 +196,39 @@ test("poll and cancel stay on the accepting runner after runner and card selecti
   assert.equal((await submit(context, token, "evolve-two")).status, 409);
 });
 
+test("stdout logs stay on the accepting runner and carry the cursor", async () => {
+  const calls: Array<{ id: string; cursor: number }> = [];
+  const context = deps();
+  context.runnerClient = (id) => ({
+    startShellExecution: async () => ({ state: "queued" }),
+    getShellExecution: async () => ({ state: "running" }),
+    shellExecutionLogs: async (_executionId, _owner, cursor = 0) => {
+      calls.push({ id, cursor });
+      return { chunks: [{ cursor: 2, stream: "stdout", text: "EVOLVE_STAGE protenix\n" }], nextCursor: 2 };
+    },
+    cancelShellExecution: async () => ({ state: "cancelled" }),
+  });
+  const token = context.grants.issue("run-1", "session", 30);
+  assert.equal((await submit(context, token)).status, 202);
+  const response = capture();
+  await handleEvolveRunner(
+    requestOf("GET", `Bearer ${token}`),
+    response,
+    new URL("http://api/internal/evolve-runner/run-1/shell-executions/evolve-one/logs?sessionId=session&agentId=evolve&cursor=4"),
+    context,
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [{ id: "lab", cursor: 4 }]);
+  assert.match(JSON.stringify(response.payload), /EVOLVE_STAGE protenix/);
+});
+
 test("an uncertain submit keeps its route and cannot be submitted again on a different runner", async () => {
   const calls: string[] = [];
   const context = deps();
   context.runnerClient = (id) => ({
     startShellExecution: async () => { calls.push(`start:${id}`); throw new Error("response lost"); },
     getShellExecution: async () => { calls.push(`get:${id}`); return { state: "running" }; },
+    shellExecutionLogs: async () => ({ chunks: [], nextCursor: 0 }),
     cancelShellExecution: async () => ({ state: "cancelled" }),
   });
   const token = context.grants.issue("run-1", "session", 30);

@@ -256,6 +256,71 @@ def test_the_client_submits_a_signed_shell_and_waits_for_npu(tmp_path):
     assert metrics["device"] == "npu"
 
 
+def test_a_non_json_log_page_does_not_fail_the_score():
+    scripted = [
+        b"<html>not json</html>",
+        {"state": "completed", "result": {"stdout": '{"device": "npu", "score": 1.5}\n'}},
+    ]
+    stages = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("content-length") or 0)
+            self.rfile.read(length)
+            self._json(202, {"id": "evolve-one", "state": "queued"})
+
+        def do_GET(self):
+            page = scripted.pop(0)
+            if isinstance(page, bytes):
+                self.send_response(200)
+                self.send_header("content-type", "text/html")
+                self.send_header("content-length", str(len(page)))
+                self.end_headers()
+                self.wfile.write(page)
+                return
+            self._json(200, page)
+
+        def _json(self, status, payload):
+            raw = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, fmt, *args):
+            del fmt, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = RunnerNpuClient(
+            url=f"http://127.0.0.1:{server.server_address[1]}",
+            token="token",
+            execution={"agentId": "agent", "code": FIXED},
+            session_id="session",
+            agent_id="agent",
+            timeout=5,
+            poll_seconds=0.01,
+        )
+        domain = npu_domain(
+            scorecard=SCORECARD,
+            baseline_code=BASELINE,
+            client=client,
+            statement="raise the score",
+            on_stage=stages.append,
+        )
+        valid, metrics, error = domain.evaluate('{"lr": 0.2, "model": "fixed"}', ())
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+
+    assert stages == ["starting"]
+    assert valid is True and error == ""
+    assert metrics["score"] == 1.5
+
+
 def test_the_probe_damages_only_the_first_editable_field():
     from sciencediscovery_evolve.probe import _damage_json
 

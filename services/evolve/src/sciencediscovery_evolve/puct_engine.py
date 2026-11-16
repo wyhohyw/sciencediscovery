@@ -293,6 +293,7 @@ class PuctEngine:
                 statement=str(spec.statement or ""),
                 should_stop=should_stop,
                 attempt=memory.fault_count,
+                on_stage=lambda stage: emit(events.log("info", f"npu stage: {stage}")),
             )
         else:
             domain = self._domain_factory(

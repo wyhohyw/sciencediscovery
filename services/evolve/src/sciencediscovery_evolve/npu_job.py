@@ -151,6 +151,8 @@ class RunnerNpuClient:
         self,
         code: str,
         should_stop: Optional[Callable[[], bool]] = None,
+        *,
+        on_stage: Optional[Callable[[str], None]] = None,
     ) -> Tuple[dict[str, Any], Optional[dict[str, Any]]]:
         body = dict(self.execution)
         body["code"] = program_with_candidate(str(self.execution.get("code") or ""), code)
@@ -161,10 +163,22 @@ class RunnerNpuClient:
         if not isinstance(accepted, dict):
             raise NpuJobError("the runner did not accept the NPU execution")
         deadline = time.monotonic() + self.timeout
+        cursor = 0
+        pending = ""
+        announced = ""
+        last_log = 0.0
+        if on_stage is not None:
+            on_stage("starting")
+            announced = "starting"
         while True:
             if should_stop is not None and should_stop():
                 self._send("POST", self._execution_path(execution_id, "cancel"), "")
                 return {"status": "cancelled", "execution_id": execution_id}, None
+            if on_stage is not None and time.monotonic() - last_log >= 2:
+                last_log = time.monotonic()
+                cursor, pending, announced = self._stages(
+                    execution_id, cursor, pending, announced, on_stage,
+                )
             record = self._send("GET", self._execution_path(execution_id), None)[1]
             if not isinstance(record, dict):
                 raise NpuJobError("the runner returned a status that is not an object")
@@ -179,6 +193,46 @@ class RunnerNpuClient:
                 return {"status": state or "unknown", "execution_id": execution_id}, None
             stdout = str((record.get("result") or {}).get("stdout") or "")
             return {"status": "completed", "execution_id": execution_id}, _artifact(stdout)
+
+    def _stages(
+        self,
+        execution_id: str,
+        cursor: int,
+        pending: str,
+        announced: str,
+        on_stage: Callable[[str], None],
+    ) -> Tuple[int, str, str]:
+        """Read new stdout and report the latest ``EVOLVE_STAGE`` line."""
+        path = self._execution_path(execution_id, "logs")
+        if cursor:
+            path += f"&cursor={cursor}"
+        try:
+            _status, page = self._send("GET", path, None)
+        except (NpuJobError, json.JSONDecodeError):
+            # A missing or non-JSON log page is not a score. The job keeps running.
+            return cursor, pending, announced
+        if not isinstance(page, dict):
+            return cursor, pending, announced
+        for chunk in page.get("chunks") or []:
+            if isinstance(chunk, dict):
+                pending += str(chunk.get("text") or "")
+        next_cursor = page.get("nextCursor")
+        if isinstance(next_cursor, int):
+            cursor = next_cursor
+        stage = announced
+        keep = pending
+        if "\n" in pending:
+            lines, _, keep = pending.rpartition("\n")
+            for line in lines.splitlines():
+                if line.startswith("EVOLVE_STAGE "):
+                    name = line.split(" ", 1)[1].strip()
+                    if name:
+                        stage = name
+        if len(keep) > 4000:
+            keep = keep[-2000:]
+        if stage != announced:
+            on_stage(stage)
+        return cursor, keep, stage
 
     def _execution_path(self, execution_id: str, suffix: str = "") -> str:
         path = f"/shell-executions/{quote(execution_id, safe='')}"
@@ -230,6 +284,7 @@ def npu_domain(
     statement: str,
     should_stop: Optional[Callable[[], bool]] = None,
     attempt: Optional[Callable[[str], int]] = None,
+    on_stage: Optional[Callable[[str], None]] = None,
 ) -> Domain:
     """A domain whose score comes back from the Runner."""
     criteria = list(scorecard.get("criteria") or [])
@@ -250,7 +305,7 @@ def npu_domain(
                 valid, metrics, error = cached
                 return valid, dict(metrics), error
             try:
-                job, artifact = client.run(code, should_stop)
+                job, artifact = client.run(code, should_stop, on_stage=on_stage)
             except NpuJobError as error:
                 result = (False, with_search_score({"job_status": "fault"}), str(error))
             else:

@@ -64,6 +64,8 @@ export interface EvolveCandidateView {
   selectedPuct?: number;
   valid: boolean;
   visits: number;
+  /** A round that has a parent but no score yet. It is drawn, and it is not a result. */
+  running?: boolean;
   complexityBin?: number;
   diversityBin?: number;
   cellVia?: "insert" | "migration";
@@ -87,11 +89,26 @@ export interface EvolveRunView {
   logLines: Array<{ level: "error" | "info" | "warn"; message: string }>;
   maxDepth: number;
   rootVisits: number;
+  /** When the current round's parent was chosen. Cleared when that round lands. */
+  roundStartedAt?: string;
+  /** The pipeline stage of the round in flight. Absent once the round has a node. */
+  stage?: NpuStage;
   status: EvolveRunStatus;
   stopReason?: string;
   expansionsPlanned?: number;
   tokens: number;
 }
+
+/** Named stages a card job can report. The bar fills these; it does not estimate time. */
+export const NPU_STAGES = ["draft", "starting", "rfdiffusion", "proteinmpnn", "protenix", "screen"] as const;
+
+export type NpuStage = (typeof NPU_STAGES)[number];
+
+export function isNpuStage(value: string): value is NpuStage {
+  return (NPU_STAGES as readonly string[]).includes(value);
+}
+
+const STAGE_LINE = /^npu stage: ([a-z]+)$/;
 
 export function emptyRunView(): EvolveRunView {
   return {
@@ -122,9 +139,12 @@ export function reduceEvolveRecords(
 export function reduceEvolveRecord(state: EvolveRunView, record: EvolveEventRecord): EvolveRunView {
   if (record.sequence <= state.lastSequence) return state;
   const next = applyEvent(state, record.event);
-  return next === state
+  const stamped = record.event.type === "selected"
+    ? { ...next, roundStartedAt: record.createdAt }
+    : next;
+  return stamped === state
     ? { ...state, lastSequence: record.sequence }
-    : { ...next, lastSequence: record.sequence };
+    : { ...stamped, lastSequence: record.sequence };
 }
 
 function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
@@ -157,7 +177,7 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
         ...candidate,
         ...(event.puct === undefined ? {} : { selectedPuct: event.puct }),
       }));
-      return { ...next, rootVisits: root?.visits ?? next.rootVisits };
+      return attachPending({ ...next, rootVisits: root?.visits ?? next.rootVisits }, event.nodeIndex);
     }
 
     case "expanded": {
@@ -177,11 +197,11 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
           ? {}
           : { inspirationIndex: event.inspirationIndexes[0] }),
       }));
-      return {
+      return clearRound({
         ...next,
         expansions: next.expansions + 1,
         maxDepth: Math.max(next.maxDepth, event.depth),
-      };
+      });
     }
 
     case "evaluated":
@@ -221,17 +241,24 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
       return { ...state, costCents: event.cents, tokens: event.tokens };
 
     case "search_finished":
-      return {
+      return clearRound({
         ...state,
         ...(event.bestNodeIndex === null ? {} : { bestNodeIndex: event.bestNodeIndex }),
         ...(event.bestTestScore === undefined ? {} : { bestTestScore: event.bestTestScore }),
         ...(event.stopReason === undefined ? {} : { stopReason: event.stopReason }),
         ...(event.expansionsPlanned === undefined ? {} : { expansionsPlanned: event.expansionsPlanned }),
         status: event.status,
-      };
+      });
 
-    case "log":
-      return { ...state, logLines: [...state.logLines, { level: event.level, message: event.message }] };
+    case "log": {
+      const match = STAGE_LINE.exec(event.message);
+      const stage = match?.[1] !== undefined && isNpuStage(match[1]) ? match[1] : undefined;
+      return {
+        ...state,
+        ...(stage === undefined ? {} : { stage }),
+        logLines: [...state.logLines, { level: event.level, message: event.message }],
+      };
+    }
 
     default:
       return state;
@@ -249,7 +276,38 @@ function applyEvent(state: EvolveRunView, event: EvolveEvent): EvolveRunView {
  * changed keeps this from re-rendering the panel on every poll.
  */
 export function adoptRunStatus(state: EvolveRunView, status: EvolveRunView["status"]): EvolveRunView {
-  return state.status === status ? state : { ...state, status };
+  if (state.status === status) return state;
+  const next = { ...state, status };
+  return status === "running" || status === "pending" ? next : clearRound(next);
+}
+
+/** The blank child drawn from the moment a parent is chosen until its score exists. */
+function attachPending(state: EvolveRunView, parentIndex: number): EvolveRunView {
+  const parent = state.candidates.find((candidate) => candidate.nodeIndex === parentIndex);
+  const running: EvolveCandidateView = {
+    depth: (parent?.depth ?? 0) + 1,
+    nodeIndex: -1,
+    parentIndex,
+    running: true,
+    score: null,
+    valid: true,
+    visits: 0,
+  };
+  const candidates = [...state.candidates.filter((candidate) => !candidate.running), running]
+    .sort((left, right) => left.nodeIndex - right.nodeIndex);
+  return { ...state, candidates, stage: "draft" };
+}
+
+/** A finished round, or a finished search, has no blank node and no stage left. */
+function clearRound(state: EvolveRunView): EvolveRunView {
+  const pending = state.candidates.some((candidate) => candidate.running);
+  if (!pending && state.stage === undefined && state.roundStartedAt === undefined) return state;
+  return {
+    ...state,
+    candidates: pending ? state.candidates.filter((candidate) => !candidate.running) : state.candidates,
+    roundStartedAt: undefined,
+    stage: undefined,
+  };
 }
 
 /**

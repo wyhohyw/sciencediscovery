@@ -395,41 +395,53 @@ export function EvolveTree({ bestIndex, candidates, onSelect, selectedIndex }: E
           {layout.nodes.map((node) => {
             const { candidate } = node;
             const score = candidate.gateScore ?? candidate.score;
-            const tone = !candidate.valid
-              ? "failed"
-              : candidate.nodeIndex === bestIndex
-                ? "best"
-                : candidate.gateScore === undefined ? "quiet" : "significant";
+            const tone = candidate.running
+              ? "running"
+              : !candidate.valid
+                ? "failed"
+                : candidate.nodeIndex === bestIndex
+                  ? "best"
+                  : candidate.gateScore === undefined ? "quiet" : "significant";
             const selected = candidate.nodeIndex === selectedIndex;
             const cx = x(node.x);
             const cy = y(node.depth);
             return <g
-              aria-label={`${TEXT.evolve.detail.nodeTitle(candidate.nodeIndex)} ${formatScore(score)}`}
-              aria-pressed={selected}
-              className={`evolve-tree-node is-${tone}${selected ? " is-selected" : ""}`}
+              aria-label={candidate.running
+                ? TEXT.evolve.detail.pendingNode
+                : `${TEXT.evolve.detail.nodeTitle(candidate.nodeIndex)} ${formatScore(score)}`}
+              aria-pressed={candidate.running ? undefined : selected}
+              className={`evolve-tree-node is-${tone}${selected && !candidate.running ? " is-selected" : ""}`}
               key={candidate.nodeIndex}
-              onClick={() => onSelect(candidate.nodeIndex)}
-              onKeyDown={(event) => {
+              onClick={candidate.running ? undefined : () => onSelect(candidate.nodeIndex)}
+              onKeyDown={candidate.running ? undefined : (event) => {
                 if (event.key !== "Enter" && event.key !== " ") return;
                 event.preventDefault();
                 onSelect(candidate.nodeIndex);
               }}
-              role="button"
-              tabIndex={0}
+              role={candidate.running ? "status" : "button"}
+              tabIndex={candidate.running ? undefined : 0}
               transform={`translate(${cx} ${cy})`}
             >
               <circle className="evolve-tree-ring" r={RADIUS + 4} />
               <circle className="evolve-tree-disc" r={RADIUS} />
+              {candidate.running ? <g aria-hidden="true" className="evolve-tree-spinner">
+                <circle r={RADIUS - 8} />
+              </g> : null}
+              {candidate.running ? <text className="evolve-tree-wait" textAnchor="middle" y={4}>
+                {TEXT.evolve.detail.pendingNode}
+              </text> : null}
               {tone === "best" ? <g className="evolve-tree-badge" transform="translate(20 -20)">
                 <circle r={8.5} />
                 <g transform="translate(-7 -7)"><CrownGlyph size={14} /></g>
               </g> : null}
-              <text className="evolve-tree-id" textAnchor="middle" y={-4}>
-                #{candidate.nodeIndex}
-              </text>
-              <text className="evolve-tree-score" textAnchor="middle" y={12}>
-                {candidate.valid ? formatScore(score) : "-"}
-              </text>
+              {candidate.running ? null : <>
+                <text className="evolve-tree-id" textAnchor="middle" y={-4}>
+                  #{candidate.nodeIndex}
+                </text>
+                <text className="evolve-tree-score" textAnchor="middle" y={12}>
+                  {candidate.valid ? formatScore(score) : "-"}
+                </text>
+              </>}
             </g>;
           })}
         </svg>

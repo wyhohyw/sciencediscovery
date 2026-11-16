@@ -48,7 +48,7 @@ create_evolve_run(
   startingPointText=<evolve_start.json 的全文>,
   editableFields=["hotspots", "num_designs", "diffuser_t", "final_step", "protenix_n_sample", "protenix_use_msa"],
   evaluatorSource=<上面选定的脚本全文>,
-  expansions=4,
+  expansions=10,
   workers=1,
   thinking="disabled"
 )

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from real_npu_evaluator import format_fasta, sequences_from_structure, stage_design
+from real_npu_evaluator import format_fasta, furthest_stage, sequences_from_structure, stage_design
 
 
 PDB = """\
@@ -56,6 +56,16 @@ class DesignStageTest(unittest.TestCase):
             self.assertEqual(index["score"], "0.250")
             self.assertIn("QVQL", (dest / "abc123" / "sequence.fasta").read_text(encoding="utf-8"))
             self.assertTrue((dest / "abc123" / "structure.cif").is_file())
+
+    def test_stage_names_follow_the_pipeline_log(self):
+        self.assertIsNone(furthest_stage("still starting"))
+        self.assertEqual(furthest_stage("[2026-11-15 00:00:00] Step 1/2: RFdiffusion"), "rfdiffusion")
+        text = "\n".join([
+            "] proteinmpnn",
+            "[protenix] launch name=one",
+            "] screen_protenix",
+        ])
+        self.assertEqual(furthest_stage(text), "screen")
 
 
 if __name__ == "__main__":

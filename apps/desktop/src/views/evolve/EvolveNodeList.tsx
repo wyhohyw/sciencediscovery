@@ -37,20 +37,39 @@ export interface EvolveNodeListProps {
 }
 
 export function EvolveNodeList({ bestIndex, candidates, onSelect, selectedIndex }: EvolveNodeListProps) {
-  const rows = [...candidates].sort((left, right) => left.nodeIndex - right.nodeIndex);
+  const rows = [...candidates].sort((left, right) => {
+    if (left.running) return 1;
+    if (right.running) return -1;
+    return left.nodeIndex - right.nodeIndex;
+  });
   return <div className="evolve-node-list">
     <header className="evolve-node-list-head">{TEXT.evolve.detail.nodeList}</header>
     {rows.length === 0
       ? <p className="evolve-tree-empty">{TEXT.evolve.detail.treeEmpty}</p>
       : <ol className="evolve-node-rows">
         {rows.map((candidate, at) => {
-          const best = candidate.nodeIndex === bestIndex && candidate.valid;
+          const best = candidate.nodeIndex === bestIndex && candidate.valid && !candidate.running;
           const score = candidate.gateScore ?? candidate.score;
-          const tone = !candidate.valid
-            ? "failed"
-            : best
-              ? "best"
-              : candidate.gateScore === undefined ? "quiet" : "significant";
+          const tone = candidate.running
+            ? "running"
+            : !candidate.valid
+              ? "failed"
+              : best
+                ? "best"
+                : candidate.gateScore === undefined ? "quiet" : "significant";
+          if (candidate.running) {
+            return <li key="running">
+              <div aria-label={TEXT.evolve.detail.pendingNode} className="evolve-node-row is-running" role="status">
+                <span aria-hidden="true" className="evolve-node-rank" />
+                <span aria-hidden="true" className="evolve-node-dot" />
+                <span className="evolve-node-name">
+                  <span className="evolve-node-title">{TEXT.evolve.detail.pendingNode}</span>
+                  <span className="evolve-node-gen">{TEXT.evolve.detail.generation(candidate.depth)}</span>
+                </span>
+                <span className="evolve-node-score" />
+              </div>
+            </li>;
+          }
           return <li key={candidate.nodeIndex}>
             <button
               aria-pressed={candidate.nodeIndex === selectedIndex}

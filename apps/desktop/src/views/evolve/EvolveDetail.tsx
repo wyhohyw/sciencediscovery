@@ -27,7 +27,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { isEvolveRunActive, type EvolveRun } from "@sciencediscovery/schema";
+import { isEvolveRunActive, type EvolveEventRecord, type EvolveRun } from "@sciencediscovery/schema";
 
 import type { ApiClient } from "../../api/client.js";
 import { stopEvolveRun, subscribeEvolveEvents } from "../../api/evolve.js";
@@ -40,8 +40,11 @@ import {
   formatScore,
   headlineScore,
   isPlaceholderGoal,
+  NPU_STAGES,
   reduceEvolveRecord,
+  reduceEvolveRecords,
   type EvolveRunView,
+  type NpuStage,
 } from "../../evolve/model.js";
 import { TEXT } from "../../text.js";
 import { CandidateInspector } from "./CandidateInspector.js";
@@ -134,6 +137,32 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
     setView((current) => adoptRunStatus(current, run.status));
   }, [run.status]);
 
+  // The event stream replays whatever was on disk when the panel connected and
+  // then waits. A small later write can sit behind the dev proxy, so the tree
+  // stays on the last node that had already landed and the round in progress
+  // never appears. The JSON log is the same record the stream replays; reading
+  // it on a short interval is what keeps the running node and its stage moving.
+  // Records at or below the watermark are ignored, so this cannot double-count
+  // a frame the stream also delivered.
+  useEffect(() => {
+    let stopped = false;
+    const pull = () => {
+      void client.request<EvolveEventRecord[]>(
+        `/api/evolve/runs/${encodeURIComponent(run.id)}/events?after=0`,
+      ).then((rows) => {
+        if (stopped || !Array.isArray(rows) || rows.length === 0) return;
+        setView((current) => reduceEvolveRecords(current, rows));
+      }).catch(() => undefined);
+    };
+    pull();
+    if (!isEvolveRunActive(run.status)) return () => { stopped = true; };
+    const timer = window.setInterval(pull, 2_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [client, run.id, run.status]);
+
   const active = isEvolveRunActive(view.status);
   useEffect(() => {
     if (!active) return;
@@ -156,8 +185,10 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
   const elapsed = elapsedSeconds(run);
   const title = evolveShortTitle(run.goal.statement);
   const algorithm = view.algorithm ?? run.algorithm;
-  const valid = view.candidates.filter((candidate) => candidate.valid).length;
-  const total = view.candidates.length;
+  const scored = view.candidates.filter((candidate) => !candidate.running);
+  const valid = scored.filter((candidate) => candidate.valid).length;
+  const total = scored.length;
+  const running = view.candidates.find((candidate) => candidate.running);
   const selected = selectedIndex === undefined
     ? undefined
     : view.candidates.find((candidate) => candidate.nodeIndex === selectedIndex);
@@ -230,6 +261,8 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
         </div>
       </section>
 
+      {running || view.stage ? <RoundProgress since={view.roundStartedAt} stage={view.stage ?? "draft"} /> : null}
+
       <section className="evolve-section">
         <h3 className="evolve-section-title">{TEXT.evolve.detail.chartTitle}</h3>
         <ScoreChart onSelect={setSelectedIndex} view={view} />
@@ -294,6 +327,38 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
       </div>
     )}
   </div>;
+}
+
+/** The current round, as the stages the job has actually reached.
+ *  Named steps, not a percentage: a stage arrives when that step starts, and
+ *  the bar does not guess how far through it the card is. */
+export function RoundProgress({ since, stage }: { since?: string; stage: NpuStage }) {
+  const index = Math.max(0, NPU_STAGES.indexOf(stage));
+  const label = TEXT.evolve.detail.stages[stage];
+  const started = since === undefined ? Number.NaN : Date.parse(since);
+  const seconds = Number.isFinite(started) ? Math.max(0, (Date.now() - started) / 1000) : null;
+  const elapsed = seconds === null ? "" : span(seconds);
+  return <section className="evolve-round">
+    <div className="evolve-round-head">
+      <span>{TEXT.evolve.detail.progressTitle} · {label}</span>
+      {elapsed ? <span>{elapsed}</span> : null}
+    </div>
+    <div
+      aria-valuemax={NPU_STAGES.length}
+      aria-valuemin={1}
+      aria-valuenow={index + 1}
+      aria-valuetext={elapsed ? `${label}, ${elapsed}` : label}
+      className="evolve-round-track"
+      role="progressbar"
+    >
+      {NPU_STAGES.map((name, at) => <span
+        className={`evolve-round-step${at < index ? " is-done" : at === index ? " is-current" : ""}`}
+        key={name}
+      >
+        {TEXT.evolve.detail.stages[name]}
+      </span>)}
+    </div>
+  </section>;
 }
 
 function BudgetRow({ label, limit, text, value }: {

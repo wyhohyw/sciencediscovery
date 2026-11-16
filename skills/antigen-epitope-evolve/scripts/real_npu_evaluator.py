@@ -12,10 +12,37 @@ import json
 import os
 import shutil
 import subprocess
+import threading
+import time
 
 
 def emit(payload):
     print(json.dumps(payload, ensure_ascii=False), flush=True)
+
+
+# Furthest marker wins. These are lines the pipeline actually prints, not a clock.
+_STAGE_MARKERS = (
+    ("rfdiffusion", ("Step 1/2",)),
+    ("proteinmpnn", ("] proteinmpnn", "Step 2/2")),
+    ("protenix", ("] protenix", "[protenix]")),
+    ("screen", ("] screen_protenix",)),
+)
+
+
+def furthest_stage(text):
+    """The latest pipeline stage named in ``text``, or None."""
+    found = None
+    for name, markers in _STAGE_MARKERS:
+        if any(marker in text for marker in markers):
+            found = name
+    return found
+
+
+def _announce(stage, seen):
+    if not stage or (seen and seen[-1] == stage):
+        return
+    seen.append(stage)
+    print(f"EVOLVE_STAGE {stage}", flush=True)
 
 
 def resolve_input(value):
@@ -259,7 +286,9 @@ def main():
     if not reason and not 1 <= final <= diffuser:
         reason = "final_step must be from 1 to diffuser_t"
     if reason:
-        emit({"device": "npu", "score": 0.05, "error": reason, "ran": False})
+        # A real screen score can land near 0.05. This candidate never ran, so
+        # its score stays at 0 and the probe can still tell the two apart.
+        emit({"device": "npu", "score": 0.0, "error": reason, "ran": False})
         return 0
 
     digest = hashlib.sha256(
@@ -318,24 +347,20 @@ exit $?
     env["SAMPLES"] = str(samples)
     env["MSA"] = "true" if use_msa else "false"
     shell = "/bin/bash" if os.path.exists("/bin/bash") else "/usr/bin/bash"
-    completed = subprocess.run(
-        [shell, "-c", command],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    print("EVOLVE_STAGE starting", flush=True)
+    returncode, stdout = _run_pipeline(shell, command, env, root)
     rows = []
     for path in glob.glob(root + "/05_screening/protenix_screening_summary.csv"):
         with open(path, newline="", encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
     row = rows[0] if rows else {}
     if not row.get("screen_score"):
-        detail = (completed.stderr or completed.stdout or "").strip().replace("\n", " ")[-400:]
+        detail = stdout.strip().replace("\n", " ")[-400:]
         emit({
             "device": "npu",
             "score": 0.0,
             "error": detail or "screening summary missing",
-            "pipeline_status": completed.returncode,
+            "pipeline_status": returncode,
             "root": root,
             "ran": False,
         })
@@ -350,11 +375,53 @@ exit $?
         "decision": row.get("decision", ""),
         "iptm": row.get("iptm", ""),
         "hotspot_prob": row.get("hotspot_prob", ""),
-        "pipeline_status": completed.returncode,
+        "pipeline_status": returncode,
         "root": root,
         "ran": True,
     })
     return 0
+
+
+def _run_pipeline(shell, command, env, root):
+    """Run the pipeline and print each new stage while it is still going."""
+    proc = subprocess.Popen(
+        [shell, "-c", command],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    seen = []
+    parts = []
+    lock = threading.Lock()
+
+    def announce(stage):
+        with lock:
+            _announce(stage, seen)
+
+    def read_stdout():
+        stream = proc.stdout
+        if stream is None:
+            return
+        for line in stream:
+            parts.append(line)
+            announce(furthest_stage(line))
+
+    reader = threading.Thread(target=read_stdout, daemon=True)
+    reader.start()
+    after = os.path.join(root, "logs", "02_after_rfdiffusion.log")
+    while proc.poll() is None:
+        if os.path.isfile(after):
+            try:
+                with open(after, encoding="utf-8", errors="replace") as handle:
+                    text = handle.read()
+            except OSError:
+                text = ""
+            announce(furthest_stage(text))
+        time.sleep(1)
+    reader.join(timeout=5)
+    return proc.returncode if proc.returncode is not None else 1, "".join(parts)
 
 
 if __name__ == "__main__":

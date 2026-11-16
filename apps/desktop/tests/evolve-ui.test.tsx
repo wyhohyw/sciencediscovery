@@ -30,7 +30,7 @@ import { emptyRunView } from "../src/evolve/model.js";
 import { TEXT } from "../src/text.js";
 import { CandidateInspector } from "../src/views/evolve/CandidateInspector.js";
 import { EvolveCreateDialog } from "../src/views/evolve/EvolveCreateDialog.js";
-import { EvolveDetail, lastGain } from "../src/views/evolve/EvolveDetail.js";
+import { EvolveDetail, lastGain, RoundProgress } from "../src/views/evolve/EvolveDetail.js";
 import { EvolveNodeList } from "../src/views/evolve/EvolveNodeList.js";
 import { EvolveRuntimeDialog } from "../src/views/evolve/EvolveRuntimeDialog.js";
 import { EvolveRuns } from "../src/views/evolve/EvolveRuns.js";
@@ -496,6 +496,36 @@ test("the tree lays each parent over the middle of its children", () => {
   // between generations.
   assert.equal(layout.width, 44 * 2 + 32 * 2 + 1 * 82);
   assert.equal(layout.height, 44 * 2 + 32 * 2 + 2 * 200);
+});
+
+test("a round with no score yet is a blank spinning node and a stage bar", () => {
+  const pending = candidate({
+    depth: 1,
+    nodeIndex: -1,
+    parentIndex: 0,
+    running: true,
+    score: null,
+  });
+  const tree = renderToStaticMarkup(
+    <EvolveTree
+      candidates={[candidate({ depth: 0, nodeIndex: 0, parentIndex: null, score: 0.2 }), pending]}
+      onSelect={() => {}}
+    />,
+  );
+  assert.match(tree, /正在计算/);
+  assert.match(tree, /evolve-tree-spinner/);
+  assert.equal(tree.includes("Node #-1"), false);
+  const list = renderToStaticMarkup(
+    <EvolveNodeList candidates={[pending]} onSelect={() => {}} />,
+  );
+  assert.match(list, /role="status"/);
+  assert.equal(list.includes("<button"), false);
+  const bar = renderToStaticMarkup(<RoundProgress stage="protenix" />);
+  assert.match(bar, /role="progressbar"/);
+  assert.match(bar, /Protenix/);
+  assert.equal(bar.includes("%"), false);
+  assert.equal((bar.match(/is-done/g) ?? []).length, 4);
+  assert.equal((bar.match(/is-current/g) ?? []).length, 1);
 });
 
 /** The drawing coordinate under a screen point, mirroring where the canvas

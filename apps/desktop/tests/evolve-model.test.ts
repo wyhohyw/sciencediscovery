@@ -387,6 +387,41 @@ test("a run whose stream ended without an event still learns it failed", () => {
   assert.equal(adoptRunStatus(failed, "failed"), failed);
 });
 
+test("a chosen parent grows a blank node until the round lands", () => {
+  const started = [
+    record(1, { baselineScore: 0.2, codeHash: "sha256:root", nodeIndex: 0, type: "seeded" }),
+    record(2, { ancestorVisits: [{ nodeIndex: 0, visits: 1 }], nodeIndex: 0, type: "selected" }),
+  ].reduce(reduceEvolveRecord, emptyRunView());
+  const pending = started.candidates.find((candidate) => candidate.running);
+  assert.equal(pending?.parentIndex, 0);
+  assert.equal(pending?.score, null);
+  assert.equal(started.stage, "draft");
+  assert.equal(bestCandidate(started)?.nodeIndex, 0);
+
+  const moving = reduceEvolveRecord(started, record(3, {
+    level: "info",
+    message: "npu stage: protenix",
+    type: "log",
+  }));
+  assert.equal(moving.stage, "protenix");
+  assert.equal(moving.candidates.some((candidate) => candidate.running), true);
+
+  const landed = reduceEvolveRecord(moving, record(4, {
+    depth: 1,
+    nodeIndex: 1,
+    parentIndex: 0,
+    score: 0.4,
+    valid: true,
+    type: "expanded",
+  }));
+  assert.equal(landed.candidates.some((candidate) => candidate.running), false);
+  assert.equal(landed.stage, undefined);
+  assert.equal(landed.candidates.find((candidate) => candidate.nodeIndex === 1)?.score, 0.4);
+
+  const settled = adoptRunStatus({ ...landed, status: "running" }, "succeeded");
+  assert.equal(settled.candidates.some((candidate) => candidate.running), false);
+});
+
 test("an empty before-side reads as all new", () => {
   const rows = diffLines("", "x\ny");
   assert.deepEqual(rows.map((row) => row.kind), ["added", "added"]);
