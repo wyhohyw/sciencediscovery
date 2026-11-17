@@ -331,7 +331,7 @@ test("truncated history and unknown events are counted, not swallowed", () => {
   assert.equal(state.unknownEvents, 1);
 });
 
-test("deferred event types do not count as unknown", () => {
+test("a deferred event type does not count as unknown", () => {
   // Artifacts and the session title are a phase-two surface, not a surprise:
   // counting them would make the "N events this build cannot draw" note
   // permanently wrong.
@@ -349,6 +349,16 @@ test("connector readiness keeps diagnostics and advances the cursor without an u
   assert.deepEqual(replay.mcpReadiness, [event.summary]);
   assert.equal(replay.unknownEvents, 0);
   assert.equal(replay.lastSequence, 2);
+});
+
+test("a persisted model.usage record is not an event this build cannot draw", () => {
+  // #1109 writes one record per model turn into the main stream so a run's
+  // spend can be recomputed from it. The transcript shows tokens through the
+  // turn summary, so a replay must not report the record as unrenderable.
+  const state = fold([
+    { turn: 1, type: "model.usage", usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } } as RunStreamEvent,
+  ]);
+  assert.equal(state.unknownEvents, 0);
 });
 
 test("a tool output frame is neither unknown nor a cursor step", () => {

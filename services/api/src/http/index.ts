@@ -15,6 +15,7 @@
 import { diagnosticIds, diagnosticLogPaths, errorDiagnosticSnapshot } from "./error-diagnostics.js";
 import { randomUUID } from "node:crypto";
 import { matchesManualModelDestination } from "./manual-model-destination.js";
+import { testProxyConnectivity } from "../proxy-connectivity.js";
 import { createResearchSnapshots } from "../research-snapshots.js";
 import { isEvidenceSessionReadOnly } from "@sciencediscovery/schema";
 import { handleExecutionReadiness } from "./execution-readiness.js";
@@ -1281,6 +1282,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         return sendJson(response, 200, await evolveStatusPayload(true));
       }
       if ((url.pathname.startsWith("/api/evolve/") || /^\/api\/sessions\/[^/]+\/idea-tree(?:\/|$)/.test(url.pathname))
+          && !(request.method === "GET" && /^\/api\/evolve\/runs(?:\/[^/]+\/(?:events|candidates\/[^/]+))?$/.test(url.pathname))
           && (await evolveAvailability.refresh()).state !== "ready") {
         return sendError(response, 503, "Evolve is not initialized or unavailable. Select Init Evolve or check the configured service.");
       }
@@ -1726,6 +1728,10 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
       }
       if (url.pathname === "/api/proxy/settings" && request.method === "GET") {
         sendJson(response, 200, store.getProxySettings());
+        return;
+      }
+      if (url.pathname === "/api/proxy/test" && request.method === "POST") {
+        sendJson(response, 200, await testProxyConnectivity(await readJson(request)));
         return;
       }
       if (url.pathname === "/api/proxy/settings" && request.method === "PUT") {
@@ -2864,7 +2870,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
             UNTITLED_SESSION_TITLE,
             {},
             {},
-            { allowUnconfiguredModel: true },
+            { allowUnconfiguredModel: true, selectFallbackModel: true },
           );
           sendJson(response, 201, { ...project, firstSession, project });
         } catch (error) {
@@ -3004,6 +3010,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           },
           {
             allowUnconfiguredModel: body.modelId === undefined && body.settingsOverrides?.modelId === undefined,
+            selectFallbackModel: true,
           },
         ));
         return;

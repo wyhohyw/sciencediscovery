@@ -42,6 +42,22 @@ export const EN: Text = {
     omissionsSummary: (count: number) => `Not included: ${count} workspace file${count === 1 ? "" : "s"}`, download: "Download", preparing: "Preparing the package in the background…", close: "Close", copyMissing: "The conversation or operation record for this copy no longer exists; waiting has stopped. Create a new continuation.", copyPollingFailed: "Unable to read copy progress; retries have stopped. Refresh or try again later.", legacyUnavailable: "The local service is temporarily unavailable, retrying…", exportPollingFailed: "Unable to read export progress; retries have stopped. Export again later.", exportMissing: "The export task no longer exists. Export again.",
     necessary: "Necessary", complete: "Complete", necessaryHint: "Current results, input dependencies and related evidence, with optional history omitted.", completeHint: "Available history and versions within the selected scope.", graph: "Include full scientific-memory graph", estimate: "Uncompressed estimate", calculating: "Calculating scope and size…", files: "Workspace files", omissions: "Scope and omissions", evidenceOnly: "Packages support inspection and continuation. Import does not execute code or restore permission grants.", choose: "Select a .sdresearch package", objects: "content objects", importHint: "Restore conversation, files and evidence as a read-only snapshot. Continuing research creates an independent new session. The original record is preserved.", branchHint: "Choose a completed reply. The branch inherits the prefix and recoverable evidence, excluding later research.", reply: "Branch starting point", working: "Working…", startExport: "Start background export", confirmImport: "Confirm import", exportSaving: "Saving package…", exportSaved: "Package saved", exportSaveFailed: "Failed to save the package", exportCanceled: "Export canceled", openLocation: "Open file location", exportsInProgress: (count: number) => `${count} export${count === 1 ? "" : "s"} in progress`, retrySave: "Retry save", savedExports: "Saved packages",
   },
+  /** Export history: the study packages this machine has saved, reachable again
+   *  after the export dialog closed or the app restarted (#1154). */
+  exportHistory: {
+    title: "Export history",
+    description: "Study packages saved on this machine, findable again",
+    heading: "Saved study packages",
+    empty: "No study package has been saved yet.",
+    noMatch: "No saved package matches the current filter.",
+    unavailable: "Export history is available inside the desktop app only.",
+    searchPlaceholder: "Search by filename or session",
+    allProjects: "All projects",
+    missing: "File moved or deleted",
+    reveal: "Show in folder",
+    forget: "Remove record",
+    revealMissing: "The file was moved or deleted; you can remove this record.",
+  },
   appName: "ScienceDiscovery",
   languageTag: "en-US",
 
@@ -94,6 +110,7 @@ export const EN: Text = {
   },
 
   sessionBar: {
+    export: "Export",
     workspaceToggle: "Workspace panel",
     sessionMenu: "Session menu",
     sessionTitle: "Session name",
@@ -500,13 +517,17 @@ export const EN: Text = {
       timeoutSub: "The execution engine may be slow on its first preparation; wait a moment and check again.",
       fallbackError:
         "Unknown reason. Check the logs and try again; antivirus software may be blocking the preparation.",
+      seatbeltFailedTitle: "macOS sandbox (Seatbelt) not detected",
+      seatbeltRetryHint: "If an MDM restriction was just lifted or system settings changed, restart the app and check again.",
       items: {
+        seatbelt: "macOS sandbox (Seatbelt)",
         api: "Local API service",
         runner: "Execution engine (Python runtime)",
         model: "Default task model (optional; can be configured later in settings)",
       },
       notChecked: "Not checked",
       runnerNeedsToken: "Not checked (token required)",
+      seatbeltNotApplicable: "Not checked (the sandbox is macOS-only)",
       retry: "Check again",
       retryBoot: "Try again",
       logs: "Open the logs folder",
@@ -888,6 +909,7 @@ export const EN: Text = {
         "sandbox-network": { label: "Network", description: "Network access for run_shell" },
         remote: { label: "Remote", description: "Remote Runners and the machines a project may use" },
         timeouts: { label: "Timeouts", description: "Wall-clock limits and unlimited mode" },
+        "export-history": { label: "Export history", description: "Study packages saved on this machine" },
       },
       global: {
         modelHeading: "Default model",
@@ -1284,7 +1306,7 @@ export const EN: Text = {
     create: {
       title: "New evolution run",
       algorithmLabel: "Choose a search algorithm",
-      puctName: "PUCT algorithm",
+      puctName: "PUCT",
       puctTags: ["Refines step by step", "Narrow search space"],
       puctPoints: [
         "PUCT expands the nodes most likely to pay off first",
@@ -1292,7 +1314,7 @@ export const EN: Text = {
         "Visit counts and rank steer where the search goes next",
         "A single tree keeps refining the candidates it holds",
       ],
-      openEvolveName: "OpenEvolve algorithm",
+      openEvolveName: "OpenEvolve",
       openEvolveTags: ["Wide search space", "Avoids early convergence"],
       openEvolvePoints: [
         "A MAP-Elites grid keeps a diverse set of good candidates",
@@ -1304,6 +1326,10 @@ export const EN: Text = {
       confirmLabel: "Pause at each checkpoint",
       confirmHint: "Each checkpoint stops and waits for your confirmation before continuing.",
       autoHint: "Off: the assistant designs and starts the search in one pass. Checkpoints are still shown, but it does not wait for you.",
+      taskLabel: "Task",
+      taskPlaceholder: "The task to evolve, with its constraints and how it is scored. For example: write a compressor and decompressor for text whose round trip is exactly lossless; the score is how much smaller the output gets.",
+      parametersLabel: "Custom evolution parameters",
+      parametersHint: "Set a starting value for each parameter. The search tries different values for ticked ones; unticked ones always keep their starting value.",
       /* Windows has no bwrap/seatbelt. There is no switch here, only two
          warnings: a banner under the title so the risk is seen at a glance,
          and an alert that asks again when the search is started. The answer
@@ -1572,6 +1598,7 @@ export const EN: Text = {
       limit: (max: number) => `Up to ${max} images`,
       remove: "Remove screenshot",
       preparing: "Processing images…",
+      truncated: (max: number, skipped: number) => `Only the first ${max} screenshots were attached; ${skipped} skipped.`,
       privacy: "Screenshots are visible to anyone with repository access; hide sensitive information first.",
       error: {
         type: "Only PNG, JPEG or WebP images are supported.",

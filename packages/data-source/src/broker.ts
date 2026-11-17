@@ -45,6 +45,7 @@ import {
   ResourceRateLimitQueueTimeoutError,
 } from "./resource-rate-limiter.js";
 import { SourceHealth, SourceCoolingError, type SourceAdmission } from "./source-health.js";
+import { recordedOutage, SourceOutages, sourceOutages } from "./source-outage.js";
 import { McpResultCache } from "./result-cache.js";
 import { McpSourceCatalog } from "./catalog.js";
 import type { McpTransportClient } from "./transport.js";
@@ -384,6 +385,8 @@ export class McpGovernanceBroker {
   private readonly limiter: ResourceRateLimiter;
   private readonly health: SourceHealth;
   private readonly memoryGraphSink: MemoryGraphSink | null;
+  /** Shared with the catalog so a recorded outage is what readiness reports. */
+  private readonly outages: SourceOutages;
 
   constructor(
     dataDir: string,
@@ -396,6 +399,9 @@ export class McpGovernanceBroker {
       limiter?: ResourceRateLimiter;
       health?: SourceHealth;
       memoryGraphSink?: MemoryGraphSink | null;
+      /** Readiness memory shared with the catalog: a classified provider
+       *  outage recorded here is what `getStatus` reports (#1081). */
+      outages?: SourceOutages;
     } = {},
   ) {
     this.cas = new CasStore(dataDir);
@@ -405,6 +411,7 @@ export class McpGovernanceBroker {
     this.health = options.health ?? healthByLimiter.get(this.limiter) ?? new SourceHealth();
     healthByLimiter.set(this.limiter, this.health);
     this.memoryGraphSink = options.memoryGraphSink ?? null;
+    this.outages = options.outages ?? sourceOutages;
   }
 
   close(): void {
@@ -767,6 +774,15 @@ export class McpGovernanceBroker {
         try { this.health.check(rateHealthKey); this.health.check(healthKey); } catch (cause) {
           if (cause instanceof SourceCoolingError) error = { ...unavailable(cause), code: last?.status === "rate-limited" ? "RATE_LIMITED" : "SOURCE_COOLDOWN" };
         }
+        // Remember the failure only when it is evidence about the endpoint.
+        // `upstreamError` falls back to UPSTREAM_UNAVAILABLE for any attempt
+        // status it does not map explicitly, and a tool-reported `isError` is
+        // classified `semantic-error` — a bad query or an unresolvable DOI is a
+        // statement about the request, not about the provider. `SourceHealth`
+        // already treats those as request-specific, so recording them here would
+        // make readiness contradict admission (#1081).
+        const outage = recordedOutage(last, request.sourceId, request.toolId, error);
+        if (outage) this.outages.note(outage);
         const invocation = await this.appendFailure({
           attempts,
           cacheKey: key,

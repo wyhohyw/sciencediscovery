@@ -248,7 +248,9 @@ import {
   searchWorkbench,
 } from "../workbench/index.js";
 import {
+  appendDelegatedModelUsage,
   appendModelUsageForManifest,
+  addCapturedModelUsage,
   capturedModelUsage,
   unreportedModelUsage,
 } from "../model-usage/index.js";
@@ -1085,6 +1087,8 @@ async function executeAgentRun(
   const taskInvocationId = randomUUID();
   let taskInvocationAttempted = false;
   let lastAgentUsage = unreportedModelUsage();
+  // Model turns whose figures the run row sums; the engine reports usage per turn.
+  let modelTurnsRecorded = 0;
   let assistantModelContext: AgentHistoryMessage[] = [];
   let turnNumber = 0;
   const plansByAgent = new Map<string, PlanSnapshot>();
@@ -1707,6 +1711,10 @@ async function executeAgentRun(
         const releaseParentWait = continuation ? undefined : mainExecution?.beginExternalWait();
         let assistantOutput = "";
         let activeMessageStep: { id: string; kind: Extract<SubagentStep["kind"], "assistant" | "thinking"> } | undefined;
+        /** Turns the child actually reported a figure for, which is what its
+         *  ledger row sums — `turnCount` also counts a turn that started and
+         *  was aborted before its model call (#1109 review). */
+        let subagentReportedTurns = 0;
         let progressFlushFailure: unknown;
         let progressFlushTimer: ReturnType<typeof setTimeout> | undefined;
         let progressFlushQueue = Promise.resolve();
@@ -2128,11 +2136,35 @@ async function executeAgentRun(
             const runningStep = steps.find((step) => step.id === event.toolCallId && step.kind === "tool");
             publishStep(buildSubagentToolStep(event, runningStep), event.evidence);
           }
+          if (event.type === "model_usage" && event.usageReported) subagentReportedTurns += 1;
           if (event.type === "usage") {
             subagent.usage = event.usage;
             finalizeMessageStep();
             void emit({ subagentId: subagent.id, type: "subagent.usage", usage: event.usage });
             scheduleProgressFlush();
+            // Delegated spend is spend of this run, so it gets its own ledger
+            // row instead of vanishing (#1109). `delegation-track` was declared
+            // for exactly this and had no writer. The row cannot wait for the
+            // parent's prompt manifest: that is created only after the main loop
+            // returns, while this event fires during it. It names the child's
+            // own model and window, because a specialist may run a runtime
+            // model that differs from the parent's profile, and its
+            // `invocationId` names one execution so a resumed child appends its
+            // own row instead of a second one under the same id (#1109 review).
+            void appendDelegatedModelUsage(store, {
+              finishedAt: new Date().toISOString(),
+              invocationId: `subagent:${subagent.id}:${runId}`,
+              model: subagent.model?.model ?? selectedModel.model,
+              modelProfileId: subagent.model?.id ?? selectedModel.id,
+              modelProfileName: subagent.model?.name ?? selectedModel.name,
+              parentRunId: runId,
+              sessionId,
+              startedAt: subagent.createdAt,
+              turnsRecorded: Math.max(1, subagentReportedTurns),
+              usage: capturedModelUsage({ usage: event.usage, usageReported: true }),
+            }).catch((error: unknown) => {
+              runLog.warn("subagent_usage_persist_failed", { errorMessage: shortErrorMessage(error), subagentId: subagent.id });
+            });
           }
         };
         const subagentExecutionPrompt = formatSubagentExecutionPrompt(subagent.input, handoff);
@@ -2416,7 +2448,17 @@ async function executeAgentRun(
     const active = activeSessions.get(sessionId);
     if (active) active.lastActivityAt = new Date().toISOString();
     if (event.type === "model_usage") {
-      lastAgentUsage = capturedModelUsage(event);
+      // One row per invocation now carries the invocation's totals (#1109), so
+      // the per-turn figures are added to that total *and* persisted: without
+      // them a stored figure could not be recomputed from the record directory.
+      const captured = capturedModelUsage(event);
+      lastAgentUsage = addCapturedModelUsage(lastAgentUsage, captured);
+      // A turn that reported nothing adds nothing and is not a recorded turn,
+      // and the persisted record keeps `usage` required by its schema, so only
+      // a reported turn is published.
+      if (captured.usageStatus !== "reported") return;
+      modelTurnsRecorded += 1;
+      void publish({ type: "model.usage", turn: turnNumber, usage: event.usage! });
       return;
     }
     if (event.type === "turn_start") {
@@ -2625,6 +2667,7 @@ async function executeAgentRun(
       manifest: promptManifest,
       outcome: "completed",
       runId,
+      turnsRecorded: modelTurnsRecorded,
       usage: taskUsage,
     });
     const message = await store.appendMessage(
@@ -2687,6 +2730,7 @@ async function executeAgentRun(
             manifest: promptManifest,
             outcome: "cancelled",
             runId,
+            turnsRecorded: modelTurnsRecorded,
             usage: lastAgentUsage,
           });
         } catch {
@@ -2734,6 +2778,7 @@ async function executeAgentRun(
           manifest: promptManifest,
           outcome: "failed",
           runId,
+          turnsRecorded: modelTurnsRecorded,
           usage: lastAgentUsage,
         });
       } catch {

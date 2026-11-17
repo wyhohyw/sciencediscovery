@@ -1422,6 +1422,7 @@ export class SessionStore {
       projects,
       providers,
       proxyDefaultPolicy,
+      ...(typeof saved.proxyNoProxy === "string" ? { proxyNoProxy: saved.proxyNoProxy } : {}),
       proxyServers,
       quotaSettings,
       sandboxNetworkSettings,
@@ -2597,7 +2598,7 @@ export class SessionStore {
       settings: version([this.catalog.globalSettings, project.settingsOverrides, session.settingsOverrides]),
       models: version([this.catalog.models, this.catalog.providers]), credentials: version(secretRows),
       connectors: version([...this.connectorIds].sort()), connectorCatalog: this.configurationConnectorRevisionSource?.() ?? "not_attached",
-      policies: version([this.catalog.mcpProxyPolicies, this.catalog.proxyDefaultPolicy, this.catalog.proxyServers]),
+      policies: version([this.catalog.mcpProxyPolicies, this.catalog.proxyDefaultPolicy, this.catalog.proxyServers, this.catalog.proxyNoProxy]),
       autoConfigurationPolicy: version(session.autoApplyLowRiskConfiguration === true),
       skills: version([[...this.skillIds].sort(), this.configurationSkillLibrarySource()]),
       reviewer: version([this.getSessionReviewerSpecialistSettings(sessionId), this.catalog.reviewerSpecialistEnabled]),
@@ -2651,7 +2652,7 @@ export class SessionStore {
         this.getConfigurationDatabase().prepare("SELECT server_id,encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]) };
     }
     const webCredentialVersion = () => version(this.getConfigurationDatabase().prepare("SELECT provider, encrypted_token FROM web_provider_secrets ORDER BY provider").all());
-    const webProxyVersion = () => version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers,
+    const webProxyVersion = () => version([this.catalog.proxyDefaultPolicy, this.catalog.proxyServers, this.catalog.proxyNoProxy,
       this.getConfigurationDatabase().prepare("SELECT server_id, encrypted_url FROM proxy_server_secrets ORDER BY server_id").all()]);
     if (capabilityId === "web.credential") systemVersions = {
       webSettings: version(this.catalog.webSettings),
@@ -3054,7 +3055,8 @@ export class SessionStore {
   /** Resolve a module policy (undefined behaves like "inherit") into the
    *  transport-agnostic instruction consumed by outbound callers. */
   resolveProxy(policy?: ProxyPolicy): ResolvedProxy {
-    return resolveProxyPolicy(policy, this.proxyRegistryView());
+    const resolved = resolveProxyPolicy(policy, this.proxyRegistryView());
+    return this.catalog.proxyNoProxy !== undefined ? { ...resolved, noProxy: this.catalog.proxyNoProxy } : resolved;
   }
 
   /**
@@ -3101,6 +3103,7 @@ export class SessionStore {
     const environment = proxyEnvironmentDetails(resolveProxyEnvironment());
     return {
       defaultPolicy: this.catalog.proxyDefaultPolicy,
+      ...(this.catalog.proxyNoProxy !== undefined ? { noProxy: this.catalog.proxyNoProxy } : {}),
       servers: this.catalog.proxyServers
         .map((server) => this.proxyServerSettingsView(server, environment))
         .toSorted((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id)),
@@ -3118,6 +3121,15 @@ export class SessionStore {
   async updateProxySettings(input: UpdateProxySettingsRequest): Promise<ProxySettingsDetails> {
     const defaultPolicy = normalizeProxyDefaultPolicy(isRecord(input) ? input.defaultPolicy : undefined);
     this.assertProxyPolicyKnown(defaultPolicy, "defaultPolicy");
+    const noProxyInput = isRecord(input) ? input.noProxy : undefined;
+    if (noProxyInput !== undefined) {
+      if (typeof noProxyInput !== "string" || noProxyInput.length > 4000 || /[\r\n]/.test(noProxyInput)) throw new Error("Invalid proxy bypass list");
+      // An emptied field stores nothing rather than "", so the process's own
+      // NO_PROXY applies again instead of being overridden by an empty list.
+      const noProxy = noProxyInput.trim();
+      if (noProxy) this.catalog.proxyNoProxy = noProxy;
+      else delete this.catalog.proxyNoProxy;
+    }
     this.catalog.proxyDefaultPolicy = defaultPolicy;
     await this.saveCatalog();
     return this.getProxySettings();
@@ -3150,7 +3162,9 @@ export class SessionStore {
       ).run(id, this.encryptModelApiToken(`proxy:${id}`, url));
       hasUrl = true;
     } else if (input.url !== undefined) {
-      throw new Error("Only custom_url proxy servers accept a proxy URL");
+      // "must" keeps this a classified client error (400) instead of a
+      // generic 500 when any other API client sends a url with the kind.
+      throw new Error("A proxy URL is only valid for custom_url proxy servers; other kinds must not send one");
     }
     const now = new Date().toISOString();
     const server: ProxyServer = { createdAt: now, hasUrl, id, kind: input.kind, name, updatedAt: now };
@@ -3179,7 +3193,7 @@ export class SessionStore {
     }
     const nextUrl = input.url === undefined ? undefined : normalizeProxyUrl(input.url);
     if (input.url !== undefined) {
-      if (nextKind !== "custom_url") throw new Error("Only custom_url proxy servers accept a proxy URL");
+      if (nextKind !== "custom_url") throw new Error("A proxy URL is only valid for custom_url proxy servers; other kinds must not send one");
       if (!this.database) throw new Error("Catalog database is not initialized");
       this.database.prepare(
         "INSERT INTO proxy_server_secrets (server_id, encrypted_url) VALUES (?, ?) ON CONFLICT(server_id) DO UPDATE SET encrypted_url = excluded.encrypted_url",
@@ -4683,6 +4697,8 @@ export class SessionStore {
     } = {},
     options: {
       allowUnconfiguredModel?: boolean;
+      /** Choose a saved model for a new interactive session when no default is set. */
+      selectFallbackModel?: boolean;
       researchSnapshot?: Session["researchSnapshot"];
       restorationSessionId?: string;
     } = {},
@@ -4693,10 +4709,23 @@ export class SessionStore {
       ? { modelId: input, reviewModelId: input }
       : input);
     if (settingsOverrides.defaultApprovalMode !== undefined) throw new SessionStoreHttpError("Approval defaults are only supported at Global and Project scope", 400);
-    const resolved = this.resolveSettingsLayers([
+    let resolved = this.resolveSettingsLayers([
       ...this.projectSettingsLayers(project),
       { overrides: settingsOverrides, source: "session" },
     ]);
+    if (options.selectFallbackModel && resolved.effective.modelId === undefined
+      && settingsOverrides.modelId === undefined) {
+      const fallback = this.listModels()[0];
+      if (fallback) {
+        // Persist only this new session's fallback. Global/Project defaults and
+        // existing sessions (including deleted explicit choices) stay intact.
+        settingsOverrides.modelId = fallback.id;
+        resolved = this.resolveSettingsLayers([
+          ...this.projectSettingsLayers(project),
+          { overrides: settingsOverrides, source: "session" },
+        ]);
+      }
+    }
     const selectedModel = this.getModel(resolved.effective.modelId);
     if (!selectedModel && !options.allowUnconfiguredModel) {
       throw new SessionStoreHttpError("A task model is required", 400, "SESSION_MODEL_UNAVAILABLE");
@@ -7642,6 +7671,11 @@ export class SessionStore {
           && record.invocationId === usage.invocationId
           && record.invocationKind === usage.invocationKind
           && record.attemptIndex === usage.attemptIndex)) {
+          // Absorbing an intentional replay is correct, but doing it silently made
+          // a writer that keyed distinct calls the same way look like correct
+          // idempotency: an Evolve run recorded one row for 73 calls and nothing
+          // anywhere said so (#1132). The key is named so the caller can be found.
+          console.warn(`model_usage_append_deduplicated: ${usage.invocationKind} ${usage.invocationId} attempt ${usage.attemptIndex} in session ${usage.sessionId}`);
           return;
         }
         records.push(this.normalizeModelInvocationUsage(usage));

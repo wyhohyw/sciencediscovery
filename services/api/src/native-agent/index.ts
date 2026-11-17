@@ -58,6 +58,7 @@ import {
   type ModelClientPolicy,
   type ModelEndpoint,
   type ModelUsage,
+  addUsage,
 } from "@sciencediscovery/model";
 import type { Agent, AgentEvent, AgentHistoryMessage } from "@sciencediscovery/orchestration";
 import type { PlanStore } from "@sciencediscovery/plan";
@@ -663,6 +664,10 @@ class NativeAgent implements NativeAgentHandle {
       // what "completed" means.
       let truncatedTerminalTurn = false;
       const loop = composeRuntime<WireMessage, ModelInput<WireMessage>, ModelUsage>({
+        // Sum the per-turn figures into the run's total (#1109). Without this the
+        // loop returns the last turn's usage and one ledger row describes one
+        // turn while its timestamps describe the whole run.
+        accumulateUsage: addUsage,
         maxModelTurns: effectiveModelTurns(this.options.maxModelTurns),
         maxParallelToolCalls: configuredMaxParallelToolCalls(),
         contextAssembler: {

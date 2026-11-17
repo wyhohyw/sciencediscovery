@@ -21,7 +21,7 @@ import { join } from "node:path";
 
 import { ModelRequestError, type ModelTurn, type ModelWireDiagnostics, type streamModelTurn } from "@sciencediscovery/model";
 
-import { isSwarmCompaction, startModelGateway, toModelRequest, withoutWithheldNotice, type ModelGatewayLifecycle } from "./jiuwenswarm-model-gateway.js";
+import { isSwarmCompaction, MODEL_RESPONSE_ID_HEADER, startModelGateway, toModelRequest, withoutWithheldNotice, type ModelGatewayLifecycle } from "./jiuwenswarm-model-gateway.js";
 
 const POLICY = { maxRetries: 0, maxTokens: 1000, requestTimeoutMs: 1000 };
 
@@ -809,6 +809,56 @@ test("recovery diagnostics count feedback but do not mask a later provider error
   } finally { await g.close(); }
 });
 
+test("a task call is named before it is made, and its id reaches the adapter in the response headers", { timeout: 5000 }, async () => {
+  // A turn that answers with only a tool call: no text and no reasoning, so the adapter announces
+  // the response after this side has already written the completion record (#1133).
+  const tool = { id: "call-1", name: "run_shell", args: { command: "true" } };
+  const order: string[] = [];
+  let minted: string | undefined;
+  const streamer = (async () => {
+    order.push("call");
+    return answer({
+      toolCalls: [tool],
+      assistantMessage: { role: "assistant", content: "", tool_calls: [
+        { id: tool.id, type: "function", function: { name: tool.name, arguments: JSON.stringify(tool.args) } },
+      ] },
+    });
+  }) as typeof streamModelTurn;
+  let completedWith: string | undefined;
+  const g = await startModelGateway(ENDPOINT, POLICY, new AbortController().signal, streamer, {
+    async request(input) { order.push("named"); minted = input.call?.responseId; },
+    async completed(_turn, _history, call) { completedWith = call?.responseId; },
+  });
+  try {
+    const response = await post(g, { stream: true, messages: [] });
+    assert.equal(response.status, 200);
+    assert.match(String(minted), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "the call carries an id");
+    assert.equal(response.headers.get(MODEL_RESPONSE_ID_HEADER), minted, "the adapter learns the id the record uses");
+    assert.equal(completedWith, minted, "the completion is recorded under this call's own id");
+    assert.deepEqual(order, ["named", "call"], "the id is settled before the request leaves, not after the answer");
+    await response.text();
+  } finally { await g.close(); }
+});
+
+test("housekeeping calls are not recorded, so they are not named", { timeout: 5000 }, async () => {
+  let named = 0;
+  const { streamer } = fakeStreamer(answer());
+  const g = await startModelGateway(ENDPOINT, POLICY, new AbortController().signal, streamer, {
+    async request() { named++; },
+    async completed() {},
+  });
+  try {
+    const reply = await fetch(`${g.url}/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${g.token}`, "x-sciencediscovery-model-purpose": "housekeeping" },
+      body: JSON.stringify({ messages: [] }),
+    });
+    assert.equal(reply.status, 200);
+    assert.equal(reply.headers.get(MODEL_RESPONSE_ID_HEADER), null);
+    assert.equal(named, 0);
+  } finally { await g.close(); }
+});
+
 for (const stream of [false, true]) {
   test(`cancellation stops a blocked input recorder before upstream dispatch (stream=${stream})`, { timeout: 3000 }, async () => {
     let enter!: () => void;
@@ -1041,6 +1091,59 @@ test("gateway retries one reasoning-only network interruption without replaying 
     const record = JSON.parse(summary.slice("[model-sse-summary] ".length));
     assert.deepEqual(record.retryErrors, ["network"]);
     assert.equal(record.retries, 1);
+  } finally { await g.close(); }
+});
+
+test("gateway replays a reasoning-only turn through two transient stream breaks", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "info", (line: string) => lines.push(String(line)));
+  let calls = 0;
+  const streamer = (async (_endpoint, _systemPrompt, _history, _tools, _policy, _signal, callbacks) => {
+    calls += 1;
+    callbacks?.onThinkingDelta?.("partial reasoning");
+    if (calls < 3) throw new Error("terminated");
+    callbacks?.onWireDiagnostics?.({ ...EMPTY_WIRE, hasReasoning: true, retryErrors: [], retries: 0 });
+    callbacks?.onTextDelta?.("recovered after two breaks");
+    return answer();
+  }) as typeof streamModelTurn;
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: true, messages: [] });
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.equal(calls, 3);
+    assert.equal((body.match(/partial reasoning/g) ?? []).length, 1, "hidden reasoning is never replayed downstream");
+    assert.match(body, /recovered after two breaks/);
+    assert.match(body, /\[DONE\]/);
+    const summary = lines.find((line) => line.startsWith("[model-sse-summary] "));
+    assert.ok(summary);
+    const record = JSON.parse(summary.slice("[model-sse-summary] ".length));
+    assert.deepEqual(record.retryErrors, ["network", "network"]);
+    assert.equal(record.retries, 2);
+  } finally { await g.close(); }
+});
+
+test("gateway stops replaying after the bounded stream retry budget", async (t) => {
+  const lines: string[] = [];
+  t.mock.method(console, "info", (line: string) => lines.push(String(line)));
+  let calls = 0;
+  const streamer = (async (_endpoint, _systemPrompt, _history, _tools, _policy, _signal, callbacks) => {
+    calls += 1;
+    callbacks?.onThinkingDelta?.("partial reasoning");
+    throw new Error("terminated");
+  }) as typeof streamModelTurn;
+  const g = await gateway(streamer);
+  try {
+    const response = await post(g, { stream: false, messages: [] });
+    assert.equal(response.status, 502);
+    assert.match(await response.text(), /terminated/);
+    assert.equal(calls, 3, "two retries plus the initial request");
+    const summary = lines.find((line) => line.startsWith("[model-sse-summary] "));
+    assert.ok(summary);
+    const record = JSON.parse(summary.slice("[model-sse-summary] ".length));
+    assert.deepEqual(record.retryErrors, ["network", "network"]);
+    assert.equal(record.retries, 2);
+    assert.deepEqual(record.error, { classification: "network" });
   } finally { await g.close(); }
 });
 
