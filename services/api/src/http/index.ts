@@ -198,13 +198,13 @@ import type {
   PromptManifest,
   SubagentStep,
   UpdateSpecialistRequest,
-  effectiveRunnerIds,
 } from "@sciencediscovery/schema";
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
   DEFAULT_WRITABLE_SKILL_LIBRARY_ID,
   LOCAL_RUNNER_ID,
   UNTITLED_SESSION_TITLE,
+  effectiveRunnerIds,
   resolveNpuSelection,
 } from "@sciencediscovery/schema";
 import {
