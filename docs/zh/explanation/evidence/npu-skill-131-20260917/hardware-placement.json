@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-09-17T01:36:18.563Z",
+  "profile": {
+    "procFallback": false,
+    "procMode": "new",
+    "detail": "bwrap: Unknown option --disable-userns",
+    "disableUserns": false,
+    "reason": "option-unknown",
+    "sandboxUsable": true
+  },
+  "environmentPrefix": "/home/lujiale/ScienceDiscovery-deploy/data-78fa0d7/scientific-envs/revisions/task-932d7c2f-0b0b-4ea4-8a69-4be166ec9932/rev-4a6b8306-e8f6-4fdb-a28c-7be1bc3a9bbe",
+  "scope": "isolated hardware harness using upstream NPU/namespace/seccomp helpers, not deployed Runner HTTP or full pipeline",
+  "mapping": [
+    {
+      "hostIndex": 4,
+      "sandboxIndex": 0
+    }
+  ],
+  "testHostPids": [
+    2529830,
+    2529831,
+    2529836
+  ],
+  "testDeviceRows": [
+    "| 4       0                 | 2529836       | python                   | 121                     |"
+  ],
+  "physicalDeviceVerified": true,
+  "exitCode": 0,
+  "signal": null,
+  "durationMs": 21204,
+  "stdout": "VISIBLE_DEVICES=[\"davinci0\"]\nMINDSPORE_VERSION=2.7.2\nTENSOR_RESULT=[[7.0, 10.0], [15.0, 22.0]]\nSANDBOX_NPU_TENSOR_OK\n[LOG_WARNING] can not create directory, directory: /ascend/log, possible reason: Operation not permitted.",
+  "stderr": "/usr/local/Ascend/ascend-toolkit/latest/python/site-packages/tbe/dsl/classifier/transdata/transdata_classifier.py:223: SyntaxWarning: invalid escape sequence '\\B'\n  Return BN\\BH SCH Result\n/usr/local/Ascend/ascend-toolkit/latest/python/site-packages/tbe/dsl/unify_schedule/vector/transdata/common/graph/transdata_graph_info.py:146: SyntaxWarning: invalid escape sequence '\\c'\n  2. In forward, tiling would not split c1 and c0, find c1\\c0 based on t2.\n/usr/local/Ascend/ascend-toolkit/latest/python/site-packages/tbe/dsl/unify_schedule/vector/transdata/common/graph/transdata_graph_info.py:172: SyntaxWarning: invalid escape sequence '\\c'\n  1. Forward: tiling would not split c1\\c0\\h0, find c1\\c0\\h1\\h0 based on t2\n/opt/science-env/lib/python3.12/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.\n  setattr(self, word, getattr(machar, word).flat[0])\n/opt/science-env/lib/python3.12/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float64'> type is zero.\n  return self._float_to_str(self.smallest_subnormal)\n/opt/science-env/lib/python3.12/site-packages/numpy/core/getlimits.py:549: UserWarning: The value of the smallest subnormal for <class 'numpy.float32'> type is zero.\n  setattr(self, word, getattr(machar, word).flat[0])\n/opt/science-env/lib/python3.12/site-packages/numpy/core/getlimits.py:89: UserWarning: The value of the smallest subnormal for <class 'numpy.float32'> type is zero.\n  return self._float_to_str(self.smallest_subnormal)\n[ERROR] ME(3:281473796024800,MainProcess):2026-09-17-01:36:26.363.000 [mindspore/run_check/_check_version.py:352] CheckFailed: 'getpwuid(): uid not found: 1024'\n[CRITICAL] ME(3:281473796024800,MainProcess):2026-09-17-01:36:26.364.000 [mindspore/run_check/_check_version.py:353] MindSpore relies on whl package \"te\" in Ascend AI software package (Ascend Data Center Solution). Please check whether they are installed correctly or not, refer to the match info on: https://www.mindspore.cn/install\n[ERROR] ME(3:281473796024800,MainProcess):2026-09-17-01:36:28.225.000 [mindspore/run_check/_check_version.py:352] CheckFailed: 'getpwuid(): uid not found: 1024'\n[CRITICAL] ME(3:281473796024800,MainProcess):2026-09-17-01:36:28.225.000 [mindspore/run_check/_check_version.py:353] MindSpore relies on whl package \"te\" in Ascend AI software package (Ascend Data Center Solution). Please check whether they are installed correctly or not, refer to the match info on: https://www.mindspore.cn/install\n[WARNING] ME(3:281473796024800,MainProcess):2026-09-17-01:36:28.225.000 [mindspore/context.py:1334] For 'context.set_context', the parameter 'device_target' will be deprecated and removed in a future version. Please use the api mindspore.set_device() instead.\n[ERROR] ME(3:281473796024800,MainProcess):2026-09-17-01:36:28.255.000 [mindspore/run_check/_check_version.py:352] CheckFailed: 'getpwuid(): uid not found: 1024'\n[CRITICAL] ME(3:281473796024800,MainProcess):2026-09-17-01:36:28.255.000 [mindspore/run_check/_check_version.py:353] MindSpore relies on whl package \"te\" in Ascend AI software package (Ascend Data Center Solution). Please check whether they are installed correctly or not, refer to the match info on: https://www.mindspore.cn/install\n[WARNING] ME(3:281473796024800,MainProcess):2026-09-17-01:36:28.255.000 [mindspore/context.py:1334] For 'context.set_context', the parameter 'device_id' will be deprecated and removed in a future version. Please use the api mindspore.set_device() instead.\n[WARNING] ME(3:281473796024800,MainProcess):2026-09-17-01:36:28.255.000 [mindspore/context.py:1334] For 'context.set_context', the parameter 'max_device_memory' will be deprecated and removed in a future version. Please use the api mindspore.runtime.set_memory() instead.\n",
+  "seccomp": "upstream baseline arm64",
+  "maxDeviceMemory": "1GB"
+}

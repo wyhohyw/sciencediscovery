@@ -281,10 +281,15 @@ def managed_python_errors(cfg: dict[str, Any]) -> list[str]:
     if pipeline_home:
         ph = posix_path(pipeline_home).rstrip("/")
         blocked_fragments.extend([f"{ph}/venv/", f"{ph}/python_user/", f"{ph}/bin/"])
+    # A host pipeline venv stays rejected even when the managed-env gate is off.
+    # ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV=0 only skips the scientific-env path
+    # requirement, so a conda interpreter outside those fragments can run.
     if any(fragment and fragment in py_text for fragment in blocked_fragments):
         errors.append(f"python points at a host pipeline environment, not ScienceDiscovery managed env: {py_text}")
+    if not require_managed_env():
+        return errors
     managed_env_python = "/scientific-envs/revisions/" in py_text or py_text.startswith("/opt/science-env/")
-    if require_managed_env() and not managed_env_python:
+    if not managed_env_python:
         errors.append(
             "python must come from the ScienceDiscovery selected scientific environment "
             f"(SCIENCE_ENV_PYTHON or /opt/science-env/bin/python), got: {py_text}"
@@ -437,6 +442,19 @@ def validate_paths(cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
+def bundled_python_path() -> str:
+    """Directory shipped with this skill that holds pure-Python imports the host conda env lacks."""
+    return str(Path(__file__).resolve().parent.parent / "vendor")
+
+
+def prepend_bundled_python_path() -> None:
+    """Make the bundled imports visible to this process and every child it execs."""
+    vendor = bundled_python_path()
+    current = [item for item in os.environ.get("PYTHONPATH", "").split(os.pathsep) if item]
+    if vendor not in current:
+        os.environ["PYTHONPATH"] = os.pathsep.join([vendor, *current])
+
+
 def sharker_import_errors(cfg: dict[str, Any]) -> list[str]:
     """Verify that the selected Python resolves sharker through RFdiffusion env."""
     python_bin = str(cfg.get("python", "")).strip()
@@ -445,7 +463,7 @@ def sharker_import_errors(cfg: dict[str, Any]) -> list[str]:
     if not executable_file(python_bin) or not sharker_init.is_file():
         return []
     app_dir = Path(cfg.get("app_dir", ""))
-    python_path = [str(app_dir.parent.parent), str(rf_diffusion_dir / "env")]
+    python_path = [bundled_python_path(), str(app_dir.parent.parent), str(rf_diffusion_dir / "env")]
     inherited = os.environ.get("PYTHONPATH", "")
     if inherited:
         python_path.append(inherited)
@@ -968,6 +986,7 @@ def run_cmd(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     cmd = command_for_full_run(cfg)
+    prepend_bundled_python_path()
     print("Launching sandbox pipeline:", flush=True)
     print("  " + " ".join(shlex.quote(item) for item in cmd), flush=True)
     os.execvp(cmd[0], cmd)

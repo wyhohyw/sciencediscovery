@@ -1,0 +1,95 @@
+{
+  "timestamp": "2026-09-17T01:32:25.653Z",
+  "capability": {
+    "procFallback": false,
+    "procMode": "new",
+    "detail": "bwrap: Unknown option --disable-userns",
+    "disableUserns": false,
+    "reason": "option-unknown",
+    "sandboxUsable": true
+  },
+  "tools": {
+    "npuSmiPath": "/usr/local/bin/npu-smi",
+    "pythonPath": "/usr/bin/python3",
+    "toolkitPath": "/usr/local/Ascend/ascend-toolkit/latest"
+  },
+  "inventory": {
+    "capturedAt": "2026-09-17T01:32:23.776Z",
+    "devices": [
+      {
+        "cardId": 4,
+        "chipId": 0,
+        "chipName": "910B3",
+        "health": "OK",
+        "hostIndex": 4,
+        "sandboxUsable": true,
+        "aiCorePercent": 0,
+        "hbmPercent": 5,
+        "hbmTotalMb": 65536,
+        "hbmUsedMb": 3428,
+        "powerWatts": 106.5,
+        "temperatureCelsius": 49
+      },
+      {
+        "cardId": 6,
+        "chipId": 0,
+        "chipName": "910B3",
+        "health": "OK",
+        "hostIndex": 6,
+        "sandboxUsable": false,
+        "aiCorePercent": 0,
+        "hbmPercent": 5,
+        "hbmTotalMb": 65536,
+        "hbmUsedMb": 3438,
+        "powerWatts": 96.9,
+        "temperatureCelsius": 43,
+        "sandboxUnusableReason": "NPU 6 cannot be opened inside the sandbox: dcmi model initialized failed, because the device is used. ret is -8020"
+      }
+    ],
+    "supported": true
+  },
+  "binding": {
+    "bindArgs": [
+      "--dev-bind",
+      "/dev/davinci4",
+      "/dev/davinci0",
+      "--dev-bind",
+      "/dev/davinci6",
+      "/dev/davinci1",
+      "--dev-bind",
+      "/dev/davinci_manager",
+      "/dev/davinci_manager",
+      "--dev-bind",
+      "/dev/devmm_svm",
+      "/dev/devmm_svm",
+      "--dev-bind",
+      "/dev/hisi_hdc",
+      "/dev/hisi_hdc",
+      "--ro-bind",
+      "/etc/ascend_install.info",
+      "/etc/ascend_install.info"
+    ],
+    "env": {
+      "ASCEND_AICPU_PATH": "/usr/local/Ascend/ascend-toolkit/latest",
+      "ASCEND_HOME_PATH": "/usr/local/Ascend/ascend-toolkit/latest",
+      "ASCEND_OPP_PATH": "/usr/local/Ascend/ascend-toolkit/latest/opp",
+      "ASCEND_TOOLKIT_HOME": "/usr/local/Ascend/ascend-toolkit/latest",
+      "LD_LIBRARY_PATH": "/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/ascend-toolkit/latest/lib64:/usr/local/Ascend/ascend-toolkit/latest/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/lib64/plugin/nnengine",
+      "TOOLCHAIN_HOME": "/usr/local/Ascend/ascend-toolkit/latest/toolkit"
+    },
+    "mapping": [
+      {
+        "hostIndex": 4,
+        "sandboxIndex": 0
+      },
+      {
+        "hostIndex": 6,
+        "sandboxIndex": 1
+      }
+    ],
+    "pythonPath": [
+      "/usr/local/Ascend/ascend-toolkit/latest/python/site-packages",
+      "/usr/local/Ascend/ascend-toolkit/latest/opp/built-in/op_impl/ai_core/tbe"
+    ]
+  }
+}

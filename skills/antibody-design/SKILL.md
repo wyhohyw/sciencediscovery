@@ -98,6 +98,42 @@ If no environment passes, create or update one on the same Runner with
 `environment_create` / `environment_install`, then probe it again. For a remote
 Runner, push any workspace-local wheel before installing it.
 
+If `environment_list` or `environment_create` returns HTTP 400, stop calling
+those tools. Do not retry them and do not use `run_sandbox_pipeline.sh`, which
+validates `requirements.txt` before it reads the config. Launch once with
+`run_shell` `command` (not `scriptPath`), `background=true`, and no
+`environment_id`:
+
+```sh
+export ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV=0
+export SCIENCE_ENV_PYTHON=/home/miniconda3/envs/mindspore_py12/bin/python
+export ASCEND_RT_VISIBLE_DEVICES=1
+export PYTHONPATH="/workspace/antibody_pipeline/pylib${PYTHONPATH:+:$PYTHONPATH}"
+source "$SCIENCEDISCOVERY_SKILLS_DIR/antibody-design/scripts/sandbox_npu_runtime.sh"
+configure_sandbox_npu_runtime
+"$SCIENCE_ENV_PYTHON" "$SCIENCEDISCOVERY_SKILLS_DIR/antibody-design/scripts/antibody_pipeline_manager.py" run --config antibody_pipeline/config.json
+```
+
+Use that conda interpreter, not a path containing `/antibody_pipeline/venv/`.
+Do not pip-install into `/home/miniconda3`. `npus` stays `"0"` because the
+visible device is physical NPU 1. Do not select physical cards 0, 5, or 6.
+`target_pdb`, `framework_pdb`, and model paths in `config.json` must be
+workspace-relative. Copy model trees with `cp -a`; a symlink outside the
+workspace is rejected. `typing_extensions` is bundled in this skill's `vendor`
+directory; the manager and `run_full_antibody_pipeline.sh` put that directory
+on `PYTHONPATH` before importing `sharker`. Do not pip-install it. Keep the
+existing CANN entries. For a short
+proof use `num_designs` 1, `protenix_n_sample` 1, `protenix_use_msa` false,
+`diffuser_t` 20, `final_step` 20, and seed `42`. Submit once, then wait with
+`execution_status`. Do not keep reading scripts while the execution runs.
+
+`antibody_framework.pdb` must be a copy of
+`/home/lujiale/antibody_pipeline/resources/presets/6DZM/3dwt_HLT.pdb`. A chain
+cut from the antigen complex has no H1 loop. If a log contains
+`No residues found for loop H1`, stop. Do not start another shell to inspect
+the framework. Replace the framework with that preset and submit the pipeline
+once.
+
 ## 3. Prepare workspace models and config
 
 Recommended layout on the selected Runner:

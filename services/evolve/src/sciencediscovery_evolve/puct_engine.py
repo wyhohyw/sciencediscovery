@@ -88,6 +88,24 @@ _MAX_SECONDS = 24 * 3600.0
 _SHUTDOWN_GRACE = 120.0
 
 
+#: Extra framework rounds for proposals that are given back.
+#:
+#: Serial `evolve` counts one round per call to `propose`, including a call
+#: whose reply never became a program and a call whose NPU job faulted. Both
+#: are refunded on the tree, so they must not be the thing that ends a search
+#: planned for N expansions. The tree's `candidate_limit` is that cap. Twelve
+#: is the headroom measured against a search that planned 10, adopted 1, and
+#: stopped on `rounds` after eight empty replies and one fault.
+_ROUND_HEADROOM = 12
+
+
+def _round_budget(expansions: int, workers: int) -> int:
+    """Serial rounds: planned expansions, plus room for refunded proposals."""
+    planned = max(1, int(expansions))
+    width = max(1, int(workers))
+    return max(1, (planned * _ROUND_HEADROOM) // width)
+
+
 def _rollout_budget(expansions: int) -> int:
     """`max_iters` in the unit upstream actually counts: worker rollouts.
 
@@ -425,7 +443,9 @@ class PuctEngine:
             else:
                 outcome = evolve(
                     tasks, reward,
-                    rounds=max(1, spec.expansions // max(1, common["n_workers"])),
+                    # Refunded proposals still spend a round. The expansion cap
+                    # is candidate_limit, set above from spec.expansions.
+                    rounds=_round_budget(spec.expansions, common["n_workers"]),
                     max_concurrency=1 if mode == "serial" else common["n_workers"],
                     max_seconds=_MAX_SECONDS,
                     **common,

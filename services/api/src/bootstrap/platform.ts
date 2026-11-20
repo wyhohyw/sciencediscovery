@@ -56,7 +56,7 @@ import { endpointCanDisableThinking } from "../evolution/model-thinking.js";
 import { startProposedRun, summariseRun } from "../evolution/proposal.js";
 import { stopEvolveRunForSession } from "../evolution/stop-run.js";
 import { readEvolveDirection } from "@sciencediscovery/schema";
-import { publishMeasuredDesign, registerStagedDesigns } from "../evolution/design-artifacts.js";
+import { evolveSummaryMarkdown, publishMeasuredDesign, registerEvolveSummary, registerStagedDesigns } from "../evolution/design-artifacts.js";
 import { isEvolveCommand, evolveCommandApprovesUnisolated } from "@sciencediscovery/evolve";
 import type { EvolveRuntimeFactory } from "../runs/index.js";
 import { ensureConnectorContinuation, publishApprovalModeChange, recoverSessionRuns, scheduleSessionRuns } from "../runs/index.js";
@@ -430,6 +430,20 @@ export function createPlatformServices(
           put: (bytes) => evolveCas.put(bytes),
           remoteCompute,
           runId: run.id,
+          sessionId: run.sessionId,
+          store,
+        });
+      },
+      publishSummary: async ({ bestNodeIndex, events, run }) => {
+        const steps = events.flatMap((event) => (
+          event.type === "expanded"
+            ? [{ changeSummary: event.changeSummary, nodeIndex: event.nodeIndex, score: event.score }]
+            : []
+        ));
+        await registerEvolveSummary({
+          fallbackMarkdown: evolveSummaryMarkdown(steps, bestNodeIndex),
+          notify: (input) => provenanceRecorder.notifyArtifactRegistered(input),
+          put: (bytes) => evolveCas.put(bytes),
           sessionId: run.sessionId,
           store,
         });

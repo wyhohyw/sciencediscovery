@@ -387,7 +387,7 @@ test("a specialist fallback names the ceiling the native loop enforced, not the 
     assert.equal(handle.enforcedMaxModelTurns, undefined, "the external runtime names no ceiling before it runs");
     await handle.execute();
     assert.equal(fallbackConfigured, 300, "the fallback receives the declared budget");
-    assert.equal(handle.enforcedMaxModelTurns, 128, "the record can now name the bound the fallback loop enforced");
+    assert.equal(handle.enforcedMaxModelTurns, 300, "the record can now name the bound the fallback loop enforced");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

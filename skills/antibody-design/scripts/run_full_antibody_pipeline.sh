@@ -256,7 +256,9 @@ run_rfdiffusion_inline() {
   fi
 
   mkdir -p "$out_dir/logs" "$shard_root"
-  export PYTHONPATH="$APP_DIR/../..:$RF_DIFFUSION_DIR/env:${PYTHONPATH:-}"
+  local vendor_dir
+  vendor_dir="$(cd "$SCRIPTS_DIR/../vendor" && pwd)"
+  export PYTHONPATH="$vendor_dir:$APP_DIR/../..:$RF_DIFFUSION_DIR/env:${PYTHONPATH:-}"
 
   local total_workers=$((${#npu_array[@]} * WORKERS_PER_NPU))
   if [[ "$total_workers" -gt "$total_designs" ]]; then

@@ -1523,36 +1523,67 @@
 
 .evolve-round-track {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px 6px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
   margin-top: 11px;
 }
 
 .evolve-round-step {
+  container: round-step / inline-size;
+  min-width: 0;
   color: var(--muted);
   font-size: 11px;
   line-height: 16px;
-  overflow-wrap: anywhere;
 }
 
-.evolve-round-step::before {
-  content: "";
+.evolve-round-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.evolve-round-bar {
   display: block;
   height: 4px;
-  margin-bottom: 4px;
   border-radius: 2px;
   background: var(--surface-sunk);
 }
 
+.evolve-round-names {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.evolve-round-name { white-space: nowrap; }
+
 .evolve-round-step.is-done { color: var(--text-secondary); }
-.evolve-round-step.is-done::before { background: var(--primary-border-soft); }
+.evolve-round-step.is-done .evolve-round-bar { background: var(--primary-border-soft); }
 
 .evolve-round-step.is-current {
   color: var(--primary-strong);
   font-weight: 600;
 }
 
-.evolve-round-step.is-current::before { background: var(--primary); }
+.evolve-round-step.is-current .evolve-round-bar { background: var(--primary); }
+
+/* Labels sit under the bar while each cell is wide enough. Once a cell is too
+   narrow, the five labels alternate: odd cells above the bar, even cells below,
+   with both rows reserved so the bars stay on one line. */
+@container round-step (max-width: 92px) {
+  .evolve-round-step-body {
+    display: grid;
+    grid-template-rows: 16px 4px 16px;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .evolve-round-bar { grid-row: 2; }
+  .evolve-round-step.is-above .evolve-round-names { grid-row: 1; }
+  .evolve-round-step.is-below .evolve-round-names { grid-row: 3; }
+}
 
 @keyframes evolve-spin {
   to { transform: rotate(360deg); }
@@ -1571,9 +1602,6 @@
   }
 }
 
-@container (max-width: 560px) {
-  .evolve-round-track { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
 
 .evolve-tree-node.is-quiet .evolve-tree-disc { fill: #e9edf5; }
 .evolve-tree-node.is-significant .evolve-tree-disc { fill: #dce8fb; }

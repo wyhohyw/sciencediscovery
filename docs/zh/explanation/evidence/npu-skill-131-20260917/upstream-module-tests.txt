@@ -1,0 +1,104 @@
+TAP version 13
+# (node:2509896) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: accepted background work outlives waiting and publishes a notice only after provenance
+ok 1 - accepted background work outlives waiting and publishes a notice only after provenance
+  ---
+  duration_ms: 43.24794
+  type: 'test'
+  ...
+# Subtest: explicit cancellation retains committed result and stopped Agent inbox without waking it
+ok 2 - explicit cancellation retains committed result and stopped Agent inbox without waking it
+  ---
+  duration_ms: 20.06548
+  type: 'test'
+  ...
+# Subtest: lost submission and API restart are unknown, never command replay
+ok 3 - lost submission and API restart are unknown, never command replay
+  ---
+  duration_ms: 18.08146
+  type: 'test'
+  ...
+# Subtest: uncommitted Runner result or mismatched identity cannot publish successful completion
+ok 4 - uncommitted Runner result or mismatched identity cannot publish successful completion
+  ---
+  duration_ms: 17.44659
+  type: 'test'
+  ...
+# Subtest: cancellation before process admission records a terminal outcome without fabricating a snapshot
+ok 5 - cancellation before process admission records a terminal outcome without fabricating a snapshot
+  ---
+  duration_ms: 14.62552
+  type: 'test'
+  ...
+# Subtest: remote execution observations keep Runner receipts outside the API CAS closure, including saved results
+ok 6 - remote execution observations keep Runner receipts outside the API CAS closure, including saved results
+  ---
+  duration_ms: 38.01873
+  type: 'test'
+  ...
+# Subtest: local execution results retain strong snapshot dependencies and reject missing local objects
+ok 7 - local execution results retain strong snapshot dependencies and reject missing local objects
+  ---
+  duration_ms: 21.15502
+  type: 'test'
+  ...
+# (node:2509899) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: deletion admission failure is not a poisoned version store after a successful rollback
+ok 8 - deletion admission failure is not a poisoned version store after a successful rollback
+  ---
+  duration_ms: 95.93391
+  type: 'test'
+  ...
+# Subtest: background admission does not block observers; one workspace queues, another runs, CAS commits before release
+ok 9 - background admission does not block observers; one workspace queues, another runs, CAS commits before release
+  ---
+  duration_ms: 119.61824
+  type: 'test'
+  ...
+# Subtest: cancel waits for process join; queued cancellation never starts or replays a command
+ok 10 - cancel waits for process join; queued cancellation never starts or replays a command
+  ---
+  duration_ms: 73.37653
+  type: 'test'
+  ...
+# Subtest: external file publication waits for cancelled process join and the execution ref commit
+ok 11 - external file publication waits for cancelled process join and the execution ref commit
+  ---
+  duration_ms: 167.47254
+  type: 'test'
+  ...
+# Subtest: restart retains completed results and marks unfinished records unknown without replay
+ok 12 - restart retains completed results and marks unfinished records unknown without replay
+  ---
+  duration_ms: 45.99443
+  type: 'test'
+  ...
+# Subtest: log retention is explicit, paginated and does not stop execution
+ok 13 - log retention is explicit, paginated and does not stop execution
+  ---
+  duration_ms: 48.01696
+  type: 'test'
+  ...
+# Subtest: workspace snapshot failure closes writer admission instead of claiming a committed version
+ok 14 - workspace snapshot failure closes writer admission instead of claiming a committed version
+  ---
+  duration_ms: 32.62983
+  type: 'test'
+  ...
+# Subtest: failed atomic ref publication never reports an unrooted Execution version
+ok 15 - failed atomic ref publication never reports an unrooted Execution version
+  ---
+  duration_ms: 37.95917
+  type: 'test'
+  ...
+1..15
+# tests 15
+# suites 0
+# pass 15
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 731.30934

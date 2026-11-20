@@ -17,8 +17,9 @@
 A seen edit is not a new node. A reply that is not a JSON object, or that
 leaves the declared fields, is not a run either. The model is asked again,
 inside the same slot. Coming back with a better score updates the existing
-node. A fault may be tried ``FAULT_LIMIT`` times; retries after the first do
-not take another slot. Waiting is not a fault and does not take a slot either.
+node. A fault is submitted again, up to ``FAULT_LIMIT`` times, and none of
+those failures takes a slot. Waiting is not a fault and does not take a slot
+either.
 
 The vendor search still appends whatever ``add_node`` returns. Skipped results
 are marked and dropped by the event filter, so ``vendor/puct/search.py`` stays
@@ -176,9 +177,7 @@ class EditMemory:
             if failed:
                 if key:
                     self.faults[key] = self.faults.get(key, 0) + 1
-                    if self.faults[key] > 1:
-                        return "refund", "a fault retry does not take another slot"
-                return "drop", str(getattr(program, "error", "") or "fault, no score")
+                return "refund", "a failed job is retried and does not take a slot"
             if key and key in self.best:
                 seen = self.best[key]
                 if not math.isfinite(score) or score <= seen:
@@ -363,6 +362,16 @@ def redraw_known(
             emit_log(log_line)
             asked = asked.rstrip() + "\n\n" + reason + "\n"
             result = complete(asked, iteration)
+        # An empty reply is not a program. Returning it here is what made a
+        # planned search stop on `rounds`: the framework had already counted
+        # the proposal. Ask a few more times inside this same call.
+        code = result[0] if isinstance(result, tuple) and result else result
+        extra = 0
+        while not str(code or "").strip() and extra < limit:
+            emit_log("the model returned nothing, so it does not take a run; asking again")
+            extra += 1
+            result = complete(asked, iteration)
+            code = result[0] if isinstance(result, tuple) and result else result
         return result
 
     return call

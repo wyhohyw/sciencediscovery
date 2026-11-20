@@ -346,12 +346,30 @@ export function EvolveDetail({ client, onError, onRunChanged, run }: EvolveDetai
   </div>;
 }
 
+/** One cell of the round bar. Drafting and submission share the first cell,
+ *  so the bar is five parts on a single row. */
+const ROUND_PARTS: ReadonlyArray<{ id: string; stages: readonly NpuStage[] }> = [
+  { id: "prepare", stages: ["draft", "starting"] },
+  { id: "rfdiffusion", stages: ["rfdiffusion"] },
+  { id: "proteinmpnn", stages: ["proteinmpnn"] },
+  { id: "protenix", stages: ["protenix"] },
+  { id: "screen", stages: ["screen"] },
+];
+
+function roundPartState(stage: NpuStage, stages: readonly NpuStage[]): "done" | "current" | "" {
+  const at = NPU_STAGES.indexOf(stage);
+  const last = NPU_STAGES.indexOf(stages[stages.length - 1]!);
+  if (at > last) return "done";
+  if (at >= NPU_STAGES.indexOf(stages[0]!)) return "current";
+  return "";
+}
+
 /** The current round, as the stages the job has actually reached.
  *  Named steps, not a percentage: a stage arrives when that step starts, and
  *  the bar does not guess how far through it the card is. */
 export function RoundProgress({ since, stage }: { since?: string; stage?: NpuStage }) {
-  const index = stage === undefined ? -1 : NPU_STAGES.indexOf(stage);
   const label = stage === undefined ? TEXT.evolve.detail.pendingNode : TEXT.evolve.detail.stages[stage];
+  const partIndex = stage === undefined ? -1 : ROUND_PARTS.findIndex((part) => roundPartState(stage, part.stages) === "current");
   const started = since === undefined ? Number.NaN : Date.parse(since);
   const seconds = Number.isFinite(started) ? Math.max(0, (Date.now() - started) / 1000) : null;
   const elapsed = seconds === null ? "" : span(seconds);
@@ -365,19 +383,28 @@ export function RoundProgress({ since, stage }: { since?: string; stage?: NpuSta
     </div>
     {stage === undefined ? null : <div
       aria-label={TEXT.evolve.detail.progressTitle}
-      aria-valuemax={NPU_STAGES.length}
+      aria-valuemax={ROUND_PARTS.length}
       aria-valuemin={1}
-      aria-valuenow={index + 1}
+      aria-valuenow={partIndex + 1}
       aria-valuetext={elapsed ? `${label}, ${elapsed}` : label}
       className="evolve-round-track"
       role="progressbar"
     >
-      {NPU_STAGES.map((name, at) => <span
-        className={`evolve-round-step${at < index ? " is-done" : at === index ? " is-current" : ""}`}
-        key={name}
-      >
-        {TEXT.evolve.detail.stages[name]}
-      </span>)}
+      {ROUND_PARTS.map((part, index) => {
+        const state = roundPartState(stage, part.stages);
+        const names = part.stages.map((name) => TEXT.evolve.detail.stages[name]);
+        return <span
+          className={`evolve-round-step${state === "done" ? " is-done" : state === "current" ? " is-current" : ""}${index % 2 === 0 ? " is-above" : " is-below"}`}
+          key={part.id}
+        >
+          <span className="evolve-round-step-body">
+            <span className="evolve-round-bar" />
+            <span className="evolve-round-names">
+              {names.map((name) => <span className="evolve-round-name" key={name}>{name}</span>)}
+            </span>
+          </span>
+        </span>;
+      })}
     </div>}
   </section>;
 }

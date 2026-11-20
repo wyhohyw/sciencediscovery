@@ -2,6 +2,8 @@
 // Licensed under the Apache License, Version 2.0 (the "License").
 
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
 import { completeChatRequest } from "@sciencediscovery/model";
 import { EVOLVE_EDITABLE_LIMIT, evolveBaselineFields, evolveFieldIsSelectable, type EvolveDirectionInput, type ModelProfile, type Session } from "@sciencediscovery/schema";
@@ -9,6 +11,27 @@ import { EVOLVE_EDITABLE_LIMIT, evolveBaselineFields, evolveFieldIsSelectable, t
 import { parseProviderUsage } from "../provider-usage.js";
 import type { SessionStore } from "../store.js";
 import { endpointCanDisableThinking } from "./model-thinking.js";
+
+export const WORKSPACE_EVOLVE_START = "antibody_pipeline/inputs/evolve_start.json";
+const START_EDITABLE = ["hotspots", "num_designs", "diffuser_t", "final_step", "protenix_n_sample", "protenix_use_msa"];
+
+/** The packaged start file is the constraint set. A later draft uses it as-is. */
+export function directionFromEvolveStart(text: string): EvolveDirectionInput | undefined {
+  const fields = evolveBaselineFields(text);
+  if (!fields?.length) return undefined;
+  const present = new Set(fields.map(([name]) => name));
+  const editable = START_EDITABLE.filter((name) => present.has(name));
+  if (!editable.length) return undefined;
+  return { baseline: JSON.stringify(Object.fromEntries(fields)), editable };
+}
+
+export async function readWorkspaceEvolveStart(store: SessionStore, sessionId: string): Promise<string | undefined> {
+  try {
+    return await readFile(join(store.workspacePath(sessionId), ...WORKSPACE_EVOLVE_START.split("/")), "utf8");
+  } catch {
+    return undefined;
+  }
+}
 
 const PROMPT = "Draft a compact starting JSON for an Evolve search based on the user's task. "
   + "Return one JSON object with baseline (an object of meaningful initial field values) and editable (an array "
@@ -38,6 +61,8 @@ export function parseEvolveDirectionDraft(content: string): EvolveDirectionInput
 export async function draftEvolveDirection(
   store: SessionStore, session: Session, model: ModelProfile, apiToken: string, task: string, signal: AbortSignal,
 ): Promise<EvolveDirectionInput | undefined> {
+  const existing = directionFromEvolveStart(await readWorkspaceEvolveStart(store, session.id) ?? "");
+  if (existing) return existing;
   const startedAt = new Date().toISOString();
   const reply = await completeChatRequest(
     { ...model, apiToken, proxy: resolveProxyForUrl(store.resolveProxy(model.proxyPolicy), model.baseUrl) },

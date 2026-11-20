@@ -198,6 +198,7 @@ import type {
   PromptManifest,
   SubagentStep,
   UpdateSpecialistRequest,
+  effectiveRunnerIds,
 } from "@sciencediscovery/schema";
 import {
   BUILT_IN_SKILL_LIBRARY_ID,
@@ -242,7 +243,7 @@ import {
 } from "../artifact-dashboard.js";
 import { mgLog, type ObserveUploadFilePayload } from "@sciencediscovery/memory";
 import { resolveProxyForUrl } from "@sciencediscovery/data-source";
-import { draftEvolveDirection } from "../evolution/direction-draft.js";
+import { draftEvolveDirection, WORKSPACE_EVOLVE_START } from "../evolution/direction-draft.js";
 import { apiLog, runLog } from "../logging.js";
 import { createMemoryWatch } from "../memory-watch.js";
 import { heapBudget } from "../heap-budget.js";
@@ -3790,6 +3791,17 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
         if (!model || !apiToken) return sendError(response, 409, "Configure a model for this session to generate a draft.");
         const abort = new AbortController();
         response.once("close", () => abort.abort());
+        const project = store.getProject(session.projectId);
+        const hostId = project ? effectiveRunnerIds(project, session).find((id) => id !== "local") : undefined;
+        if (hostId) {
+          await syncRemoteWorkspace({
+            hostId,
+            input: { conflict: "overwrite", direction: "pull", paths: [WORKSPACE_EVOLVE_START] },
+            runnerClient: remoteCompute.runnerClient(hostId),
+            sessionId,
+            store,
+          }).catch(() => undefined);
+        }
         const draft = await draftEvolveDirection(store, session, model, apiToken, task, abort.signal);
         if (!draft) return sendError(response, 502, "The model did not return a usable JSON draft.");
         sendJson(response, 200, draft);

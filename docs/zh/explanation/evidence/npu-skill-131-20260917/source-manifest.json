@@ -1,0 +1,81 @@
+{
+  "upstream": "c1ab6327c6b2812e9fab26e62333b2c5ac118f3e",
+  "method": "Node stripTypeScriptTypes transform; no typecheck; source logic unchanged",
+  "files": [
+    {
+      "source": "packages/cas/src/index.ts",
+      "output": "node_modules/@sciencediscovery/cas/index.js",
+      "sha256": "b04fb5c7bab2c8e402c015912884e568c9a2ff15461f81e2758184bc4014e489"
+    },
+    {
+      "source": "packages/cas/src/versioning.ts",
+      "output": "node_modules/@sciencediscovery/cas/versioning.js",
+      "sha256": "ccb3542cb10397a971314f6751d6a852d70a6072a0251e83ce41ed5b2e292aed"
+    },
+    {
+      "source": "packages/cas/src/workspace-copy.ts",
+      "output": "node_modules/@sciencediscovery/cas/workspace-copy.js",
+      "sha256": "5814cefe7e84c8f7ef8de65d22fc83733d69576970a224c0219fcd9ae2d9634a"
+    },
+    {
+      "source": "packages/cas/src/workspace-lease.ts",
+      "output": "node_modules/@sciencediscovery/cas/workspace-lease.js",
+      "sha256": "8d1a6aca4073c2fae9f840d27db3f72dfa1f4c426864190ccd564f9de60e7ce3"
+    },
+    {
+      "source": "packages/cas/src/workspace-lifecycle.ts",
+      "output": "node_modules/@sciencediscovery/cas/workspace-lifecycle.js",
+      "sha256": "79370524e207a81f9ed311513f3666a81656888d9f4c65cf8f0d7261c974524e"
+    },
+    {
+      "source": "packages/cas/src/workspace-snapshot.ts",
+      "output": "node_modules/@sciencediscovery/cas/workspace-snapshot.js",
+      "sha256": "ecc5654baf5055ccdf8acadae49c9c769f51e1cdf7f85bd9574f67c22d3399b7"
+    },
+    {
+      "source": "packages/sandbox-capability/src/index.ts",
+      "output": "node_modules/@sciencediscovery/sandbox-capability/index.js",
+      "sha256": "9e12c9c8b6f7aedf429ebc93e3ba3366606150915e5b8c1da9b54562bd2bacbd"
+    },
+    {
+      "source": "packages/schema/src/npu-device.ts",
+      "output": "node_modules/@sciencediscovery/schema/npu-device.js",
+      "sha256": "5a3247ca4111a1f65b757b43a026dfc1663d574499fc9979c2588d0e760a3b5f"
+    },
+    {
+      "source": "services/runner/src/npu-devices.ts",
+      "output": "runner/npu-devices.js",
+      "sha256": "d8d35c16664094d0d0616703a0bbf9699d81796ec7a806371c44e1e88eda73de"
+    },
+    {
+      "source": "services/runner/src/seccomp.ts",
+      "output": "runner/seccomp.js",
+      "sha256": "a854a06b0ab132e3d664a2b30281eb596f7a1ca3c34b0322ff993953368f9f82"
+    },
+    {
+      "source": "services/runner/src/execution-manager.ts",
+      "output": "runner/execution-manager.js",
+      "sha256": "8a9364b9133e1f3aaaa7d47dfa483539836750c13fa09641f2a802177d67aaf6"
+    },
+    {
+      "source": "services/runner/src/execution-manager.test.ts",
+      "output": "runner/execution-manager.test.js",
+      "sha256": "b738fd2e32818d98d2dd9eeba788eb4347cc6e0316f71c4db4d36297c4ae545d"
+    },
+    {
+      "source": "services/api/src/shell-executions.ts",
+      "output": "api/shell-executions.js",
+      "sha256": "c0e00aef7bd16dc51311c419fe8b44cb57bb3656b460858e71540ebcf36bb8b7"
+    },
+    {
+      "source": "services/api/src/shell-executions.test.ts",
+      "output": "api/shell-executions.test.js",
+      "sha256": "8accbcfbd8839c5bb061d048a766c9a820013d836414f86fbdd38821a0d5cde3"
+    },
+    {
+      "source": "services/api/src/agent-notifications.ts",
+      "output": "api/agent-notifications.js",
+      "sha256": "ccefaf1eb10e45cbd37744ed93d053ec8b809a8ef5059e4158f997969429375d"
+    }
+  ]
+}

@@ -31,6 +31,22 @@ manager = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(manager)
 
 
+class ManagedPythonTests(unittest.TestCase):
+    def test_conda_python_is_allowed_when_managed_env_is_off(self) -> None:
+        with mock.patch.dict(os.environ, {"ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV": "0"}, clear=False):
+            errors = manager.managed_python_errors({
+                "python": "/home/miniconda3/envs/mindspore_py12/bin/python",
+            })
+        self.assertEqual(errors, [])
+
+    def test_host_pipeline_venv_stays_rejected_when_managed_env_is_off(self) -> None:
+        with mock.patch.dict(os.environ, {"ANTIBODY_REQUIRE_SCIENCEDISCOVERY_ENV": "0"}, clear=False):
+            errors = manager.managed_python_errors({
+                "python": "/home/lujiale/antibody_pipeline/venv/bin/python",
+            })
+        self.assertTrue(any("host pipeline environment" in item for item in errors))
+
+
 class SandboxConfigTests(unittest.TestCase):
     def test_hotspot_list_is_normalized(self) -> None:
         self.assertEqual(
@@ -290,6 +306,29 @@ class SandboxConfigTests(unittest.TestCase):
             (package / "__init__.py").write_text("raise RuntimeError('broken sharker')\n", encoding="utf-8")
             errors = manager.sharker_import_errors(cfg)
             self.assertTrue(any("broken sharker" in item for item in errors), errors)
+
+    def test_sharker_import_uses_bundled_typing_extensions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_dir = root / "mindscience" / "MindSPONGE" / "applications"
+            rf_dir = app_dir / "rf_diffusion"
+            package = rf_dir / "env" / "sharker"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text(
+                "import pathlib\n"
+                "import typing_extensions\n"
+                "location = pathlib.Path(typing_extensions.__file__).resolve()\n"
+                "if 'vendor' not in location.parts:\n"
+                "    raise SystemExit('typing_extensions came from ' + str(location))\n",
+                encoding="utf-8",
+            )
+            cfg = {
+                "app_dir": app_dir,
+                "rf_diffusion_dir": rf_dir,
+                "python": os.fspath(Path(os.sys.executable).resolve()),
+            }
+            with mock.patch.dict(os.environ, {"PYTHONPATH": ""}, clear=False):
+                self.assertEqual(manager.sharker_import_errors(cfg), [])
 
     def test_selected_environment_python_precedes_legacy_aliases(self) -> None:
         with mock.patch.dict(os.environ, {

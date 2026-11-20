@@ -34,7 +34,7 @@ import {
  * It lives next to the loop it bounds so the number a caller is told about and
  * the number the loop enforces cannot drift apart (#1106).
  */
-export const MODEL_TURN_CEILING = 128;
+export const MODEL_TURN_CEILING = 384;
 
 /**
  * The turn bound a run will actually enforce.

@@ -183,6 +183,14 @@ export interface EvolveOrchestratorOptions {
    * the reader should be able to open, and it is not an improved program.
    */
   publishMeasurement?: (input: { run: EvolveRun; codeHash: string }) => Promise<void>;
+  /**
+   * Register the search summary as an artifact once the run is terminal.
+   *
+   * The measured structure is not the whole result: the reader also needs the
+   * note of what each step changed. The log already has that, so the summary
+   * does not wait for a later agent turn to declare it.
+   */
+  publishSummary?: (input: { bestNodeIndex: number; events: EvolveEvent[]; run: EvolveRun }) => Promise<void>;
 }
 
 export interface StartEvolveRunInput {
@@ -767,7 +775,7 @@ export class EvolveOrchestrator {
    * was busy would lose the far more valuable fact.
    */
   private async publishWinner(runId: string, bestNodeIndex: number): Promise<void> {
-    if (!this.options.publishResult && !this.options.publishMeasurement) return;
+    if (!this.options.publishResult && !this.options.publishMeasurement && !this.options.publishSummary) return;
     try {
       const run = await this.store.readRun(runId);
       if (!run) return;
@@ -788,6 +796,17 @@ export class EvolveOrchestrator {
           await this.options.publishMeasurement({ run, codeHash: measuredCodeHash });
         } catch (error) {
           apiLog.warn("evolve_publish_measurement_failed", { reason: String(error), runId });
+        }
+      }
+      if (this.options.publishSummary) {
+        try {
+          await this.options.publishSummary({
+            bestNodeIndex,
+            events: records.map((record) => record.event),
+            run,
+          });
+        } catch (error) {
+          apiLog.warn("evolve_publish_summary_failed", { reason: String(error), runId });
         }
       }
       if (!winnerCodeHash || !this.options.publishResult) return;

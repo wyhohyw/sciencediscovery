@@ -34,6 +34,7 @@ import uuid
 from typing import Any, Callable, Mapping, Optional, Tuple
 from urllib.parse import quote
 
+from .directed_memory import FAULT_LIMIT
 from .vendor.puct.domain import Domain
 from .vendor.puct.program import Program
 
@@ -167,6 +168,7 @@ class RunnerNpuClient:
         pending = ""
         announced = ""
         last_log = 0.0
+        status_failures = 0
         if on_stage is not None:
             on_stage("starting")
             announced = "starting"
@@ -179,7 +181,17 @@ class RunnerNpuClient:
                 cursor, pending, announced = self._stages(
                     execution_id, cursor, pending, announced, on_stage,
                 )
-            record = self._send("GET", self._execution_path(execution_id), None)[1]
+            try:
+                record = self._send("GET", self._execution_path(execution_id), None)[1]
+            except NpuJobError:
+                # A dropped status read is not a finished job. Keep the same
+                # execution. A new submission would put a second job on the card.
+                status_failures += 1
+                if status_failures >= 8 or time.monotonic() >= deadline:
+                    raise
+                time.sleep(self.poll_seconds)
+                continue
+            status_failures = 0
             if not isinstance(record, dict):
                 raise NpuJobError("the runner returned a status that is not an object")
             state = str(record.get("state") or record.get("status") or "")
@@ -304,13 +316,21 @@ def npu_domain(
             if cached is not None:
                 valid, metrics, error = cached
                 return valid, dict(metrics), error
-            try:
-                job, artifact = client.run(code, should_stop, on_stage=on_stage)
-            except NpuJobError as error:
-                result = (False, with_search_score({"job_status": "fault"}), str(error))
-            else:
+            result: Tuple[bool, dict[str, Any], str] = (
+                False, with_search_score({"job_status": "fault"}), "job failed",
+            )
+            for _ in range(FAULT_LIMIT):
+                try:
+                    job, artifact = client.run(code, should_stop, on_stage=on_stage)
+                except NpuJobError as error:
+                    # The status read already retried this execution. Another
+                    # submission would start a second job for the same candidate.
+                    result = (False, with_search_score({"job_status": "fault"}), str(error))
+                    break
                 valid, metrics, error = interpret_npu_job(job, artifact, metric_key=metric_key)
                 result = (valid, with_search_score(metrics), error)
+                if result[0] or result[1].get("job_status") != "fault":
+                    break
             valid, metrics, error = result
             if valid or (attempt is not None and metrics.get("job_status") == "fault"):
                 seen[key] = result

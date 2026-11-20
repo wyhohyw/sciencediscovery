@@ -510,7 +510,7 @@ def test_waiting_and_a_fault_retry_do_not_take_another_slot():
     tree._next_iteration = 2
     first = tree.add_node(_program(code, 1, {"job_status": "fault"}, valid=False, error="job failed"), float("-inf"), 0)
     assert getattr(first, "skipped", False) is True
-    assert tree._next_iteration == 2
+    assert tree._next_iteration == 1
     tree._next_iteration = 3
     second = tree.add_node(_program(code, 2, {"job_status": "fault"}, valid=False, error="job failed"), float("-inf"), 0)
     assert getattr(second, "skipped", False) is True

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import type { RemoteComputeClient } from "@sciencediscovery/executor";
 import {
@@ -30,6 +30,35 @@ import { syncRemoteWorkspace } from "../remote-runner.js";
 import type { SessionStore } from "../store.js";
 
 const MAX_DESIGN_BYTES = 80_000_000;
+const SUMMARY_PATH = "antigen_epitope/evolve_summary.md";
+const MAX_SUMMARY_BYTES = 1_000_000;
+
+export interface EvolveSummaryStep {
+  changeSummary?: string;
+  nodeIndex: number;
+  score: number | null;
+}
+
+/** The per-step note a finished search keeps, written as an artifact. */
+export function evolveSummaryMarkdown(steps: readonly EvolveSummaryStep[], bestNodeIndex?: number): string {
+  const lines = ["# 演进总结", "", "每一行是搜索记录下来的一步改动，以及这一步的分数。", ""];
+  if (steps.length === 0) {
+    lines.push("这次搜索没有留下可记录的改动。");
+  } else {
+    for (const step of [...steps].sort((left, right) => left.nodeIndex - right.nodeIndex)) {
+      const change = step.changeSummary?.trim() || "没有记录改动";
+      const score = typeof step.score === "number" ? String(step.score) : "没有分数";
+      lines.push(`- 节点 ${step.nodeIndex}：${change}，分数 ${score}`);
+    }
+    if (bestNodeIndex !== undefined) {
+      const best = steps.find((step) => step.nodeIndex === bestNodeIndex);
+      const score = best && typeof best.score === "number" ? `，分数 ${best.score}` : "";
+      lines.push("", `最好的节点是 ${bestNodeIndex}${score}。`);
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
+}
 
 export interface DesignContent {
   hash: string;
@@ -210,5 +239,55 @@ export async function registerStagedDesigns(options: {
         options.notify({ mediaType, sessionId: session.id, version: created.version });
       }
     }
+    await registerEvolveSummary({
+      notify: options.notify,
+      put: options.put,
+      sessionId: session.id,
+      store: options.store,
+    });
   }
+}
+
+/**
+ * Register `antigen_epitope/evolve_summary.md` as a session artifact.
+ *
+ * A search writes the note into the workspace. Until it is an artifact, the
+ * products panel only shows the measured structure and sequence.
+ */
+export async function registerEvolveSummary(options: {
+  fallbackMarkdown?: string;
+  notify: (input: RegisteredDesign) => void;
+  put: (bytes: Buffer) => Promise<DesignContent>;
+  sessionId: string;
+  store: SessionStore;
+}): Promise<void> {
+  const session = options.store.getSession(options.sessionId);
+  if (!session) return;
+  const root = options.store.workspacePath(session.id);
+  const absolute = join(root, ...SUMMARY_PATH.split("/"));
+  let bytes: Buffer | undefined;
+  try {
+    bytes = await readFile(absolute);
+  } catch {
+    if (!options.fallbackMarkdown) return;
+    await mkdir(dirname(absolute), { recursive: true });
+    await writeFile(absolute, options.fallbackMarkdown, "utf8");
+    bytes = Buffer.from(options.fallbackMarkdown, "utf8");
+  }
+  if (!bytes || bytes.length === 0 || bytes.length > MAX_SUMMARY_BYTES) return;
+  const visible = options.store.listSessionArtifactOutputs(session.id).map((output) => output.artifact.name);
+  if (visible.some((name) => name === SUMMARY_PATH || name.endsWith("/evolve_summary.md"))) return;
+  const created = await options.store.createArtifactVersion({
+    content: await options.put(bytes),
+    description: "搜索每一步的改动和分数",
+    kind: "markdown",
+    logicalName: SUMMARY_PATH,
+    mediaType: "text/markdown",
+    origin: "llm_declared",
+    originMeta: { role: "evolve-summary" },
+    sessionId: session.id,
+    sourcePath: SUMMARY_PATH,
+    title: "演进总结",
+  });
+  options.notify({ mediaType: "text/markdown", sessionId: session.id, version: created.version });
 }

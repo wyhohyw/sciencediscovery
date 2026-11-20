@@ -19,6 +19,7 @@
 
 - [使用PUCT优化一个文本压缩算法](domains/evolve-a-solution.md) — 完整跑一次程序演进搜索，并判断改进是不是真的。
 - [在 Ascend NPU 上设计抗体](domains/antibody-design.md) — 使用 RFdiffusion、ProteinMPNN 和 Protenix 完成一次可追溯的抗体设计与筛选。
+- [抗原表位与抗体进化案例指南](how-to/antigen-epitope-evolve-case-guide.md) — 在会话里做一次文献综述和复合物表位，再把起始 JSON 交给自带的 evolve。
 - [分析脓毒症分型评分的相关性与聚类](domains/analyze-sepsis-endotypes.md) — 使用 BiomniBench 真实数据，从上传 CSV 到分析、交付和质量评价。
 - [调研鸟类迁徙如何定位与导航](domains/literature-research.md) — 以 DRB-59 为例，配置检索资源、综合文献证据并检查报告。
 - [用 Idea Tree 探索水处理催化剂](domains/idea-tree-catalyst-design.md) — 提出并比较催化剂设计，选择下一步验证方向。

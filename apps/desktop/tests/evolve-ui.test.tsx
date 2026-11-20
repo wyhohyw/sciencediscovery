@@ -524,7 +524,12 @@ test("a round with no score yet is a blank spinning node and a stage bar", () =>
   assert.match(bar, /role="progressbar"/);
   assert.match(bar, /Protenix/);
   assert.equal(bar.includes("%"), false);
-  assert.equal((bar.match(/is-done/g) ?? []).length, 4);
+  assert.equal((bar.match(/is-done/g) ?? []).length, 3);
+  assert.match(bar, /写方案/);
+  assert.match(bar, /已提交/);
+  assert.equal((bar.match(/class="evolve-round-step[\s"]/g) ?? []).length, 5);
+  assert.equal((bar.match(/is-above/g) ?? []).length, 3);
+  assert.equal((bar.match(/is-below/g) ?? []).length, 2);
   assert.equal((bar.match(/is-current/g) ?? []).length, 1);
   const waiting = renderToStaticMarkup(<RoundProgress since={new Date().toISOString()} />);
   assert.match(waiting, /正在计算/);

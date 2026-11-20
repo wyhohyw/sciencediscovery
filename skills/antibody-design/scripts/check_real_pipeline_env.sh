@@ -283,7 +283,8 @@ import sys
 print("python:", sys.version.replace("\n", " "))
 print("exe:", sys.executable)
 PY
-  if (cd "$RF_DIFFUSION_DIR" && PYTHONPATH="$APP_DIR/../..:$RF_DIFFUSION_DIR/env:$RF_DIFFUSION_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" - <<'PY'
+  vendor_dir="$(cd "$SCRIPTS_DIR/../vendor" && pwd)"
+  if (cd "$RF_DIFFUSION_DIR" && PYTHONPATH="$vendor_dir:$APP_DIR/../..:$RF_DIFFUSION_DIR/env:$RF_DIFFUSION_DIR:${PYTHONPATH:-}" "$PYTHON_BIN" - <<'PY'
 import importlib
 mods = ["sympy", "safetensors", "mindspore", "mindscience", "sharker", "rfdiffusion"]
 for mod in mods:
