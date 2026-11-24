@@ -47,7 +47,7 @@ create_evolve_run(
   mode="npu_job",
   algorithm="puct",
   statement="把抗体设计的分数做高。",
-  howScored="分数越高越好。热点必须是表位的子集。",
+  howScored="分数越高越好。设计用的热点必须是表位的子集。打分始终用最初的完整表位，不随这一轮的热点名单变短。",
   startingPointText=<evolve_start.json 的全文>,
   editableFields=["hotspots", "num_designs", "diffuser_t", "final_step", "protenix_n_sample", "protenix_use_msa"],
   evaluatorSource=<上面选定的脚本全文>,

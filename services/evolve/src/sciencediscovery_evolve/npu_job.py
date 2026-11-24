@@ -359,6 +359,8 @@ def npu_domain(
             "final_step is an integer from 1 to diffuser_t. "
             "protenix_use_msa is true or false. "
             "hotspots must be a non-empty subset of epitope_residues. "
+            "The contact term of the score always uses the full epitope_residues list. "
+            "Editing hotspots changes the design target only. "
             "A value outside these ranges is not scored and does not count. "
             "Reply with one JSON object and nothing else.\n"
             f"{program.code}"

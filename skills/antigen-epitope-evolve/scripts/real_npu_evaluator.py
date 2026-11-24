@@ -349,13 +349,16 @@ exit $?
     shell = "/bin/bash" if os.path.exists("/bin/bash") else "/usr/bin/bash"
     print("EVOLVE_STAGE starting", flush=True)
     returncode, stdout = _run_pipeline(shell, command, env, root)
+    # Design may use a shorter hotspot list. The score always uses the original epitope.
+    rescore_error = _rescore_epitope(root, target, epitope)
     rows = []
-    for path in glob.glob(root + "/05_screening/protenix_screening_summary.csv"):
-        with open(path, newline="", encoding="utf-8") as handle:
+    summary = os.path.join(root, "05_screening", "protenix_screening_summary.csv")
+    if not rescore_error and os.path.isfile(summary):
+        with open(summary, newline="", encoding="utf-8") as handle:
             rows = list(csv.DictReader(handle))
     row = rows[0] if rows else {}
     if not row.get("screen_score"):
-        detail = stdout.strip().replace("\n", " ")[-400:]
+        detail = rescore_error or stdout.strip().replace("\n", " ")[-400:]
         emit({
             "device": "npu",
             "score": 0.0,
@@ -375,11 +378,50 @@ exit $?
         "decision": row.get("decision", ""),
         "iptm": row.get("iptm", ""),
         "hotspot_prob": row.get("hotspot_prob", ""),
+        "scored_hotspots": "[" + ",".join(epitope) + "]",
         "pipeline_status": returncode,
         "root": root,
         "ran": True,
     })
     return 0
+
+
+def _rescore_epitope(root, target, epitope):
+    """Rewrite the screening summary against the original epitope.
+
+    The pipeline screens whatever hotspot list designed this candidate. That
+    list can shrink during search. Return "" when there is no Protenix output
+    yet, so the caller can report the pipeline error. Otherwise return an
+    error string, and do not leave the design-hotspot score in place.
+    """
+    protenix_root = os.path.join(root, "04_protenix_output")
+    if not os.path.isdir(protenix_root):
+        return ""
+    if not epitope:
+        return "epitope_residues missing"
+    script = "/home/lujiale/antibody_pipeline/protenix_helpers/screen_protenix_results.py"
+    python_bin = "/home/miniconda3/envs/mindspore_py12/bin/python"
+    if not os.path.isfile(script) or not os.path.isfile(python_bin):
+        return "epitope rescore script missing"
+    out_dir = os.path.join(root, "05_screening")
+    os.makedirs(out_dir, exist_ok=True)
+    proc = subprocess.run(
+        [
+            python_bin, script,
+            "--protenix-root", protenix_root,
+            "--out-dir", out_dir,
+            "--target-pdb", target,
+            "--hotspots", "[" + ",".join(epitope) + "]",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if proc.returncode not in (0, 3):
+        detail = (proc.stdout or "").strip().replace("\n", " ")[-400:]
+        return detail or f"epitope rescore exited {proc.returncode}"
+    return ""
 
 
 def _run_pipeline(shell, command, env, root):
