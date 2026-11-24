@@ -55,6 +55,7 @@ test("the deployable runner bundle carries the runner and every workspace packag
   // path, so the deployed tree keeps the runner where that path still lands.
   assert.ok(paths.has("services/runner/workloads/npu-workloads.default.json"));
   assert.ok(paths.has("node_modules/@sciencediscovery/external-urls/external-urls.json"));
+  assert.ok(paths.has("node_modules/@sciencediscovery/network/src/index.mjs"));
   // Test files and type declarations would double the transfer without ever
   // being loaded by a running runner.
   assert.equal(entries.some((entry) => /\.test\.js$|\.d\.ts$|\.map$/.test(entry.path)), false);

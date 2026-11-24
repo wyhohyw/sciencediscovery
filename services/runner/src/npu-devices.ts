@@ -50,7 +50,23 @@ import { procMountArguments, type SandboxProcMode } from "@sciencediscovery/sand
 const execFileAsync = promisify(execFile);
 
 /** Host management nodes every Ascend workload needs alongside its cards. */
-export const NPU_MANAGEMENT_DEVICES = ["/dev/davinci_manager", "/dev/devmm_svm", "/dev/hisi_hdc"] as const;
+/**
+ * Driver nodes every sandbox must see.
+ *
+ * On 910C, `npu-smi` fails with "get board type failed, ret -9005" unless
+ * every `/dev/davinci*` node is present, not only the card the run selected.
+ * The selected card is still bound on its own, remapped from zero. The rest
+ * stay at their host numbers so the driver can enumerate them.
+ */
+export const NPU_MANAGEMENT_DEVICES = [
+  "/dev/davinci_manager",
+  "/dev/devmm_svm",
+  "/dev/hisi_hdc",
+  "/dev/davinci1", "/dev/davinci2", "/dev/davinci3", "/dev/davinci4",
+  "/dev/davinci5", "/dev/davinci6", "/dev/davinci7", "/dev/davinci8",
+  "/dev/davinci9", "/dev/davinci10", "/dev/davinci11", "/dev/davinci12",
+  "/dev/davinci13", "/dev/davinci14", "/dev/davinci15",
+] as const;
 
 /** Candidate `npu-smi` locations; 910B images ship it in one of these. */
 const NPU_SMI_CANDIDATES = ["/usr/local/bin/npu-smi", "/usr/local/sbin/npu-smi", "/usr/bin/npu-smi"] as const;

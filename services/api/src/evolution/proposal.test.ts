@@ -409,6 +409,36 @@ test("a refusal names what to change, because its reader is the designer", async
     const result = await startProposedRun(proposal(over), d);
     assert.match(result.refusedBecause ?? "", expected, JSON.stringify(over));
   }
+  const cdr = await startProposedRun(proposal({
+    algorithm: "cdr",
+    editableFields: ["sequence"],
+    evaluatorSource: "print(1)\n",
+    expansions: 1,
+    mode: "npu_job",
+    workers: 1,
+  }), d);
+  assert.equal(cdr.refusedBecause, undefined);
+  assert.equal(cdr.run?.id, "run-1");
+  const fromFile = await startProposedRun(proposal({
+    algorithm: "cdr",
+    editableFields: ["sequence"],
+    evaluatorPath: "evo/evaluator.py",
+    evaluatorSource: undefined,
+    expansions: 1,
+    mode: "npu_job",
+    workers: 1,
+  }), d);
+  assert.equal(fromFile.refusedBecause, undefined);
+  const both = await startProposedRun(proposal({
+    algorithm: "cdr",
+    editableFields: ["sequence"],
+    evaluatorPath: "evo/evaluator.py",
+    evaluatorSource: "print(1)\n",
+    expansions: 1,
+    mode: "npu_job",
+    workers: 1,
+  }), d);
+  assert.match(both.refusedBecause ?? "", /not both/);
 });
 
 test("an evaluator too large to write inline can be pointed at, and its bytes are what runs", async () => {

@@ -86,7 +86,11 @@ def interpret_npu_job(
     if status in NOT_FINISHED:
         return False, {"job_status": "waiting"}, "job not finished"
     if status in FAULT_STATUSES:
-        return False, {"job_status": "fault"}, f"job {status}"
+        detail = str(job.get("detail") or "").strip()
+        reason = f"job {status}"
+        if detail:
+            reason = f"{reason}: {detail}"
+        return False, {"job_status": "fault"}, reason
     if status != "completed":
         return False, {"job_status": "fault"}, "job status unknown"
     if not artifact:
@@ -121,7 +125,51 @@ def program_with_candidate(fixed: str, candidate: str) -> str:
         raise NpuJobError("the candidate is not a JSON object")
     encoded = json.dumps(parsed, separators=(",", ":"), sort_keys=True)
     binding = "_EVOLVE_CANDIDATE = __import__('json').loads(" + repr(encoded) + ")"
-    return binding + "\n" + fixed
+    # A future import has to stay at the top of the file. The CDR evaluator
+    # starts with one, and putting the binding above it makes every job die
+    # with SyntaxError before it folds.
+    return _bind_after_preamble(fixed, binding)
+
+
+def _skip_comments_and_blanks(lines: list[str], index: int) -> int:
+    while index < len(lines) and (not lines[index].strip() or lines[index].lstrip().startswith("#")):
+        index += 1
+    return index
+
+
+def _skip_docstring(lines: list[str], index: int) -> int:
+    if index >= len(lines):
+        return index
+    stripped = lines[index].lstrip()
+    quote = stripped[:3]
+    if quote not in {'"""', "'''"}:
+        return index
+    if quote in stripped[3:]:
+        return index + 1
+    index += 1
+    while index < len(lines) and quote not in lines[index]:
+        index += 1
+    return index + 1 if index < len(lines) else index
+
+
+def _bind_after_preamble(fixed: str, binding: str) -> str:
+    """Place the binding after the header Python requires to come first.
+
+    A blank line between the module docstring and ``from __future__`` still
+    belongs to that header. Inserting the binding there is a statement, and
+    the future import then fails.
+    """
+    lines = fixed.splitlines(keepends=True)
+    index = 1 if lines and lines[0].startswith("#!") else 0
+    index = _skip_comments_and_blanks(lines, index)
+    index = _skip_docstring(lines, index)
+    index = _skip_comments_and_blanks(lines, index)
+    while index < len(lines) and lines[index].lstrip().startswith("from __future__ import"):
+        index += 1
+        index = _skip_comments_and_blanks(lines, index)
+    if index == 0:
+        return binding + "\n" + fixed
+    return "".join(lines[:index]) + binding + "\n" + "".join(lines[index:])
 
 
 class RunnerNpuClient:
@@ -207,7 +255,11 @@ class RunnerNpuClient:
                 time.sleep(self.poll_seconds)
                 continue
             if state != "completed":
-                return {"status": state or "unknown", "execution_id": execution_id}, None
+                job = {"status": state or "unknown", "execution_id": execution_id}
+                detail = _failure_detail(record)
+                if detail:
+                    job["detail"] = detail
+                return job, None
             stdout = str((record.get("result") or {}).get("stdout") or "")
             return {"status": "completed", "execution_id": execution_id}, _artifact(stdout)
 
@@ -280,6 +332,17 @@ class RunnerNpuClient:
             return status, {}
         loaded = json.loads(payload)
         return status, loaded
+
+
+def _failure_detail(record: Mapping[str, Any]) -> str:
+    """The last interpreter line, so a failed job is not only the word failed."""
+    result = record.get("result")
+    if not isinstance(result, dict):
+        return ""
+    text = str(result.get("stderr") or result.get("stdout") or "").strip()
+    if not text:
+        return ""
+    return text.splitlines()[-1].strip()[:300]
 
 
 def _artifact(stdout: str) -> Optional[dict[str, Any]]:

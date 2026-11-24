@@ -193,6 +193,32 @@ def test_the_candidate_is_data_for_the_fixed_program_and_each_job_is_new():
         program_with_candidate(FIXED, "print('rewrite')")
 
 
+def test_a_failed_job_keeps_the_interpreter_line():
+    ok, _metrics, reason = interpret_npu_job(
+        {"status": "failed", "detail": "SyntaxError: from __future__ imports must occur at the beginning of the file"},
+        None,
+        metric_key="score",
+    )
+    assert ok is False
+    assert "SyntaxError" in reason
+
+
+def test_a_future_import_stays_above_the_candidate_binding():
+    source = (
+        "# header\n"
+        '"""module doc"""\n'
+        "\n"
+        "from __future__ import annotations\n"
+        "value = _EVOLVE_CANDIDATE\n"
+    )
+    program = program_with_candidate(source, '{"sequence": "A"}')
+    assert program.startswith('# header\n"""module doc"""\n\nfrom __future__ import annotations\n')
+    assert program.split("from __future__ import annotations\n", 1)[1].startswith("_EVOLVE_CANDIDATE")
+    values: dict[str, object] = {}
+    exec(program, values)
+    assert values["value"] == {"sequence": "A"}
+
+
 def test_the_client_submits_a_signed_shell_and_waits_for_npu(tmp_path):
     del tmp_path
     scripted = [

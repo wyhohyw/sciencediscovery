@@ -198,9 +198,9 @@ export class SshConnection implements SshSession {
       };
       const onClose = (): void => finish(new Error("SSH connection closed during Runner binary transfer"));
       const timer = setTimeout(() => {
-        finish(new Error("Runner binary transfer timed out after 5 minutes"));
+        finish(new Error("Runner binary transfer timed out after 20 minutes"));
         this.close();
-      }, 300_000);
+      }, 1_200_000);
       this.client.once("close", onClose);
       this.client.sftp((error, sftp) => {
         if (error) { finish(new Error("Could not open SSH SFTP channel for Runner deployment")); return; }

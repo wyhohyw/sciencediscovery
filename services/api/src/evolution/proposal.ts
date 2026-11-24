@@ -360,7 +360,9 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     return "there is no starting point. Point startingPointPath at a file in the workspace, "
       + "or write the starting point into startingPointText";
   }
-  if (proposal.expansions < proposal.workers * 4) {
+  // CDR spends one fold per expansion. It does not fork a worker wave, so a
+  // budget of one child is a real run, not a flat tree.
+  if (proposal.algorithm !== "cdr" && proposal.expansions < proposal.workers * 4) {
     return `${proposal.workers} workers needs at least ${proposal.workers * 4} expansions, or `
       + "the first wave spends most of the budget forking only the root and the tree stays flat";
   }
@@ -410,7 +412,14 @@ function shapeOf(proposal: EvolveRunProposal): string | undefined {
     }
   }
   if (proposal.mode === "npu_job") {
-    if (!proposal.evaluatorSource?.trim()) return "npu_job needs the fixed program that computes the score";
+    if (proposal.evaluatorSource?.trim() && proposal.evaluatorPath?.trim()) {
+      return "npu_job takes evaluatorSource or evaluatorPath, not both — pass the program text "
+        + "or point at the file that holds it";
+    }
+    if (!proposal.evaluatorSource?.trim() && !proposal.evaluatorPath?.trim()) {
+      return "npu_job needs the fixed program that computes the score: write it into "
+        + "evaluatorSource, or point evaluatorPath at the file";
+    }
     if (!proposal.editableFields?.length) return "npu_job needs editableFields: the JSON fields this run may change";
   }
   if (proposal.mode === "test_gate") {
@@ -475,7 +484,9 @@ async function assembleGoal(
   const scoringCas = proposal.mode === "llm_judge"
     ? await deps.store({ content: proposal.rubric! })
     : proposal.mode === "npu_job"
-      ? await deps.store({ content: proposal.evaluatorSource! })
+      ? proposal.evaluatorPath?.trim() && !proposal.evaluatorSource?.trim()
+        ? await storePath(deps, "evaluatorPath", proposal.evaluatorPath)
+        : await deps.store({ content: proposal.evaluatorSource! })
       : proposal.mode === "custom_script"
         ? await storeEvaluator(proposal, deps)
       : "";

@@ -4,7 +4,7 @@
 
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -38,7 +38,7 @@ export async function buildRunner(architectures = ["x86_64", "aarch64"]) {
   const bundle = await packRunnerBundle();
   const bootstrap = await readFile(join(root, "scripts/binary-release/runner-main.cjs"));
   const sourceId = createHash("sha256").update(bundle.id).update(bootstrap).update(JSON.stringify(manifest.node)).digest("hex");
-  const workRoot = join(root, ".tmp/runner-sea-build");
+  const workRoot = process.env.RUNNER_SEA_WORK?.trim() || join(root, ".tmp/runner-sea-build");
   await mkdir(workRoot, { recursive: true });
   for (const arch of architectures) {
     const plan = resolveSeaRuntimePlan(manifest, arch);
@@ -68,7 +68,8 @@ export async function buildRunner(architectures = ["x86_64", "aarch64"]) {
       const bytes = await readFile(executable);
       const metadata = { sourceId, architecture: targetArch, id: createHash("sha256").update(bytes).digest("hex"), size: bytes.length };
       await mkdir(outputDir, { recursive: true });
-      await rename(executable, output);
+      await copyFile(executable, output);
+      await rm(executable, { force: true });
       await writeFile(metadataPath, JSON.stringify(metadata) + "\n");
       console.log(`Runner SEA linux-${targetArch}: ${bytes.length} bytes`);
     } finally { await rm(stage, { recursive: true, force: true }); }

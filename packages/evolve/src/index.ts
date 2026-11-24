@@ -214,13 +214,13 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
       maxLength: 2_000, minLength: 1,
     })),
     evaluatorPath: Type.Optional(Type.String({
-      description: "custom_script only: a workspace file holding the whole evaluator, instead "
+      description: "custom_script or npu_job: a workspace file holding the whole evaluator, instead "
         + "of writing it inline in evaluatorSource. Use it when the evaluator is too large to "
-        + "write in one tool call — a frozen truth table of thousands of points, for instance: "
-        + "build the file with run_shell, check it, then point here. Relative, or the "
-        + "/workspace/... path as you saw it in a tool result. The file is read ONCE when this "
-        + "call is made, checked for the shard/result contract, stored and frozen — editing it "
-        + "afterwards does not change the run. Exactly one of this and evaluatorSource.",
+        + "write in one tool call. Relative, or the /workspace/... path as you saw it in a tool "
+        + "result. The file is read ONCE when this call is made and frozen — editing it afterwards "
+        + "does not change the run. custom_script also checks the shard/result contract. npu_job "
+        + "stores the file as the fixed program and does not apply that contract. Exactly one of "
+        + "this and evaluatorSource.",
       maxLength: 2_000, minLength: 1,
     })),
     evaluatorSource: Type.Optional(Type.String({
@@ -268,7 +268,8 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
         + "yours, and the framework can no longer do the splitting or the freezing for you. "
         + "llm_judge: only when quality is a reading rather than a computation. "
         + "npu_job: the fixed evaluator runs on this conversation's selected runner. "
-        + "The starting point is JSON. editableFields names the fields that may change.",
+        + "The starting point is JSON. editableFields names the fields that may change. "
+        + "Pass the program with evaluatorPath when it is already a workspace file; do not paste it into evaluatorSource.",
     }),
     normalize: Type.Optional(Type.Union([
       Type.Literal("identity"), Type.Literal("reciprocal"),

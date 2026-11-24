@@ -37,7 +37,11 @@ const WORKSPACE_SCOPE = "@sciencediscovery/";
 const RUNNER_BUNDLE_PREFIX = "services/runner";
 
 /** Directories of a package that a running runner actually reads. */
-const PACKAGE_DIRECTORIES = new Map([[RUNNER_PACKAGE, ["dist", "workloads"]]]);
+const PACKAGE_DIRECTORIES = new Map([
+  [RUNNER_PACKAGE, ["dist", "workloads"]],
+  // This package is the source file it exports. There is no dist to copy.
+  ["@sciencediscovery/network", ["src"]],
+]);
 const DEFAULT_PACKAGE_DIRECTORIES = ["dist"];
 
 /** The runner entry point, relative to the deploy root. */
