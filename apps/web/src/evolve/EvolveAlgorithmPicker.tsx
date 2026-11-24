@@ -57,6 +57,13 @@ const ALGORITHMS: readonly AlgorithmOption[] = [
     featuresKey: "evolve.picker.openevolve.features",
     suitedForKey: "evolve.picker.openevolve.suitedfor",
   },
+  {
+    id: "cdr",
+    label: "CDR",
+    taglineKey: "evolve.picker.cdr.tagline",
+    featuresKey: "evolve.picker.cdr.features",
+    suitedForKey: "evolve.picker.cdr.suitedfor",
+  },
 ];
 
 export function EvolveAlgorithmPicker({ onSelect, onDismiss, selected }: EvolveAlgorithmPickerProps) {

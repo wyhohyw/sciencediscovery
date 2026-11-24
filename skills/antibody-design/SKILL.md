@@ -291,3 +291,10 @@ antibody_pipeline/runs/<run_name>/05_screening/protenix_screening_summary.csv
 Zero candidates passing the scientific screen is valid when every pipeline
 stage and both screening reports completed. A hotspot mapping error is a failed
 screening run, not zero contacts.
+
+## Companion lookups
+
+These skills answer a question about an existing record or structure. They do
+not launch this pipeline: `pdb-lookup`, `uniprot-lookup`, `pubmed-lookup`,
+`epitope-analysis`, `structure-analysis`, `evolutionary-analysis`, and
+`developability-filter`.

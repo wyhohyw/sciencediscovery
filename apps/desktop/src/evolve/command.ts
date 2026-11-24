@@ -46,7 +46,7 @@ export function isEvolveSkill(skill: { id: string }): boolean {
  *  that itself begins with a flag is introduced by a line break, so the break
  *  — not the dash — is what ends the flags. A goal that merely mentions a
  *  flag keeps its own text. */
-const LEADING_FLAGS = /^[ \t]*(?:--(?:algorithm[ \t]+(?:puct|openevolve)|no-confirm|allow-direct)\b[ \t]*)+/;
+const LEADING_FLAGS = /^[ \t]*(?:--(?:algorithm[ \t]+(?:puct|openevolve|cdr)|no-confirm|allow-direct)\b[ \t]*)+/;
 
 export function isEvolveCommand(text: string): boolean {
   return new RegExp(`^${EVOLVE_COMMAND}(?:\\s|$)`).test(text.trim());
@@ -156,7 +156,7 @@ export function designHasSearch(
  *  than on the dialog's own default, which would replace what was typed. */
 export function evolveCommandAlgorithm(text: string): EvolveAlgorithm | undefined {
   if (!isEvolveCommand(text)) return undefined;
-  const match = /--algorithm[ \t]+(puct|openevolve)\b/.exec(leadingFlags(text));
+  const match = /--algorithm[ \t]+(puct|openevolve|cdr)\b/.exec(leadingFlags(text));
   return match?.[1] as EvolveAlgorithm | undefined;
 }
 

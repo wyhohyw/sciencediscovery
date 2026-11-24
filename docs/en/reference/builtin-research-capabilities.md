@@ -26,7 +26,7 @@ Bundled integration does not guarantee service availability, unrestricted downlo
 | Citation and numerical checks | `citation-reviewer`, `computation-reviewer` | Check source support and numerical consistency |
 | Material-design exploration | `creative-material-design`, `assessment-screening`, `insight-aggregator` | Propose candidates, assess perspectives, and summarize feedback |
 | Autonomous research and artifact improvement | `idea-tree-team`, `evolve-design` | Prepare Idea Tree inputs and design/launch artifact evolution |
-| Structures and antibody workflows | `structure-pocket-inspection`, `antibody-design` | Inspect structures and organize antibody-design workflows |
+| Structures and antibody workflows | `structure-pocket-inspection`, `antibody-design`, `pdb-lookup`, `uniprot-lookup`, `pubmed-lookup`, `epitope-analysis`, `structure-analysis`, `evolutionary-analysis`, `developability-filter` | Inspect structures, read public records, and run contact, interaction, lineage, and sequence-motif checks |
 | Reusable methods | `skill-creator` | Draft reviewable Skill packages |
 
 A Skill being installed or available does not mean the model used it in a particular run. Inspect execution records and outputs.

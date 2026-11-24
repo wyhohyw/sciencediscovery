@@ -53,7 +53,7 @@ import type {
 } from "@sciencediscovery/schema";
 import { SOLVED_THRESHOLD_BY_SCORING } from "@sciencediscovery/schema";
 
-import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TOKENS, perCallCeiling } from "./call-budget.js";
+import { DEFAULT_MAX_SECONDS, DEFAULT_MAX_TOKENS, NPU_CANDIDATE_TIMEOUT_SECONDS, NPU_MAX_SECONDS, NPU_MAX_TOKENS, perCallCeiling } from "./call-budget.js";
 import type { EvolveOrchestrator } from "./orchestrator.js";
 import type { EvolveSandboxCapability } from "./sandbox.js";
 import { EvolveSidecarError } from "./sidecar.js";
@@ -508,11 +508,11 @@ async function assembleGoal(
       ? { allowUnisolated: true }
       : {}),
     budget: {
-      candidateTimeoutSeconds: proposal.mode === "npu_job" ? 1_500 : 180,
+      candidateTimeoutSeconds: proposal.mode === "npu_job" ? NPU_CANDIDATE_TIMEOUT_SECONDS : 180,
       expansions: proposal.expansions,
       maxCostCents: 0,
-      maxSeconds: DEFAULT_MAX_SECONDS,
-      maxTokens: DEFAULT_MAX_TOKENS,
+      maxSeconds: proposal.mode === "npu_job" ? NPU_MAX_SECONDS : DEFAULT_MAX_SECONDS,
+      maxTokens: proposal.mode === "npu_job" ? NPU_MAX_TOKENS : DEFAULT_MAX_TOKENS,
       // Enough for a reasoning model to think *and* answer when thinking is on;
       // a ceiling below that produced whole runs of hidden reasoning and no
       // program, which read as a model that could not write code. Keyed on the
@@ -601,7 +601,7 @@ async function measureOf(
         kind: "custom_script", scriptCas: scoringCas, split, timeoutSeconds: 180,
       };
     case "npu_job":
-      return { kind: "npu_job", scriptCas: scoringCas, timeoutSeconds: 1_500 };
+      return { kind: "npu_job", scriptCas: scoringCas, timeoutSeconds: NPU_CANDIDATE_TIMEOUT_SECONDS };
     case "llm_judge":
       return {
         blind: true,

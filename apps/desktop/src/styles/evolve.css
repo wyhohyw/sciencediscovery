@@ -364,9 +364,9 @@
   flex-direction: column;
 }
 
-/* The two choices share the row edge to edge, starting on the legend's left
-   edge like every other control in the form. Equal halves with one measured
-   gap: the choice spans the form without either button reading as the larger
+/* The choices share the row edge to edge, starting on the legend's left
+   edge like every other control in the form. Equal widths with one measured
+   gap: the choice spans the form without any button reading as the larger
    target. */
 .evolve-algorithm-options {
   display: flex;
@@ -375,9 +375,9 @@
   gap: 10px;
 }
 
-/* One chip and the card that belongs to it. The two share this box, so the
+/* One chip and the card that belongs to it. They share this box, so the
    card opens under the button that raised it rather than under the middle of
-   the row. Both boxes divide the row evenly and shrink with it. */
+   the row. The boxes divide the row evenly and shrink with it. */
 .evolve-algorithm-option {
   position: relative;
   display: flex;

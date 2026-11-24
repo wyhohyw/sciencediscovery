@@ -479,12 +479,17 @@ export class EvolveOrchestrator {
       // The banner used to promise "it can be resumed" to every run regardless, so a
       // user who lost fifteen candidates to a restart went looking for a resume
       // that does not exist.
-      await this.store.finishRun(run.id, "failed", run.algorithm === "puct"
-        ? "the control plane restarted and this search was interrupted. PUCT cannot be "
-          + "resumed (the tree cannot be rebuilt from the event log); the candidates it "
-          + "already produced can be read, but continuing means starting again with the "
-          + "same design"
-        : "the control plane restarted and this search was interrupted; it can be resumed");
+      await this.store.finishRun(run.id, "failed", run.algorithm === "openevolve"
+        ? "the control plane restarted and this search was interrupted; it can be resumed"
+        : run.algorithm === "cdr"
+          ? "the control plane restarted and this search was interrupted. CDR cannot be "
+            + "resumed (the population is not rebuilt from the event log); the candidates it "
+            + "already produced can be read, but continuing means starting again with the "
+            + "same design"
+          : "the control plane restarted and this search was interrupted. PUCT cannot be "
+            + "resumed (the tree cannot be rebuilt from the event log); the candidates it "
+            + "already produced can be read, but continuing means starting again with the "
+            + "same design");
       adopted += 1;
     }
     if (adopted) apiLog.info("evolve_runs_adopted", { count: adopted });

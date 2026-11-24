@@ -29,7 +29,7 @@
 
 const COMMAND = "/evolve-design";
 
-const LEADING_FLAGS = /^[ \t]*(?:--(?:algorithm[ \t]+(?:puct|openevolve)|no-confirm|allow-direct)\b[ \t]*)+/;
+const LEADING_FLAGS = /^[ \t]*(?:--(?:algorithm[ \t]+(?:puct|openevolve|cdr)|no-confirm|allow-direct)\b[ \t]*)+/;
 
 /** Whether this text is a `/evolve-design` command at the start of a message. */
 export function isEvolveCommand(content: string): boolean {

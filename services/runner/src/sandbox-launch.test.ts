@@ -25,6 +25,7 @@ import { resetSandboxCapabilityCache, type SandboxProcMode } from "@sciencedisco
 import {
   buildSandboxLaunch,
   hostInterpreterMaskArguments,
+  openddeSandboxEnvironment,
   resolveHostRuntimeSupport,
   sandboxIdentityBindArguments,
   sandboxIdentityName,
@@ -74,6 +75,16 @@ function assertBaselineIsolation(args: string[]): void {
   // /proc is provided one way or the other; it is never simply dropped.
   assert.ok(args.includes("--proc") || args.join(" ").includes("--ro-bind /proc /proc"));
 }
+
+describe("OpenDDE sandbox environment", () => {
+  test("keeps only the fold settings that are set", () => {
+    assert.deepEqual(openddeSandboxEnvironment({
+      OPENDDE_CODE_DIR: " /data/OpenDDE ",
+      OPENDDE_CHECKPOINT: "",
+      OTHER: "no",
+    }), { OPENDDE_CODE_DIR: "/data/OpenDDE" });
+  });
+});
 
 describe("sandbox launch arguments", () => {
   test("mounts a fresh /proc and adds --disable-userns in the full profile", () => {

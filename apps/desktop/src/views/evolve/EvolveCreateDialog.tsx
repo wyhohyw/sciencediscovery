@@ -24,7 +24,7 @@
  * user to finish or replace and send themselves. The dialog never sends, so
  * the composer keeps the last word.
  *
- * The two searches are chips; hovering or focusing one raises the illustrated
+ * The searches are chips; hovering or focusing one raises the illustrated
  * card that used to sit under it, with the picture above the words. The card
  * floats over the form rather than taking a row of its own: the description is
  * a reading, not a step, so it must not push the task and the settings down or
@@ -76,7 +76,7 @@ export interface EvolveCreateDialogProps {
   status: EvolveStatus;
 }
 
-const VARIANTS = ["puct", "openevolve"] as const;
+const VARIANTS = ["puct", "openevolve", "cdr"] as const;
 
 export function EvolveCreateDialog({
   archived,
@@ -206,6 +206,11 @@ export function EvolveCreateDialog({
       bullets: TEXT.evolve.create.puctPoints,
       label: TEXT.evolve.create.puctName,
       tags: TEXT.evolve.create.puctTags,
+    },
+    cdr: {
+      bullets: TEXT.evolve.create.cdrPoints,
+      label: TEXT.evolve.create.cdrName,
+      tags: TEXT.evolve.create.cdrTags,
     },
   };
 

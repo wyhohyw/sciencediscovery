@@ -26,7 +26,7 @@
 | 引用与计算核查 | `citation-reviewer`、`computation-reviewer` | 检查引用支撑和数值一致性 |
 | 材料方案探索 | `creative-material-design`、`assessment-screening`、`insight-aggregator` | 生成候选、分视角评价并汇总反馈 |
 | 自主研究与产物改进 | `idea-tree-team`、`evolve-design` | 准备 Idea Tree 输入、设计和发起产物演进 |
-| 结构与抗体工作流 | `structure-pocket-inspection`、`antibody-design` | 检查结构并组织抗体设计流程 |
+| 结构与抗体工作流 | `structure-pocket-inspection`、`antibody-design`、`pdb-lookup`、`uniprot-lookup`、`pubmed-lookup`、`epitope-analysis`、`structure-analysis`、`evolutionary-analysis`、`developability-filter` | 检查结构、查询公开条目，并做表位距离、相互作用、搜索谱系和序列位点扫描 |
 | 方法沉淀 | `skill-creator` | 起草可审核的 Skill 包 |
 
 Skill 是否安装或可用，不等于模型本次一定读取或执行。应以执行记录和最终产物为准。

@@ -57,7 +57,7 @@ create_evolve_run(
 )
 ```
 
-`hotspots` 放在第一位。种子保持 `"42"`，不要放进可改字段。可改范围：`num_designs` 1 到 8，`protenix_n_sample` 1 到 4，`diffuser_t` 15 到 30，`final_step` 从 1 到 `diffuser_t`，`protenix_use_msa` 是布尔值。短验证用 1 个设计、1 个样本、MSA 关。正式测试用 MSA 开、`num_designs` 4、`protenix_n_sample` 1。
+`hotspots` 放在第一位。种子保持 `"42"`，不要放进可改字段。可改范围：`num_designs` 1 到 8，`protenix_n_sample` 1 到 5，`diffuser_t` 15 到 40，`final_step` 从 1 到 `diffuser_t`，`protenix_use_msa` 是布尔值。超出这个范围的候选不会启动流水线，也不占搜索节点。短验证用 1 个设计、1 个样本、MSA 关。正式测试用 MSA 开、`num_designs` 4、`protenix_n_sample` 1。
 
 搜索结束时，最佳设计的序列和结构会记成产物。不要另起模型进程，也不要自己再跑一轮流水线。
 

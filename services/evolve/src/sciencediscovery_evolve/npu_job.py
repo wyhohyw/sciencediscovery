@@ -93,6 +93,11 @@ def interpret_npu_job(
         return False, {"job_status": "fault"}, "artifact missing"
     if artifact.get("device") != "npu":
         return False, {"job_status": "fault"}, "device is not npu"
+    # A candidate the evaluator refused never ran. Storing that as a measured
+    # zero would spend a search node on a value outside the allowed range.
+    if artifact.get("ran") is False:
+        reason = str(artifact.get("error") or "the candidate did not run")
+        return False, {"job_status": "rejected", "score": float("-inf")}, reason
     value = artifact.get(metric_key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False, {"job_status": "fault"}, f"{metric_key} missing"
@@ -348,6 +353,13 @@ def npu_domain(
         return (
             f"{goal}\n"
             "Higher is better. Change one allowed field. "
+            "num_designs is an integer from 1 to 8. "
+            "protenix_n_sample is an integer from 1 to 5. "
+            "diffuser_t is an integer from 15 to 40. "
+            "final_step is an integer from 1 to diffuser_t. "
+            "protenix_use_msa is true or false. "
+            "hotspots must be a non-empty subset of epitope_residues. "
+            "A value outside these ranges is not scored and does not count. "
             "Reply with one JSON object and nothing else.\n"
             f"{program.code}"
         )

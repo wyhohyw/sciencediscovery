@@ -142,10 +142,39 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** Forwarded only when this control plane asked for host directories inside the sandbox. */
-function sandboxBindEnv(): string {
-  const raw = process.env.SCIENCE_AGENT_SANDBOX_RO_BINDS?.trim();
-  return raw ? ` SCIENCE_AGENT_SANDBOX_RO_BINDS=${shellQuote(raw)}` : "";
+/**
+ * Names copied from this control plane onto the remote Runner process.
+ * The sandbox reads them there: bind mounts, and the OpenDDE settings that
+ * an NPU launch copies in. They are not given to the local Runner.
+ */
+const REMOTE_RUNNER_ENV = [
+  "LAYERNORM_TYPE",
+  "OPENDDE_CHECKPOINT",
+  "OPENDDE_CODE_DIR",
+  "OPENDDE_CYCLE",
+  "OPENDDE_DEVICE",
+  "OPENDDE_PYTHON",
+  "OPENDDE_ROOT_DIR",
+  "OPENDDE_STEP",
+  "SCIENCE_AGENT_SANDBOX_RO_BINDS",
+] as const;
+
+/**
+ * Extra `env` assignments for the remote Runner.
+ *
+ * `SCIENCE_AGENT_REMOTE_BWRAP_PATH` is this control plane's name for the
+ * bubblewrap binary on that machine. It is published to the Runner as
+ * `SCIENCE_AGENT_BWRAP_PATH`, so the local Runner keeps its own binary.
+ */
+export function remoteRunnerLaunchEnv(source: NodeJS.ProcessEnv = process.env): string {
+  const parts: string[] = [];
+  for (const name of REMOTE_RUNNER_ENV) {
+    const value = source[name]?.trim();
+    if (value) parts.push(` ${name}=${shellQuote(value)}`);
+  }
+  const bwrap = source.SCIENCE_AGENT_REMOTE_BWRAP_PATH?.trim();
+  if (bwrap) parts.push(` SCIENCE_AGENT_BWRAP_PATH=${shellQuote(bwrap)}`);
+  return parts.join("");
 }
 
 /**
@@ -786,7 +815,7 @@ export class RemoteComputeClient {
     const script = [
       "set -eu",
       "test \"$(uname -s)\" = Linux",
-      `exec env SCIENCE_AGENT_RUNNER_SOCKET=${shellQuote(socketPath)} SCIENCE_AGENT_RUNNER_TOKEN=${shellQuote(token)} SCIENCE_AGENT_DATA_DIR=${shellQuote(prepared.dataDir)}${sandboxBindEnv()} ${prepared.startCommand}`,
+      `exec env SCIENCE_AGENT_RUNNER_SOCKET=${shellQuote(socketPath)} SCIENCE_AGENT_RUNNER_TOKEN=${shellQuote(token)} SCIENCE_AGENT_DATA_DIR=${shellQuote(prepared.dataDir)}${remoteRunnerLaunchEnv()} ${prepared.startCommand}`,
       "",
     ].join("\n");
 

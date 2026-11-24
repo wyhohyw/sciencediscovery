@@ -175,8 +175,11 @@ export function createEvolveTools(runtime?: EvolveToolRuntime): AgentTool[] {
   };
   tools.push(getEvolveBudget);
   const evolveParameters = Type.Object({
-    algorithm: Type.Optional(Type.Union([Type.Literal("puct"), Type.Literal("openevolve")], {
-      description: "The search algorithm the user chose (`/evolve-design --algorithm …`). Default puct.",
+    algorithm: Type.Optional(Type.Union([
+      Type.Literal("puct"), Type.Literal("openevolve"), Type.Literal("cdr"),
+    ], {
+      description: "The search algorithm the user chose (`/evolve-design --algorithm …`). "
+        + "`cdr` keeps a fixed-length antibody sequence and proposes CDR point mutations. Default puct.",
     })),
     allowUnisolated: Type.Optional(Type.Boolean({
       description: "Windows only. Set true ONLY when the `/evolve-design` command carried "

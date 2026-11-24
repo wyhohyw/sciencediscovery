@@ -1,6 +1,8 @@
 // Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
 // Licensed under the Apache License, Version 2.0 (the "License").
 
+import type { EvolveAlgorithm } from "./evolution.js";
+
 export const EVOLVE_BASELINE_LIMIT = 100_000;
 export const EVOLVE_EDITABLE_LIMIT = 50;
 
@@ -27,18 +29,19 @@ export function evolveFieldIsSelectable(field: string): boolean {
 const DIRECTED_COMMAND = /^\/evolve-design(?=\s|$)/u;
 const DIRECTION_BLOCK = /(?:^|\n)```evolve-input\n([^\n]+)\n```$/u;
 
-const EVOLVE_FLAGS = /^\/evolve-design(?=\s|$)(?:[ \t]+--(?:algorithm[ \t]+(?:puct|openevolve)|no-confirm|allow-direct)\b)*/u;
-const ALGORITHM_FLAG = /[ \t]+--algorithm[ \t]+(puct|openevolve)\b/u;
+const EVOLVE_FLAGS = /^\/evolve-design(?=\s|$)(?:[ \t]+--(?:algorithm[ \t]+(?:puct|openevolve|cdr)|no-confirm|allow-direct)\b)*/u;
+const ALGORITHM_FLAG = /[ \t]+--algorithm[ \t]+(puct|openevolve|cdr)\b/u;
 
 export function evolveCommandTask(command: string): string {
   return command.trimStart().replace(EVOLVE_FLAGS, "").trim();
 }
 
-export function readEvolveAlgorithm(command: string): "puct" | "openevolve" {
-  return ALGORITHM_FLAG.exec(EVOLVE_FLAGS.exec(command.trimStart())?.[0] ?? "")?.[1] === "openevolve" ? "openevolve" : "puct";
+export function readEvolveAlgorithm(command: string): EvolveAlgorithm {
+  const name = ALGORITHM_FLAG.exec(EVOLVE_FLAGS.exec(command.trimStart())?.[0] ?? "")?.[1];
+  return name === "openevolve" || name === "cdr" ? name : "puct";
 }
 
-export function withEvolveAlgorithm(command: string, algorithm: "puct" | "openevolve"): string {
+export function withEvolveAlgorithm(command: string, algorithm: EvolveAlgorithm): string {
   const text = command.trimStart();
   const flags = EVOLVE_FLAGS.exec(text)?.[0];
   if (!flags) return command;

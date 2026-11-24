@@ -1293,7 +1293,7 @@ export function App({ initialToken }: { initialToken?: string } = {}) {
   const [evolveRetry, setEvolveRetry] = useState<{ sessionId: string; message: string; algorithm: EvolveAlgorithm; direction?: EvolveDirectionInput }>();
   const evolveTask = evolveSubmission ? evolveCommandTask(evolveSubmission.message) : "";
 
-  function selectEvolveAlgorithm(algorithm: "puct" | "openevolve"): void {
+  function selectEvolveAlgorithm(algorithm: EvolveAlgorithm): void {
     setMessage(withEvolveAlgorithm(message, algorithm));
     setEvolvePickerDismissed(false);
     requestAnimationFrame(() => composerTextarea.current?.focus());

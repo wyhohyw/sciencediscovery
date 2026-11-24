@@ -25,7 +25,7 @@ function runtime(overrides: Partial<EvolveToolRuntime> = {}): EvolveToolRuntime 
     getEvolveBudget: async () => ({
       maxSeconds: 7_200,
       model: "test-model",
-      perCallCeiling: { openevolve: 128_000, puct: 96_000 },
+      perCallCeiling: { cdr: 32_000, openevolve: 128_000, puct: 96_000 },
       thinking: { effective: "enabled" },
       totalTokenCap: 600_000,
     }),
@@ -103,7 +103,7 @@ test("the algorithm the user picked reaches the proposal", async () => {
     createEvolveRun: async (proposal) => { proposals.push(proposal); return { refusedBecause: "probe" }; },
   })).find((tool) => tool.name === "create_evolve_run")!;
   const algorithm = (create.parameters as { properties: Record<string, { anyOf?: Array<{ const: string }> }> }).properties.algorithm;
-  assert.deepEqual(algorithm?.anyOf?.map((option) => option.const), ["puct", "openevolve"]);
+  assert.deepEqual(algorithm?.anyOf?.map((option) => option.const), ["puct", "openevolve", "cdr"]);
   await create.execute("call", { algorithm: "openevolve" } as never, new AbortController().signal);
   assert.equal((proposals[0] as { algorithm?: string }).algorithm, "openevolve");
 });
@@ -192,7 +192,7 @@ test("the budget tool reports what the run will record, including a setting it c
       asked.push(input);
       return {
         maxSeconds: 7_200, model: "DeepSeek-V4.1",
-        perCallCeiling: { openevolve: 128_000, puct: 96_000 },
+        perCallCeiling: { cdr: 32_000, openevolve: 128_000, puct: 96_000 },
         thinking: { effective: "enabled", note: "this endpoint's API variant has no thinking-control field" },
         totalTokenCap: 600_000,
       };
@@ -202,7 +202,7 @@ test("the budget tool reports what the run will record, including a setting it c
   assert.deepEqual(asked, [{ thinking: "disabled", thinkingEffort: undefined }]);
   const text = (result.content[0] as { text: string }).text;
   assert.match(text, /Thinking the run will record: enabled — this endpoint's API variant has no thinking-control field/);
-  assert.match(text, /openevolve 128000, puct 96000/);
+  assert.match(text, /cdr 32000, openevolve 128000, puct 96000/);
   assert.match(text, /Run total: 600000 tokens, 7200s/);
   assert.match(text, /say so there instead of promising it/);
 });

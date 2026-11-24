@@ -216,6 +216,34 @@ test("model wire diagnostics classify retried attempts and preserve failed-reque
 
 const policy: ModelClientPolicy = { maxRetries: 1, maxTokens: 1_024, requestTimeoutMs: 5_000 };
 
+test("CF-001 CF-002 a filtered empty HTTP 200 turn preserves provider evidence without retrying", async () => {
+  let requests = 0;
+  await withServer(async (request, response) => {
+    await readBody(request);
+    requests += 1;
+    response.setHeader("x-request-id", "filtered-upstream-request");
+    sse(response, [{ choices: [{ delta: {}, finish_reason: "content_filter" }] }]);
+  }, async (baseUrl) => {
+    const seen: ModelWireDiagnostics[] = [];
+    const failure = await streamModelTurn({ baseUrl, model: "synthetic", proxy: { mode: "direct" } },
+      "synthetic", [], [], { ...policy, maxRetries: 2 }, AbortSignal.timeout(5_000),
+      { rejectEmptyTerminalTurn: true, onWireDiagnostics: record => seen.push(record) })
+      .then(() => assert.fail("filtered completion was accepted"), error => error);
+    assert.ok(failure instanceof EmptyModelTurnError);
+    assert.match(failure.message, /provider blocked the response with its content filter/);
+    assert.doesNotMatch(failure.message, /empty terminal turn/);
+    assert.equal(classifyModelWireError(failure), "content_filter");
+    assert.equal(requests, 1);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0]?.httpStatus, 200);
+    assert.equal(seen[0]?.upstreamRequestId, "filtered-upstream-request");
+    assert.equal(seen[0]?.finishReason, "content_filter");
+    assert.equal(seen[0]?.retries, 0);
+    assert.deepEqual(seen[0]?.error, { classification: "content_filter" });
+    assert.equal(modelWireDiagnosticsOf(failure), failure.diagnostics);
+  });
+});
+
 // A reasoning model can spend the whole budget thinking and answer nothing. The
 // record must say so: hasText=false alone cannot tell it from a relay that sent
 // an empty `stop`, and the two shapes are separate failures, so the

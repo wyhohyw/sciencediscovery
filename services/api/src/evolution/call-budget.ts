@@ -47,6 +47,8 @@ export const MIN_TOKENS_PER_CALL: Record<string, { thinking: number; quiet: numb
   puct: { quiet: 8_000, thinking: 96_000 },
   // OpenEvolve rewrites the whole genome rather than editing it.
   openevolve: { quiet: 16_000, thinking: 128_000 },
+  // CDR replies are a short mutation list, not a rewritten program.
+  cdr: { quiet: 8_000, thinking: 32_000 },
 };
 
 /**
@@ -62,6 +64,16 @@ export const QUIET_TOKENS_PER_CALL = 16_000;
 /** The run's own caps. A per-call ceiling caps one call; these cap the search. */
 export const DEFAULT_MAX_TOKENS = 600_000;
 export const DEFAULT_MAX_SECONDS = 7_200;
+
+/**
+ * NPU antibody jobs spend most of their time inside Protenix, not in the model
+ * call. Ten expansions do not fit in the two-hour default, and a candidate that
+ * is still scoring at 25 minutes was being cancelled before it could count.
+ * These apply only to `npu_job`; other modes keep the defaults above.
+ */
+export const NPU_MAX_TOKENS = 1_800_000;
+export const NPU_MAX_SECONDS = 21_600;
+export const NPU_CANDIDATE_TIMEOUT_SECONDS = 3_600;
 
 /** The per-call ceiling `create_evolve_run` will apply, from the setting the
  *  run will actually record. */
@@ -110,6 +122,7 @@ export function describeEvolveBudget(
     maxSeconds: DEFAULT_MAX_SECONDS,
     model: model?.name ?? null,
     perCallCeiling: {
+      cdr: perCallCeiling("cdr", effective),
       openevolve: perCallCeiling("openevolve", effective),
       puct: perCallCeiling("puct", effective),
     },

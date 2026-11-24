@@ -35,6 +35,7 @@ test("a reasoning ceiling clears each algorithm's own floor", () => {
   // asked for thinking was refused by the default it had just written itself.
   assert.equal(perCallCeiling("puct", "enabled"), 96_000);
   assert.equal(perCallCeiling("openevolve", "enabled"), 128_000);
+  assert.equal(perCallCeiling("cdr", "enabled"), 32_000);
 });
 
 test("a quiet run keeps the working ceiling, not the bare floor", () => {
@@ -42,6 +43,7 @@ test("a quiet run keeps the working ceiling, not the bare floor", () => {
   // floor only has to be satisfied.
   assert.equal(perCallCeiling("puct", "disabled"), 16_000);
   assert.equal(perCallCeiling("openevolve", "disabled"), 16_000);
+  assert.equal(perCallCeiling("cdr", "disabled"), 16_000);
 });
 
 test("an endpoint that cannot stop thinking is priced as a thinking run", () => {
@@ -50,7 +52,7 @@ test("an endpoint that cannot stop thinking is priced as a thinking run", () => 
   const plan = describeEvolveBudget(model(), "disabled");
   assert.equal(plan.thinking.effective, "enabled");
   assert.match(plan.thinking.note ?? "", /no thinking-control field/);
-  assert.deepEqual(plan.perCallCeiling, { openevolve: 128_000, puct: 96_000 });
+  assert.deepEqual(plan.perCallCeiling, { cdr: 32_000, openevolve: 128_000, puct: 96_000 });
   assert.equal(plan.totalTokenCap, 600_000);
 });
 
@@ -61,7 +63,7 @@ test("a dialect with a toggle but no disabled stop is priced as a thinking run",
     const plan = describeEvolveBudget(model({ apiVariant }), "disabled");
     assert.equal(plan.thinking.effective, "enabled");
     assert.match(plan.thinking.note ?? "", /no "disabled" mode/);
-    assert.deepEqual(plan.perCallCeiling, { openevolve: 128_000, puct: 96_000 });
+    assert.deepEqual(plan.perCallCeiling, { cdr: 32_000, openevolve: 128_000, puct: 96_000 });
   }
 });
 
@@ -77,18 +79,18 @@ test("an endpoint that can stop thinking is priced as asked", () => {
   const plan = describeEvolveBudget(model({ apiVariant: "deepseek" }), "disabled");
   assert.equal(plan.thinking.effective, "disabled");
   assert.equal(plan.thinking.note, undefined);
-  assert.deepEqual(plan.perCallCeiling, { openevolve: 16_000, puct: 16_000 });
+  assert.deepEqual(plan.perCallCeiling, { cdr: 16_000, openevolve: 16_000, puct: 16_000 });
 });
 
 test("an explicitly requested thinking run says nothing was overridden", () => {
   const plan = describeEvolveBudget(model({ apiVariant: "deepseek" }), "enabled");
   assert.equal(plan.thinking.effective, "enabled");
   assert.equal(plan.thinking.note, undefined);
-  assert.deepEqual(plan.perCallCeiling, { openevolve: 128_000, puct: 96_000 });
+  assert.deepEqual(plan.perCallCeiling, { cdr: 32_000, openevolve: 128_000, puct: 96_000 });
 });
 
 test("automatic thinking keeps the high effort fallback in the frozen budget", () => {
   const plan = describeEvolveBudget(model({ apiVariant: "deepseek" }), "auto");
   assert.deepEqual(plan.thinking, { effective: "auto", effort: "high" });
-  assert.deepEqual(plan.perCallCeiling, { openevolve: 128_000, puct: 96_000 });
+  assert.deepEqual(plan.perCallCeiling, { cdr: 32_000, openevolve: 128_000, puct: 96_000 });
 });

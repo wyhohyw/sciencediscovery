@@ -275,14 +275,14 @@ def main():
     use_msa = candidate.get("protenix_use_msa")
     if not reason and not 1 <= designs <= 8:
         reason = "num_designs must be from 1 to 8"
-    if not reason and not 1 <= samples <= 4:
-        reason = "protenix_n_sample must be from 1 to 4"
+    if not reason and not 1 <= samples <= 5:
+        reason = "protenix_n_sample must be from 1 to 5"
     if not reason and not isinstance(use_msa, bool):
         reason = "protenix_use_msa must be a boolean"
     if not reason and str(candidate.get("protenix_seeds") or "42") != "42":
         reason = "protenix_seeds stays 42"
-    if not reason and not 15 <= diffuser <= 30:
-        reason = "diffuser_t must be from 15 to 30"
+    if not reason and not 15 <= diffuser <= 40:
+        reason = "diffuser_t must be from 15 to 40"
     if not reason and not 1 <= final <= diffuser:
         reason = "final_step must be from 1 to diffuser_t"
     if reason:

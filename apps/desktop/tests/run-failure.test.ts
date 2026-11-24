@@ -27,6 +27,23 @@ describe("formatRunFailure", () => {
     setLanguage("en");
   });
 
+  it("CF-003 explains provider filtering in both languages, including historical errors", () => {
+    const old = "Model returned an empty terminal turn (no text and no tool call) [requestId=model-synthetic httpStatus=200 finishReason=content_filter retries=0]";
+    assert.match(formatRunFailureTitle("semantic-error", old), /provider filtered/i);
+    assert.match(formatRunFailure("semantic-error", old), /request reached the model service/i);
+    setLanguage("zh-CN");
+    assert.equal(formatRunFailureTitle("semantic-error", old), "模型服务过滤了回复");
+    assert.match(formatRunFailure("semantic-error", old), /上游将回复标记为内容过滤/);
+    assert.match(formatRunFailure("semantic-error", old), /联系服务商/);
+  });
+
+  it("CF-003 does not infer filtering from a bare mention or a different finish reason", () => {
+    for (const message of ["Unexpected content_filter field", "[finishReason=stop]", "[finishReason=content_filter_other]"]) {
+      assert.equal(formatRunFailureTitle("semantic-error", message), "Unexpected run error");
+      assert.match(formatRunFailure("semantic-error", message), /unexpected issue/i);
+    }
+  });
+
   it("maps timeout to an actionable message", () => {
     assert.match(formatRunFailure("timeout"), /timed out/i);
   });

@@ -92,7 +92,7 @@ function validEvents(value: unknown): EvolveEventRecord[] {
   });
 }
 
-const EVOLVE_ALGORITHMS: ReadonlySet<unknown> = new Set(["puct", "openevolve"]);
+const EVOLVE_ALGORITHMS: ReadonlySet<unknown> = new Set(["puct", "openevolve", "cdr"]);
 
 /** A goal is restorable only when it carries the fields the web client
  *  dereferences unconditionally: `EvolveRunCard` reads `goal.budget.expansions`,

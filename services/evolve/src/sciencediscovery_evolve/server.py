@@ -52,6 +52,7 @@ from .auth import require_internal_token
 from .engine import Engine, RunSpec
 from .events import HEARTBEAT, EventStream, encode_ndjson
 from .logging_config import get_logger
+from .cdr_engine import CdrEngine
 from .openevolve_engine import OpenEvolveEngine
 from .puct_engine import PuctEngine
 from .stub_engine import StubEngine
@@ -82,10 +83,11 @@ ENGINES: dict[str, Engine] = {
     "puct": PuctEngine(),
     "era": PuctEngine(),
     "openevolve": OpenEvolveEngine(),
+    "cdr": CdrEngine(),
     "stub": StubEngine(),
 }
 
-_ALGORITHMS = {"puct", "era", "openevolve"}
+_ALGORITHMS = {"puct", "era", "openevolve", "cdr"}
 
 #: Bounded so a slow reader blocks the engine rather than growing memory.
 _QUEUE_DEPTH = 1024

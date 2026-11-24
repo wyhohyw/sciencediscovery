@@ -894,6 +894,27 @@ export async function resolveProfileChdir(
   return workspaceBinds.chdir;
 }
 
+/** OpenDDE settings the NPU sandbox must see. Absent values stay absent. */
+const OPENDDE_SANDBOX_ENV = [
+  "LAYERNORM_TYPE",
+  "OPENDDE_CHECKPOINT",
+  "OPENDDE_CODE_DIR",
+  "OPENDDE_CYCLE",
+  "OPENDDE_DEVICE",
+  "OPENDDE_PYTHON",
+  "OPENDDE_ROOT_DIR",
+  "OPENDDE_STEP",
+] as const;
+
+export function openddeSandboxEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of OPENDDE_SANDBOX_ENV) {
+    const value = source[name]?.trim();
+    if (value) env[name] = value;
+  }
+  return env;
+}
+
 /** Host directories named by SCIENCE_AGENT_SANDBOX_RO_BINDS, mounted at the same path. */
 export function hostPathBindArgs(raw = process.env.SCIENCE_AGENT_SANDBOX_RO_BINDS): string[] {
   const args: string[] = [];
@@ -947,6 +968,9 @@ export function buildSandboxLaunch(options: {
   }
   Object.assign(env, options.hostRuntimeSupport.env);
   Object.assign(env, options.npu?.env ?? {});
+  // Only an NPU launch folds. These names come from the runner process, so a
+  // non-NPU sandbox stays unchanged when they are unset.
+  if (options.npu) Object.assign(env, openddeSandboxEnvironment());
   Object.assign(env, options.egress?.env ?? {});
   for (const [name, value] of Object.entries(options.envProfile?.variables ?? {})) {
     if (profileKeyAllowed(name)) env[name] = value;

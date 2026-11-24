@@ -25,6 +25,8 @@ test("evolve command helpers read and replace the algorithm without consuming ta
     assert.equal(withEvolveAlgorithm(command, "openevolve"), `${updated} ${task}`);
   }
   assert.equal(withEvolveAlgorithm("Discuss policy", "openevolve"), "Discuss policy");
+  assert.equal(readEvolveAlgorithm("/evolve-design --algorithm cdr 优化 CDR"), "cdr");
+  assert.equal(evolveCommandTask("/evolve-design --algorithm cdr 优化 CDR"), "优化 CDR");
 });
 
 test("direction round trips only on an Evolve command with a terminal block", () => {

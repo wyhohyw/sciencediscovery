@@ -45,12 +45,18 @@ function timeoutFromDiagnostic(message: string): FailureTimeout | undefined {
 
 type FailureScope = "run" | "notice";
 
+/** Includes historical empty-turn errors; a bare mention is not provider evidence. */
+function isContentFiltered(message: string): boolean {
+  return /\bfinishReason=content_filter(?:\s|\])/.test(message);
+}
+
 export function formatRunFailureTitle(
   code: string | undefined,
   message = "",
   timeout?: FailureTimeout,
   scope: FailureScope = "run",
 ): string {
+  if (isContentFiltered(message)) return TEXT.runFailure.contentFilterTitle;
   if (code === "timeout") {
     const detail = timeout ?? timeoutFromDiagnostic(message);
     if (detail && Object.hasOwn(TEXT.runFailure.timeoutTitles, detail.kind)) {
@@ -69,6 +75,7 @@ export function formatRunFailure(
   timeout?: FailureTimeout,
   scope: FailureScope = "run",
 ): string {
+  if (isContentFiltered(message)) return TEXT.runFailure.contentFilter;
   if (code === "timeout") {
     const detail = timeout ?? timeoutFromDiagnostic(message);
     if (detail && Number.isFinite(detail.timeoutMs) && detail.timeoutMs > 0 &&

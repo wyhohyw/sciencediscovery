@@ -160,6 +160,18 @@ def test_the_confirmation_table_names_fields_and_the_run_names_what_changed():
     assert changes == [{"field": "pos_2", "old": "T", "new": "A"}]
 
 
+def test_a_candidate_that_did_not_run_is_not_stored_as_zero():
+    valid, metrics, error = interpret_npu_job(
+        {"state": "completed"},
+        {"device": "npu", "score": 0.0, "error": "num_designs must be from 1 to 16", "ran": False},
+        metric_key="score",
+    )
+    assert valid is False
+    assert error == "num_designs must be from 1 to 16"
+    assert metrics["job_status"] == "rejected"
+    assert metrics["score"] == float("-inf")
+
+
 def test_a_missing_or_non_npu_result_is_not_stored_as_zero():
     waiting, metrics, error = interpret_npu_job({"state": "queued"}, None, metric_key="score")
     assert waiting is False and error == "job not finished" and "score" not in metrics

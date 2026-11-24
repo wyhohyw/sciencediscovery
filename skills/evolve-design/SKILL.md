@@ -2,7 +2,7 @@
 name: evolve-design
 description: Use when the user wants to improve something by repeated search rather than one edit — a program, a prompt, a document, a pipeline, a configuration, an experimental protocol. Triggers on `/evolve-design`, "把这个做得更好", "搜索一个更好的方案", or any request to optimise against a measurable target. Runs a short checkpointed design conversation, verifies the scoring can rank candidates, then calls `create_evolve_run`. Not for a single fix, a refactor, or a question about existing code.
 metadata:
-  version: 1.3.0
+  version: 1.4.0
 ---
 
 # Designing an evolution search
@@ -14,11 +14,40 @@ scoring that cannot shows up as a flat run, not as an error.
 
 ## How to run this
 
-**Algorithm first.** The user's `/evolve-design` command may carry `--algorithm puct` or
-`--algorithm openevolve`; if unset, ask. PUCT ranks candidates over a tree, OpenEvolve over
-MAP-Elites islands. The four steps and the scoring modes are identical for both, so design
-the scorecard, the split and the starting point the same way and only set `algorithm` in
-`create_evolve_run`.
+**Algorithm first.** The user's `/evolve-design` command may carry `--algorithm puct`,
+`--algorithm openevolve`, or `--algorithm cdr`; if unset, ask. PUCT ranks candidates over a
+tree, OpenEvolve over MAP-Elites islands. Those two share the four steps below. `cdr` is the
+fixed-length antibody search: read **CDR search** and do not design a program, a dataset split,
+or a tree.
+
+**CDR search.** When the command says `--algorithm cdr`, the candidate is one antibody
+sequence, not a program. The starting point is JSON with `sequence` (amino acids),
+`cdr_regions` (inclusive 1-based ranges), `chain` (default `D`), `target_sequence`, and
+`target_chain`. Optional `target_hotspots` lists 1-based positions on the target chain.
+`candidates_per_cycle` defaults to 4. `expansions` is how many children are scored. Set
+`algorithm` to `cdr` and `mode` to `npu_job`. `editableFields` is `["sequence"]` so the
+probe can damage that field; the engine itself only writes inside `cdr_regions`.
+`evaluatorSource` is the whole of `scripts/cdr_opendde_evaluator.py` in this skill. The
+runner needs `OPENDDE_CODE_DIR`, `OPENDDE_CHECKPOINT`, and `OPENDDE_PYTHON` when the job
+interpreter is not the OpenDDE environment. `OPENDDE_ROOT_DIR` defaults to the
+checkpoint directory's parent, where `common/components.cif` already lives. One job loads the checkpoint, folds that
+sequence, and exits. The printed `score` is the negation of the VHH confidence loss
+(`plddt`, `i_plddt`, `pae`, `i_pae`, `i_ptm`, `con`, `i_con`, `rg`, `dgram_cce`), so
+higher is better. The ESM-2 term is recorded as omitted and its weight stays zero. A fold
+that finishes also has to pass the 5 Å gate: more than half of the interface residues are
+CDR, and, when hotspots are given, CDR3 touches at least one. The last `cdr_regions`
+range is CDR3. A failed gate is `ran: true` with `gate_passed: false` and does not enter
+the population. A sequence that is not amino acids, or a fold that fails, is `ran: false`
+and does not enter the population.
+Do not start a resident OpenDDE service. Skip the dataset split and the PUCT/OpenEvolve
+search knobs. The checkpoints still happen: what is better (higher score), the JSON starting
+point, the cost from `get_evolve_budget` (the `cdr` ceiling, not the program-rewrite one),
+then `create_evolve_run`.
+
+Lookups and checks that sit beside a CDR search are separate skills: `pdb-lookup`,
+`uniprot-lookup`, `pubmed-lookup`, `epitope-analysis`, `structure-analysis`,
+`evolutionary-analysis`, and `developability-filter`. Use one when the user asks
+for that evidence. Their output is not the search score.
 
 **Pace second.** The command may carry `--no-confirm`, which means the user has chosen to let the
 design and the launch run in one pass: do steps 1–4 yourself, without stopping for a reply between
@@ -229,7 +258,7 @@ does. Set one only for a reason you can give in a line:
 > will actually get, times the expansion count, against the run's total token cap. Call it rather
 > than guessing: the ceiling depends on whether this endpoint can turn thinking off at all, and
 > an endpoint that cannot is priced as a thinking run (96k per call for puct, 128k for
-> openevolve) however the run is configured. If the reply says thinking is `enabled` with a note,
+> openevolve, 32k for cdr) however the run is configured. If the reply says thinking is `enabled` with a note,
 > say that to the user in the checkpoint instead of promising "thinking off" — they are approving
 > the budget, not the setting. Mention `search` only if you set it, in one line saying why;
 > otherwise leave it out. This is the last point before real money is spent — say so plainly, and

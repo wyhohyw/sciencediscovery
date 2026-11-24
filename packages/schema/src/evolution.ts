@@ -29,7 +29,7 @@
 /** Which search algorithm runs the loop. Not two code paths — one field. */
 import type { ModelThinkingEffort, ModelThinkingMode } from "./model-usage.js";
 
-export type EvolveAlgorithm = "puct" | "openevolve";
+export type EvolveAlgorithm = "puct" | "openevolve" | "cdr";
 
 /**
  * How the design conversation paces its checkpoints.
@@ -49,10 +49,11 @@ export type EvolveCheckpointMode = "auto" | "confirm";
  * a migration would have to touch the run record, its events and the search
  * graph mirror at once, and getting one of the three wrong is a run that opens
  * to an empty panel. Accepting one extra string on read costs nothing and is
- * reversible.
+ * reversible. `cdr` is a stored algorithm too, and must come back as itself.
  */
 export function evolveAlgorithm(raw: unknown): EvolveAlgorithm {
-  return raw === "openevolve" ? "openevolve" : "puct";
+  if (raw === "openevolve" || raw === "cdr") return raw;
+  return "puct";
 }
 
 

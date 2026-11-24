@@ -1322,6 +1322,14 @@ export const EN: Text = {
         "Ring migration spreads good designs across populations",
         "Mutations reference the global best and distinct candidates",
       ],
+      cdrName: "CDR",
+      cdrTags: ["Antibody sequence", "Fixed length"],
+      cdrPoints: [
+        "Keeps a population of antibody sequences",
+        "Proposes point mutations inside the CDR ranges only",
+        "Scores each sequence with one OpenDDE fold, then exits",
+        "A failed fold or a framework edit does not enter the population",
+      ],
       settingsLabel: "Settings",
       confirmLabel: "Pause at each checkpoint",
       confirmHint: "Each checkpoint stops and waits for your confirmation before continuing.",
@@ -1492,6 +1500,8 @@ export const EN: Text = {
 
   runFailure: {
     title: "Run failed",
+    contentFilterTitle: "Model provider filtered the response",
+    contentFilter: "The request reached the model service, but the provider marked the response as content-filtered and returned no usable answer. Open the technical details for the request ID and contact the provider to confirm the cause. A passing connection check does not certify a complete conversation.",
     titles: {
       timeout: "Run timed out",
       "rate-limited": "Model request limit reached",

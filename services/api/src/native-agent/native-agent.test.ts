@@ -1131,7 +1131,7 @@ test("evolve tools appear on the first model step only when a runtime is registe
     createEvolveRun: async () => ({ refusedBecause: "probe" }),
     getEvolveBudget: async () => ({
       maxSeconds: 7_200, model: "test-model",
-      perCallCeiling: { openevolve: 128_000, puct: 96_000 },
+      perCallCeiling: { cdr: 32_000, openevolve: 128_000, puct: 96_000 },
       thinking: { effective: "enabled" }, totalTokenCap: 600_000,
     }),
     getEvolveRun: async () => ({

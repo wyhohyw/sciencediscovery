@@ -1369,6 +1369,14 @@ export const ZH = {
         "环形迁移促进优质方案跨种群传播",
         "变异参考全局最优与差异化候选",
       ],
+      cdrName: "CDR",
+      cdrTags: ["抗体序列", "长度固定"],
+      cdrPoints: [
+        "维护一组抗体序列作为种群",
+        "只在 CDR 区间里做点突变",
+        "每条序列单独折叠一次 OpenDDE，然后退出",
+        "折叠失败或改到框架上的候选不进种群",
+      ],
       settingsLabel: "设置",
       confirmLabel: "检查点需要人工确认",
       confirmHint: "每个检查点会停下来等你确认后再继续",
@@ -1542,6 +1550,8 @@ export const ZH = {
 
   runFailure: {
     title: "运行失败",
+    contentFilterTitle: "模型服务过滤了回复",
+    contentFilter: "请求已到达模型服务，但上游将回复标记为内容过滤，未返回可用答案。请展开技术详情查看请求 ID，并联系服务商确认原因。连接测试通过不代表完整对话一定能通过。",
     titles: {
       timeout: "运行超时",
       "rate-limited": "模型请求受限",
