@@ -1,0 +1,59 @@
+{
+  "source": "546520d5d974ad1ff9df6cbfe2a39a1cbb84767e",
+  "kind": "after",
+  "product": "apps/desktop",
+  "images": [
+    {
+      "file": "bound-disabled-zh-hint.png",
+      "source": "546520d5d974ad1ff9df6cbfe2a39a1cbb84767e",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "hint",
+      "sha256": "8f2e03f2f643ffbe5081e7a688d09f470bb067a214effbfd2341cf5f98e103e2"
+    },
+    {
+      "file": "bound-disabled-zh-flyout.png",
+      "source": "546520d5d974ad1ff9df6cbfe2a39a1cbb84767e",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "flyout",
+      "sha256": "0e36ad6e4df95bae0a155fd5ec6a6a32e3fced2ec0dd455ccd86ab003486d12d"
+    },
+    {
+      "file": "bound-disabled-en-hint.png",
+      "source": "546520d5d974ad1ff9df6cbfe2a39a1cbb84767e",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "hint",
+      "sha256": "00953293e623b1a83eb6dd66bc5c01e324b5c316dbbd787b6a198bb1e18bacee"
+    },
+    {
+      "file": "bound-disabled-en-flyout.png",
+      "source": "546520d5d974ad1ff9df6cbfe2a39a1cbb84767e",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "flyout",
+      "sha256": "55eb9f240996341a04161b304c5c8af32f73c879873881be23bb05dbe123b206"
+    }
+  ]
+}
