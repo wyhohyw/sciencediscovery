@@ -1,0 +1,111 @@
+{
+  "source": "54ccc2b8a821660b993c0c67e72938b2e733b917",
+  "kind": "after",
+  "product": "apps/desktop",
+  "images": [
+    {
+      "file": "bound-disabled-zh-hint.png",
+      "source": "54ccc2b8a821660b993c0c67e72938b2e733b917",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "hint",
+      "sha256": "6105a617137164ec851c8df083a8a12c9cfd510cd110140a97ae9c5f6c7ec619"
+    },
+    {
+      "file": "bound-disabled-zh-flyout.png",
+      "source": "54ccc2b8a821660b993c0c67e72938b2e733b917",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "flyout",
+      "sha256": "47ffdb3066147014e219bb1cb1d32111c31588b9370865a96aa61257b8259cc4"
+    },
+    {
+      "file": "bound-disabled-en-hint.png",
+      "source": "54ccc2b8a821660b993c0c67e72938b2e733b917",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "hint",
+      "sha256": "0a1aefcfc8dba6460939d02715586eed7e45b91496ec8073fddcb4199871f92f"
+    },
+    {
+      "file": "bound-disabled-en-flyout.png",
+      "source": "54ccc2b8a821660b993c0c67e72938b2e733b917",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "flyout",
+      "sha256": "6ebce42030019037a5d699697df5d657c70d37a1e0e57c69780df3e51b9b68d7"
+    },
+    {
+      "file": "bound-disabled-zh-960-hint.png",
+      "source": "54ccc2b8a821660b993c0c67e72938b2e733b917",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "hint",
+      "sha256": "8ce892b6e1fb3893e604b7c5874c10743a4f97302b01e00c7ec4801d2fc9e221"
+    },
+    {
+      "file": "bound-disabled-zh-960-flyout.png",
+      "source": "54ccc2b8a821660b993c0c67e72938b2e733b917",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "flyout",
+      "sha256": "4f239b485b2534509093712de90b5a88609e3a7e0e64854323a017ac14db892b"
+    },
+    {
+      "file": "bound-disabled-en-960-hint.png",
+      "source": "54ccc2b8a821660b993c0c67e72938b2e733b917",
+      "locale": "en",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "hint",
+      "sha256": "4c47a44ece294f9e6df0f7e298140960fe24e1faab3ad8a4f70db2cb9770149b"
+    },
+    {
+      "file": "bound-disabled-en-960-flyout.png",
+      "source": "54ccc2b8a821660b993c0c67e72938b2e733b917",
+      "locale": "en",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; bound session and disabled role; no live backend/model",
+      "state": "flyout",
+      "sha256": "808d68c54e6b51e249649e0195cd672f2906687f5c658caeae1eff9917b52f3f"
+    }
+  ]
+}
