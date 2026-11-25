@@ -1,0 +1,55 @@
+{
+  "source": "492b3f38a008125ab0518abdb7f6a188bb5acd03",
+  "kind": "before",
+  "product": "apps/desktop",
+  "images": [
+    {
+      "file": "before-zh-full.png",
+      "source": "492b3f38a008125ab0518abdb7f6a188bb5acd03",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "131190450ad2d79892ec94f5146b65a7214f9be9ac042801c2b770884dbd85a1"
+    },
+    {
+      "file": "before-zh-row.png",
+      "source": "492b3f38a008125ab0518abdb7f6a188bb5acd03",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "11461a77337eb17e381ee55e4bd86e7ceeec1e84702a5bd28eb9cd9faf001d0a"
+    },
+    {
+      "file": "before-en-full.png",
+      "source": "492b3f38a008125ab0518abdb7f6a188bb5acd03",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "e174f4f55d70f2cf46e4d38fe6c4f3cec74dd2f7d650fccc24f9d5256b3add88"
+    },
+    {
+      "file": "before-en-row.png",
+      "source": "492b3f38a008125ab0518abdb7f6a188bb5acd03",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "ea79f6dc988c4ce136ae645243b74f8f83e395b20bc2ef426f44df17e75af299"
+    }
+  ]
+}

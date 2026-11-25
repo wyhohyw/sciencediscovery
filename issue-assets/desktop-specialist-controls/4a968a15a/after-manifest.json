@@ -1,0 +1,79 @@
+{
+  "source": "4a968a15af4bdd0a0e9afe46989c14331d4a2cc4",
+  "kind": "after",
+  "product": "apps/desktop",
+  "images": [
+    {
+      "file": "after-zh-full.png",
+      "source": "4a968a15af4bdd0a0e9afe46989c14331d4a2cc4",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "32752785ee4b899198051b2e4d668dc2fa046a799fef00c7c5feeea569348d61"
+    },
+    {
+      "file": "after-zh-row.png",
+      "source": "4a968a15af4bdd0a0e9afe46989c14331d4a2cc4",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "29e08a3b609624ce01f4754c28087fe452a74d8db1991b3fc992778aa9250f5a"
+    },
+    {
+      "file": "after-zh-narrow.png",
+      "source": "4a968a15af4bdd0a0e9afe46989c14331d4a2cc4",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "a7e72330d73f7be4288ce24c744cddcb1b3d78992da9b5bb8cc68fad41f22c8c"
+    },
+    {
+      "file": "after-en-full.png",
+      "source": "4a968a15af4bdd0a0e9afe46989c14331d4a2cc4",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "fdfad70bc31b14071568069965471a878d73f3cf266e8c156ecf517d5bbd84d7"
+    },
+    {
+      "file": "after-en-row.png",
+      "source": "4a968a15af4bdd0a0e9afe46989c14331d4a2cc4",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "2c574aacaf8a0c6dcfc765c643f6ae7c6f9888236effaa8f3e3b15d63b7f91b6"
+    },
+    {
+      "file": "after-en-narrow.png",
+      "source": "4a968a15af4bdd0a0e9afe46989c14331d4a2cc4",
+      "locale": "en",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic API fixture; no live backend/model",
+      "sha256": "9044a6c8895a95625cfd5733b8ae684f2f0b29da9924d5da2eac25fb9c7a65bf"
+    }
+  ]
+}
