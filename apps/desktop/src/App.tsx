@@ -23,7 +23,7 @@ import {
 } from "react";
 import { appendEvolveDirection, isEvidenceSessionReadOnly, isEvolveRunActive, type EvolveAlgorithm, type EvolveDirectionInput } from "@sciencediscovery/schema";
 
-import { ApiClient } from "./api/client.js";
+import { ApiClient, ApiRequestError } from "./api/client.js";
 import { TOKEN_STORAGE_KEY } from "./state/storage.js";
 import { AccountApiError, revokeAccountSession } from "./auth/account.js";
 import { CREDITS_PROVIDER_NAME, ensureCreditsModel } from "./auth/credits-model.js";
@@ -32,7 +32,7 @@ import { clearSession, readSession, saveSession, sessionRefreshDelayMs, type Use
 import { ensureFreshAccountSession } from "./auth/session-refresh.js";
 import { LoginPage, hasAuthCallback, settleAuthCallback } from "./views/LoginPage.js";
 import { AccountPage, SignedOutAccount } from "./views/AccountPage.js";
-import { cancelRun, createSession, deleteSession, ensureInbox, getSubagent } from "./api/sessions.js";
+import { cancelRun, createSession, ensureInbox, getSubagent } from "./api/sessions.js";
 import { listSpecialists } from "./api/settings.js";
 import { newSessionRequest } from "./app/approval-mode-preference.js";
 import type {
@@ -870,6 +870,12 @@ export function App({ initialToken }: Props) {
     pageRef.current = { landing, running: state.running };
   }, [landing, state.running]);
 
+  useEffect(() => {
+    if (landing && specialistSeed && specialistSeed.sessionId === state.sessionId) {
+      setSpecialistSeed(undefined);
+    }
+  }, [landing, specialistSeed, state.sessionId]);
+
   // The tour is a tour of the page a new conversation starts on, so while it is
   // on screen the page stays there. Switching once when the guide opens is not
   // enough: the Session the boot listing resumes can finish opening after the
@@ -1259,16 +1265,20 @@ export function App({ initialToken }: Props) {
     const current = (await listSpecialists(client)).find(row => row.id === specialist.id);
     if (!current || current.enabled === false) throw new Error(TEXT.settings.system.specialists.tryDisabled);
     const inbox = state.inboxProject ?? await ensureInbox(client);
-    const created = await createSession(client, inbox.id, { ...newSessionRequest(), title: specialist.name,
-      specialistId: specialist.id, ...(state.selectedModelId ? { settingsOverrides: { modelId: state.selectedModelId } } : {}) });
-    if (created.specialistId !== specialist.id) {
-      // A concurrent disable must not leave an apparently bound Try session behind.
-      await deleteSession(client, created.id);
-      throw new Error(TEXT.settings.system.specialists.tryDisabled);
-    }
+    const created = await createSession(client, inbox.id, {
+      ...newSessionRequest(),
+      title: specialist.name,
+      specialistId: specialist.id,
+      ...(state.selectedModelId ? { settingsOverrides: { modelId: state.selectedModelId } } : {}),
+    }).catch((reason: unknown) => {
+      if (reason instanceof ApiRequestError && reason.code === "SPECIALIST_DISABLED") {
+        throw new Error(TEXT.settings.system.specialists.tryDisabled);
+      }
+      throw reason;
+    });
     await actions.refreshSessions();
     await actions.openSession(created.id, inbox.id);
-    setSpecialistSeed({ sessionId: created.id, nonce: Date.now(), text: prompt ?? "" });
+    if (prompt !== undefined) setSpecialistSeed({ sessionId: created.id, nonce: Date.now(), text: prompt });
     closeSettings();
   };
 

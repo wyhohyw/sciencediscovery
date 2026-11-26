@@ -140,6 +140,25 @@ describe("the Specialist routes answer a rejected input as a client error", () =
   });
 
   // One declaration per rejection the settings pane can provoke, driven through
+  test("session creation rejects a Specialist disabled after selection and preserves earlier bindings", async () => {
+    const specialist = await request("POST", "/api/specialists", { name: "Session binding subject", description: "d", instructions: "i" });
+    assert.equal(specialist.status, 201);
+    const project = await request("POST", "/api/projects", { name: "Specialist binding workspace" });
+    assert.equal(project.status, 201);
+    const path = `/api/projects/${project.body.id}/sessions`;
+    const binding = { title: "Bound session", specialistId: specialist.body.id };
+    const first = await request("POST", path, binding);
+    assert.equal(first.status, 201);
+    assert.equal(first.body.specialistId, specialist.body.id);
+    const before = await request("GET", path);
+    assert.equal((await request("PUT", `/api/specialists/${specialist.body.id}`, { enabled: false })).status, 200);
+    const refused = await request("POST", path, binding);
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.code, "SPECIALIST_DISABLED");
+    assert.deepEqual((await request("GET", path)).body, before.body);
+    assert.equal((await request("GET", `/api/sessions/${first.body.id}`)).body.specialistId, specialist.body.id);
+  });
+
   test("prompt examples round-trip through the API and invalid examples are client errors", async () => {
     const created = await request("POST", "/api/specialists", { name: "Example HTTP author", description: "d", instructions: "i", promptExamples: ["Check a dataset"] });
     assert.equal(created.status, 201);

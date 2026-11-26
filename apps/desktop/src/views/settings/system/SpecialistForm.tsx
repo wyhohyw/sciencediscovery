@@ -101,7 +101,7 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
         </div></div>
         {!all ? <>{selectedCards("skills")}{selectedCards("connectors")}
           {skillIds.length + connectorIds.length === 0 ? <p className="specialist-validation" role="status">{labels.selectOne}</p> : null}
-          {missingSkills.length + missingConnectors.length > 0 ? <p className="specialist-validation" role="status">{labels.unavailableSkillsHint}</p> : null}
+          {missingSkills.length + missingConnectors.length > 0 ? <p className="specialist-validation" role="status">{labels.unavailableCapabilitiesHint}</p> : null}
         </> : null}
         <details className="specialist-config-section" open><summary>{labels.promptExamples}</summary><button type="button" className="specialist-section-add" disabled={busy || examples.length >= 10} onClick={() => setExamples(values => [...values, ""])}>＋ {labels.addExample}</button>
           {examples.length === 0 ? <p className="specialist-empty is-inline">{labels.unconfigured}</p> : examples.map((example, index) => <div className="specialist-example-field" key={index}>

@@ -1684,7 +1684,7 @@ export const EN: Text = {
         addConnector: "Add connector",
         noSkills: "No skills added yet.",
         unavailableSkill: (id: string) => `Unavailable skill: ${id}`,
-        unavailableSkillsHint: "Some selected skills are no longer in the catalog. Remove them explicitly before saving; capabilities are never broadened automatically.",
+        unavailableCapabilitiesHint: "Some selected skills or MCP servers are unavailable. Remove the unavailable entries before saving.",
         noConnectors: "No connectors added yet.",
         skillsNote: "The skill list starts empty and must be filled in by hand. Skills not listed here are invisible to this specialist, and calls to them are refused.",
         connectorsNote: "The connector list starts empty and must be filled in by hand. Connectors not listed here are invisible to this specialist, and calls to them are refused.",

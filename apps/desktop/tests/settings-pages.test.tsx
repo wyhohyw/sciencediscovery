@@ -445,7 +445,7 @@ describe("the specialist form", () => {
     const markup = form({ ...existing, enabledSkillIds: ["removed-skill"] });
     assert.ok(markup.includes(TEXT.settings.system.specialists.unavailableSkill("removed-skill")));
     assert.ok(markup.includes(`${TEXT.settings.system.specialists.remove} removed-skill`));
-    assert.ok(markup.includes(TEXT.settings.system.specialists.unavailableSkillsHint));
+    assert.ok(markup.includes(TEXT.settings.system.specialists.unavailableCapabilitiesHint));
     assert.match(markup, /disabled=""[^>]*>保存<\/button>/);
   });
 

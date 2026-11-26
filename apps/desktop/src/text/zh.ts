@@ -1723,7 +1723,7 @@ export const ZH = {
         addConnector: "添加连接器",
         noSkills: "尚未添加技能。",
         unavailableSkill: (id: string) => `不可用技能：${id}`,
-        unavailableSkillsHint: "部分已选技能已不在目录中。请显式移除这些条目后保存；不会自动扩大专家的能力范围。",
+        unavailableCapabilitiesHint: "部分已选技能或 MCP 服务器已不可用。请移除不可用的条目后再保存。",
         noConnectors: "尚未添加连接器。",
         skillsNote: "技能列表初始为空，需要手动添加。未列在此处的技能对该专家不可见，对它们的技能调用会被拒绝。",
         connectorsNote: "连接器列表初始为空，需要手动添加。未列在此处的连接器对该专家不可见，对它们的调用会被拒绝。",

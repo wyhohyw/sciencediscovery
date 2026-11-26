@@ -120,6 +120,13 @@ test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fi
           await detail.getByRole("button", { name: new RegExp(example, "u") }).click(); await expect(settings).toBeHidden(); await expect(page.locator("#composer-textarea")).toHaveValue(example);
           const trials = (await api<Session[]>(page, `/api/projects/${inbox.id}/sessions`)).filter(s => s.title === name); expect(trials).toHaveLength(1); expect(trials[0]!.specialistId).toBe(created!.id);
           expect(await api(page, `/api/sessions/${trials[0]!.id}/runs`)).toEqual([]); expect(model.calls).toHaveLength(0);
+          const composer = page.locator("#composer-textarea");
+          await composer.fill("");
+          await page.locator(".side-session").filter({ hasText: fixture!.session.title }).click();
+          await expect(page.locator(".task-head-title")).toContainText(fixture!.session.title);
+          await page.locator(".side-session").filter({ hasText: name }).filter({ hasNotText: fixture!.session.title }).click();
+          await expect(page.locator(".task-head-title")).toHaveText(name);
+          await expect(composer).toHaveValue("");
           await api(page, `/api/sessions/${trials[0]!.id}`, { method: "DELETE", data: { confirmationId: trials[0]!.id } }); await openDesktopSession(page, { ...fixture!, modelOwned: true }); await openSettings();
         });
         await journey.step("7. Inspect builtins and narrow actions", "Built-ins have read-only details; custom actions stay reachable at 960px.", async () => {

@@ -45,7 +45,6 @@ import {
   TOKEN,
   TOKEN_STORAGE_KEY,
   installMockApi,
-  makeSession,
   type JsonRecord,
   type ModelRecord,
   type Mock,
@@ -251,6 +250,13 @@ test.describe("专家", () => {
       await openDetail(page); await detail(page).getByRole("button", { name: "编辑", exact: true }).click();
       const form = editor(page); await form.getByLabel("专家名称", { exact: true }).fill("晶体专家改");
       await form.getByRole("button", { name: "保存", exact: true }).click();
+      await detail(page).getByRole("button", { name: "「晶体专家改」的操作", exact: true }).click();
+      await detail(page).getByRole("menuitem", { name: "删除", exact: true }).click();
+      const confirm = page.getByRole("dialog", { name: "删除专家「晶体专家改」？", exact: true });
+      await expect(confirm).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(confirm).toBeHidden();
+      await expect(detail(page)).toBeVisible();
       await detail(page).getByRole("button", { name: "返回", exact: true }).click();
     });
     await journey.step("2. Cancel then confirm pointer deletion", "Cancel preserves the card; confirmed deletion removes it.", async () => {
@@ -327,24 +333,20 @@ test.describe("专家", () => {
     });
   });
 
-  test("Try rolls back an unbound session after a concurrent disable", async ({ page, journey }) => {
+  test("Try reports a concurrent disable rejected by the API", async ({ page, journey }) => {
     const mock = await installMockApi(page, data());
-    let deletion: JsonRecord | undefined;
+    let attempted = false;
     await page.route("**/api/projects/*/sessions", async route => {
       if (route.request().method() !== "POST") return route.fallback();
-      // The service no longer binds a role disabled between the catalog read and creation.
-      await route.fulfill({ status: 201, json: makeSession({ id: "raced-trial", projectId: "inbox-1" }) });
-    });
-    await page.route("**/api/sessions/raced-trial", async route => {
-      if (route.request().method() !== "DELETE") return route.fallback();
-      deletion = route.request().postDataJSON() as JsonRecord;
-      await route.fulfill({ status: 200, json: { deleted: "raced-trial" } });
+      attempted = true;
+      await route.fulfill({ status: 409, json: { error: "Specialist is disabled", code: "SPECIALIST_DISABLED" } });
     });
     const settings = await openSettings(page, "专家"); await openDetail(page);
-    await journey.step("1. Refuse an unbound trial", "The empty session is explicitly deleted and settings retain an actionable error.", async () => {
+    await journey.step("1. Refuse a trial for a disabled Specialist", "The server rejects creation and settings show a localized error.", async () => {
       await detail(page).getByRole("button", { name: "去试试", exact: true }).click();
       await expect(settings.getByRole("alert")).toHaveText(/请先启用该专家/u);
-      expect(deletion).toEqual({ confirmationId: "raced-trial" });
+      expect(attempted).toBe(true);
+      expect(mock.state.sessions.some(s => (s as JsonRecord).specialistId === "specialist-1")).toBe(false);
       await expect(settings).toBeVisible();
       expect(mock.calls.some(c => c.method === "POST" && /\/runs$/u.test(c.path))).toBe(false);
     });

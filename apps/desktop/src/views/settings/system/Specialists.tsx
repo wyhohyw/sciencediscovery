@@ -7,7 +7,7 @@ import type { ConnectorManifest, SkillDescriptor, Specialist } from "../../../ap
 import type { ConfirmRequest } from "../../../app/use-workspace.js";
 import { useLoaded } from "../../../app/use-loaded.js";
 import { TEXT } from "../../../text.js";
-import { claimsEscape } from "../../dialog-escape.js";
+import { useTopmostEscape } from "../../use-dialog-escape.js";
 import { BulkToggles, LoadGate, Switch } from "../rows.js";
 import { SpecialistForm } from "./SpecialistForm.js";
 import { SpecialistActions, SpecialistGlyph, SpecialistMark, SpecialistSearch, SpecialistSourceTabs, type SpecialistSource } from "./SpecialistParts.js";
@@ -34,11 +34,7 @@ function SpecialistDetail({ specialist, page, busy, onBack, onEdit, onToggle, on
   onToggle: (next: boolean) => void; onDelete: () => void; onTry: (prompt?: string) => void;
 }) {
   const labels = TEXT.settings.system.specialists, enabled = specialist.enabled !== false;
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => { if (claimsEscape(event)) { event.preventDefault(); if (!busy) onBack(); } };
-    document.addEventListener("keydown", key);
-    return () => document.removeEventListener("keydown", key);
-  }, [busy, onBack]);
+  useTopmostEscape(() => { if (!busy) onBack(); });
   return <section className="specialist-subpage" role="region" aria-label={labels.details}>
     <div className="specialist-subpage-content">
       <button className="specialist-back" type="button" disabled={busy} onClick={onBack}><SpecialistGlyph kind="back" />{labels.back}</button>

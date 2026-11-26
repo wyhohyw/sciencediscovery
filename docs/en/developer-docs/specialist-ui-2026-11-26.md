@@ -35,7 +35,9 @@ in Git history. Existing prompt composition and runtime permissions are preserve
   an empty selection to all capabilities.
 - **SPUI-05 Details and Try:** detail subpages show all instructions, runtime,
   capability names and prompt examples. Try opens a new inbox conversation bound
-  to the enabled role; an example pre-fills the composer for the user's review.
+  to the enabled role; an example pre-fills the composer once for the user's review.
+  The session creation API refuses a new binding if the role has been disabled
+  since selection.
   Neither action submits a Run or calls a model automatically. Existing sessions
   and their drafts are not rebound or submitted.
 - **SPUI-06 Prompt examples:** optional persisted `promptExamples: string[]` on

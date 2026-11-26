@@ -3481,6 +3481,7 @@ export function createApiServer(config = loadServerConfig(), dependencies: ApiSe
           },
           {
             allowUnconfiguredModel: body.modelId === undefined && body.settingsOverrides?.modelId === undefined,
+            requireEnabledSpecialist: true,
             selectFallbackModel: true,
           },
         ));

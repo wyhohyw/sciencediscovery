@@ -4797,6 +4797,8 @@ export class SessionStore {
     } = {},
     options: {
       allowUnconfiguredModel?: boolean;
+      /** A new interactive session can only bind an enabled Specialist. */
+      requireEnabledSpecialist?: boolean;
       /** Choose a saved model for a new interactive session when no default is set. */
       selectFallbackModel?: boolean;
       researchSnapshot?: Session["researchSnapshot"];
@@ -4835,8 +4837,12 @@ export class SessionStore {
       throw new Error("The task model must have a saved API token");
     }
     const now = new Date().toISOString();
-    if (governance.specialistId && !this.getSpecialist(governance.specialistId)) {
-      throw new Error("Specialist not found");
+    if (governance.specialistId) {
+      const specialist = this.getSpecialist(governance.specialistId);
+      if (!specialist) throw new Error("Specialist not found");
+      if (options.requireEnabledSpecialist && specialist.enabled === false) {
+        throw new SessionStoreHttpError("Specialist is disabled", 409, "SPECIALIST_DISABLED");
+      }
     }
     const runnerIds = governance.runnerIds === undefined ? undefined : this.validateRunnerIds(governance.runnerIds);
     const remoteRunnerHostIds = runnerIds ? runnerIds.filter((id) => id !== "local")
