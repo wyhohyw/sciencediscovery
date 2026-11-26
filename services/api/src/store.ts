@@ -4949,7 +4949,14 @@ export class SessionStore {
     const connectorIds = [...new Set(input.connectorIds ?? [])];
     const unavailableConnectors = connectorIds.filter((id) => !this.connectorIds.has(id));
     if (unavailableConnectors.length) throw new Error(`Specialist connectors are unavailable: ${unavailableConnectors.join(", ")}`);
-    return { connectorIds, description, enabledSkillIds, instructions, name, runtime: normalizeSpecialistRuntime(input.runtime) };
+    const examples = input.promptExamples === undefined ? [] : input.promptExamples;
+    if (!Array.isArray(examples) || examples.length > 10
+      || examples.some((value) => typeof value !== "string" || value.trim() === "" || value.trim().length > 1000)) {
+      throw new Error("Specialist prompt examples must contain at most 10 nonempty strings of 1-1000 characters");
+    }
+    return { connectorIds, description, enabledSkillIds, instructions, name,
+      ...(input.promptExamples === undefined ? {} : { promptExamples: examples.map((value) => value.trim()) }),
+      runtime: normalizeSpecialistRuntime(input.runtime) };
   }
 
   async createSpecialist(input: CreateSpecialistRequest): Promise<Specialist> {
@@ -4968,7 +4975,7 @@ export class SessionStore {
     const specialist = this.catalog.specialists.find((candidate) => candidate.id === specialistId);
     if (!specialist) throw new Error("Specialist not found");
     const touchedCoreField = "name" in input || "description" in input || "instructions" in input
-      || "connectorIds" in input || "enabledSkillIds" in input || "runtime" in input;
+      || "connectorIds" in input || "enabledSkillIds" in input || "runtime" in input || "promptExamples" in input;
     if (specialist.builtIn) {
       // Built-in specialists are read-only except for the on/off `enabled` toggle.
       if (touchedCoreField) {

@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 
 import type { ApiClient } from "../api/client.js";
+import type { Specialist } from "../api/types.js";
 import type { WorkspaceActions, WorkspaceState } from "../app/use-workspace.js";
 import { TEXT } from "../text.js";
 import { claimsEscape } from "./dialog-escape.js";
@@ -72,6 +73,7 @@ function categoryOf(group: SettingsGroup): CategoryId {
 }
 
 interface Props {
+  onTrySpecialist?: (specialist: Specialist, prompt?: string) => Promise<void>;
   actions: WorkspaceActions;
   client: ApiClient;
   group: SettingsGroup;
@@ -95,6 +97,7 @@ interface Props {
  * its own fields as they are left.
  */
 export function SystemSettingsDialog({
+  onTrySpecialist,
   actions,
   client,
   group,
@@ -109,7 +112,7 @@ export function SystemSettingsDialog({
    *  pane keeps the width rather than reflowing around a zero column. */
   const [navOpen, setNavOpen] = useState(true);
   const [addingModel, setAddingModel] = useState(false);
-  const [addingSpecialist, setAddingSpecialist] = useState(false);
+  const [specialistSubpage, setSpecialistSubpage] = useState(false);
 
   // A group picked from the directory opens its category, so a collapsed one
   // never hides the choice the user just made.
@@ -121,7 +124,7 @@ export function SystemSettingsDialog({
   // state lives in the pane and unmounts here.
   useEffect(() => {
     setAddingModel(false);
-    setAddingSpecialist(false);
+    setSpecialistSubpage(false);
   }, [group]);
 
   useEffect(() => {
@@ -170,7 +173,8 @@ export function SystemSettingsDialog({
         return (
           <SpecialistsSettings
             client={client}
-            onCancelCreate={addingSpecialist ? () => setAddingSpecialist(false) : undefined}
+            onSubpageChange={setSpecialistSubpage}
+            onTry={onTrySpecialist}
             onConfirm={actions.confirmAction}
           />
         );
@@ -224,7 +228,7 @@ export function SystemSettingsDialog({
       <section
         aria-label={TEXT.settings.system.title}
         aria-modal="true"
-        className={`config-panel${navOpen ? "" : " is-nav-collapsed"}`}
+        className={`config-panel${navOpen ? "" : " is-nav-collapsed"}${group === "specialists" && specialistSubpage ? " is-specialist-subpage" : ""}`}
         role="dialog"
       >
         <nav aria-label={TEXT.settings.system.navLabel} className="settings-group-nav">
@@ -278,7 +282,7 @@ export function SystemSettingsDialog({
               <SidebarToggle onClick={() => setNavOpen(true)} open={false} />
             </div>
           )}
-          {group === "skills" ? pane : (
+          {group === "skills" || group === "specialists" ? pane : (
             <div className="settings-group-detail" key={group}>
               <header className="settings-detail-header">
                 <div>
@@ -288,10 +292,6 @@ export function SystemSettingsDialog({
                 {group === "models" ? (
                   <button className="pill-button is-dark" onClick={() => setAddingModel(true)} type="button">
                     {TEXT.settings.model.add}
-                  </button>
-                ) : group === "specialists" ? (
-                  <button className="pill-button is-dark" onClick={() => setAddingSpecialist(true)} type="button">
-                    {TEXT.settings.system.specialists.add}
                   </button>
                 ) : null}
               </header>

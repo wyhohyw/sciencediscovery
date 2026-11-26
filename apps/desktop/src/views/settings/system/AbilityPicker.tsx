@@ -1,26 +1,12 @@
-// Copyright (C) 2026-2026 Huawei Technologies Co., Ltd
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
+// Copyright (C) 2026 Huawei Technologies Co., Ltd
+// SPDX-License-Identifier: Apache-2.0
 import { useState } from "react";
-
 import type { ConnectorManifest, SkillDescriptor } from "../../../api/types.js";
 import { TEXT } from "../../../text.js";
 import { SettingsModal } from "../SettingsModal.js";
+import { SpecialistMark, SpecialistSearch, SpecialistSourceTabs, type SpecialistSource } from "./SpecialistParts.js";
 
-/** Which of the two capability lists a tab is showing. */
 export type AbilityTab = "skills" | "connectors";
-
 interface Props {
   connectors: ConnectorManifest[];
   initialTab: AbilityTab;
@@ -31,118 +17,40 @@ interface Props {
   skills: SkillDescriptor[];
 }
 
-function connectorName(connector: ConnectorManifest): string {
-  return connector.displayName ?? connector.id;
-}
-
-function skillDetail(skill: SkillDescriptor): string {
-  return skill.description.trim() === "" ? skill.id : skill.description;
-}
-
-/**
- * The modal behind 添加技能 / 添加连接器.
- *
- * It lists every capability the machine knows about, not only the ones the
- * specialist already has, so a list can be filled from one place. Selections
- * are drafted here and handed back as a whole; closing without 添加 leaves the
- * form below untouched.
- */
-export function AbilityPicker({
-  connectors,
-  initialTab,
-  onApply,
-  onClose,
-  selectedConnectorIds,
-  selectedSkillIds,
-  skills,
-}: Props) {
-  const [tab, setTab] = useState<AbilityTab>(initialTab);
-  const [skillIds, setSkillIds] = useState(selectedSkillIds);
-  const [connectorIds, setConnectorIds] = useState(selectedConnectorIds);
-
-  const toggle = (ids: string[], setIds: (next: string[]) => void, id: string, picked: boolean) => {
-    setIds(picked ? [...ids, id] : ids.filter((candidate) => candidate !== id));
+/** Selection belongs to this drawer until Confirm; Cancel never edits the form. */
+export function AbilityPicker({ connectors, initialTab, onApply, onClose, selectedConnectorIds, selectedSkillIds, skills }: Props) {
+  const [skillIds, setSkillIds] = useState([...selectedSkillIds]);
+  const [connectorIds, setConnectorIds] = useState([...selectedConnectorIds]);
+  const [source, setSource] = useState<SpecialistSource>("all");
+  const [query, setQuery] = useState("");
+  const labels = TEXT.settings.system.specialists;
+  const showingSkills = initialTab === "skills";
+  const ids = showingSkills ? skillIds : connectorIds;
+  const rows = showingSkills ? skills.map(s => ({ id: s.id, name: s.name, description: s.description, official: s.source === "built-in" }))
+    : connectors.map(c => ({ id: c.id, name: c.displayName ?? c.id, description: c.commercialUseConstraints || c.id, official: c.trustLevel === "bundled" }));
+  const needle = query.trim().toLocaleLowerCase();
+  const filtered = rows.filter(row => (source === "all" || row.official === (source === "official"))
+    && `${row.name} ${row.description}`.toLocaleLowerCase().includes(needle));
+  const choose = (id: string, checked: boolean) => {
+    const next = checked ? [...new Set([...ids, id])] : ids.filter(value => value !== id);
+    if (showingSkills) setSkillIds(next); else setConnectorIds(next);
   };
-
-  return (
-    <SettingsModal label={TEXT.settings.system.specialists.pickerTitle} onClose={onClose} wide>
-      <div className="settings-picker">
-        <div aria-label={TEXT.settings.system.specialists.capabilities} className="settings-ability-tabs" role="tablist">
-          <button
-            aria-selected={tab === "skills"}
-            className={`settings-ability-tab${tab === "skills" ? " is-active" : ""}`}
-            onClick={() => setTab("skills")}
-            role="tab"
-            type="button"
-          >
-            {TEXT.settings.system.specialists.skills}
-            <span className="settings-ability-tab-count">{skillIds.length}</span>
-          </button>
-          <button
-            aria-selected={tab === "connectors"}
-            className={`settings-ability-tab${tab === "connectors" ? " is-active" : ""}`}
-            onClick={() => setTab("connectors")}
-            role="tab"
-            type="button"
-          >
-            {TEXT.settings.system.specialists.connectors}
-            <span className="settings-ability-tab-count">{connectorIds.length}</span>
-          </button>
-        </div>
-
-        {tab === "skills" ? (
-          skills.length === 0 ? (
-            <p className="settings-picker-empty">{TEXT.settings.system.specialists.pickerEmptySkills}</p>
-          ) : (
-            <div className="settings-picker-list">
-              {skills.map((skill) => (
-                <label className="settings-picker-option" key={skill.id}>
-                  <input
-                    checked={skillIds.includes(skill.id)}
-                    onChange={(event) => toggle(skillIds, setSkillIds, skill.id, event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span className="settings-picker-option-main">
-                    <span className="settings-picker-option-name">{skill.name}</span>
-                    <span className="settings-picker-option-detail">{skillDetail(skill)}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-          )
-        ) : connectors.length === 0 ? (
-          <p className="settings-picker-empty">{TEXT.settings.system.specialists.pickerEmptyConnectors}</p>
-        ) : (
-          <div className="settings-picker-list">
-            {connectors.map((connector) => (
-              <label className="settings-picker-option" key={connector.id}>
-                <input
-                  checked={connectorIds.includes(connector.id)}
-                  onChange={(event) => toggle(connectorIds, setConnectorIds, connector.id, event.target.checked)}
-                  type="checkbox"
-                />
-                <span className="settings-picker-option-main">
-                  <span className="settings-picker-option-name">{connectorName(connector)}</span>
-                  <span className="settings-picker-option-detail">{connector.id}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-        )}
-
-        <div className="settings-card-actions">
-          <button className="secondary-button" onClick={onClose} type="button">
-            {TEXT.settings.cancel}
-          </button>
-          <button
-            className="primary-button"
-            onClick={() => onApply({ connectorIds, skillIds })}
-            type="button"
-          >
-            {TEXT.settings.system.specialists.addSelected}
-          </button>
-        </div>
+  return <SettingsModal side label={showingSkills ? labels.configureSkills : labels.configureMcp} onClose={onClose}>
+    <div className="specialist-drawer-body">
+      <SpecialistSourceTabs value={source} onChange={setSource} />
+      <SpecialistSearch value={query} onChange={setQuery} />
+      <div className="specialist-picker-grid">
+        {filtered.map(row => <label className={`specialist-capability-card${ids.includes(row.id) ? " is-selected" : ""}`} key={row.id}>
+          <div className="specialist-capability-top"><SpecialistMark name={row.name} /><div><strong>{row.name}</strong><span className="specialist-badge">{row.official ? labels.builtIn : labels.external}</span></div>
+            <input aria-label={row.name} type="checkbox" checked={ids.includes(row.id)} onChange={event => choose(row.id, event.target.checked)} />
+          </div><p>{row.description}</p>
+        </label>)}
       </div>
-    </SettingsModal>
-  );
+      {filtered.length === 0 ? <p className="specialist-empty">{labels.noResults}</p> : null}
+    </div>
+    <footer className="specialist-drawer-footer"><span>{labels.selectedCount(ids.length)}</span><div>
+      <button className="pill-button" type="button" onClick={onClose}>{TEXT.settings.cancel}</button>
+      <button className="pill-button is-dark" type="button" onClick={() => onApply({ connectorIds, skillIds })}>{labels.confirm}</button>
+    </div></footer>
+  </SettingsModal>;
 }

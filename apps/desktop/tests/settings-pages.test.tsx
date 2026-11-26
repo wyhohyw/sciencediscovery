@@ -436,7 +436,7 @@ describe("the specialist form", () => {
   it("fills the form from the specialist it edits", () => {
     const markup = form(existing);
     assert.ok(markup.includes(`value="${existing.name}"`), "the name is not filled in");
-    assert.ok(markup.includes(`value="${existing.description}"`), "the description is not filled in");
+    assert.ok(markup.includes(existing.description), "the description is not filled in");
     assert.ok(markup.includes(existing.instructions), "the instructions are not filled in");
     assert.doesNotMatch(markup, /disabled=""[^>]*>保存<\/button>/, "保存 is disabled for a complete specialist");
   });
@@ -451,9 +451,10 @@ describe("the specialist form", () => {
 
   it("shows the counters and placeholders the design asks for", () => {
     const markup = form().replaceAll("<!-- -->", "");
-    assert.ok(markup.includes("0 / 80"), "the name counter is missing");
-    assert.ok(markup.includes("0 / 500"), "the description counter is missing");
-    assert.ok(markup.includes("0 / 20,000"), "the instructions counter is missing");
+    assert.ok(markup.includes("0/500"), "the description counter is missing");
+    assert.ok(markup.includes("0/20,000"), "the instructions counter is missing");
+    assert.ok(markup.includes('class="specialist-editor-footer"'), "the subpage has no sticky actions");
+    assert.ok(markup.includes('role="region"'), "the editor is not an independent subpage");
     assert.ok(markup.includes(TEXT.settings.system.specialists.namePlaceholder), "the name placeholder is missing");
     assert.ok(
       markup.includes(TEXT.settings.system.specialists.descriptionPlaceholder),
@@ -468,7 +469,7 @@ describe("the specialist form", () => {
       "the instructions hint is missing",
     );
     assert.ok(
-      markup.includes(TEXT.settings.system.specialists.instructionsPlaceholder),
+      markup.includes(TEXT.settings.system.specialists.instructionsHint),
       "the instructions placeholder is missing",
     );
     assert.match(markup, /maxlength="80"/iu);
@@ -493,7 +494,7 @@ describe("the specialist form", () => {
     assert.ok(cancel >= 0 && save >= 0 && cancel < save, "the buttons are out of order");
   });
 
-  it("starts a new specialist on 完全访问 with an empty 技能 list", () => {
+  it("starts with all capabilities and keeps specific configuration out of the inherited mode", () => {
     const markup = form();
     const copy = TEXT.settings.system.specialists;
     assert.ok(markup.includes(copy.capabilities), "the 能力 title is missing");
@@ -502,10 +503,9 @@ describe("the specialist form", () => {
     assert.ok(markup.includes(copy.defaultTag), "the 默认 tag is missing");
     assert.ok(markup.includes(copy.fullAccessHint), "完全访问's hint is missing");
     assert.ok(markup.includes(copy.orSpecific), "the divider is missing");
-    assert.ok(markup.includes(copy.addSkill), "添加技能 is missing");
-    assert.ok(markup.includes(copy.noSkills), "the empty 技能 list is missing");
-    assert.ok(markup.includes(copy.skillsNote), "the empty-list warning is missing");
-    assert.match(markup, /type="radio"[^>]*checked=""/, "完全访问 is not selected by default");
+    assert.ok(markup.includes(copy.promptExamples), "prompt examples are missing");
+    assert.ok(!markup.includes(copy.configureSkills), "inherited mode must not imply an explicit selection");
+    assert.match(markup, /role="radio"[^>]*aria-checked="true"/, "all capabilities is not selected by default");
   });
 
   it("shows the specific skills a specialist already has", () => {
@@ -514,9 +514,9 @@ describe("the specialist form", () => {
       { skills: [skill("draft-review", "初稿审阅")] },
     );
     assert.ok(markup.includes("初稿审阅"), "the chosen skill is not listed");
-    assert.ok(markup.includes(`${TEXT.settings.system.specialists.remove} 初稿审阅`), "the skill has no remove control");
+    assert.ok(markup.includes(`${TEXT.settings.system.specialists.remove} draft-review`), "the skill has no remove control");
     assert.ok(!markup.includes(TEXT.settings.system.specialists.noSkills), "the empty state is still shown");
-    assert.doesNotMatch(markup, /type="radio"[^>]*checked=""/, "完全访问 is still selected for a specific list");
+    assert.match(markup, /role="radio"[^>]*aria-checked="false"/, "all capabilities is still selected for a specific list");
   });
 
   it("lists every capability in the picker", () => {
@@ -536,7 +536,8 @@ describe("the specialist form", () => {
     const skills = pick("skills");
     assert.ok(skills.includes("初稿审阅"), "the picker does not list the skill");
     assert.ok(skills.includes("初稿审阅 的说明"), "the picker does not describe the skill");
-    assert.ok(skills.includes(TEXT.settings.system.specialists.addSelected), "the picker has no 添加");
+    assert.ok(skills.includes(TEXT.settings.system.specialists.confirm), "the drawer has no Confirm");
+    assert.ok(skills.includes("specialist-drawer"), "capabilities must open in a side drawer");
 
     const connectors = pick("connectors");
     assert.ok(connectors.includes("arXiv"), "the picker does not list the connector");
