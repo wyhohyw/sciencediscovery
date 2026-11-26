@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>旅程报告 · zh-CN: manage Specialist cards and trial drafts</title>
+<style>
+:root { color-scheme: light dark; }
+body { margin: 0 auto; max-width: 1080px; padding: 24px 20px 64px;
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC", sans-serif;
+  line-height: 1.6; color: #1c1f23; background: #fff; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; }
+h2 { font-size: 1.2rem; margin-top: 36px; border-bottom: 1px solid #e3e6ea; padding-bottom: 6px; }
+h3 { font-size: 1.05rem; margin: 28px 0 6px; }
+h4 { font-size: 0.92rem; margin: 18px 0 6px; color: #4a5058; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.92rem; }
+th, td { border: 1px solid #e3e6ea; padding: 7px 10px; text-align: left; vertical-align: top; }
+th { background: #f6f8fa; font-weight: 600; white-space: nowrap; }
+table.steps td:nth-child(1) { width: 40px; text-align: center; }
+.outcome { display: inline-block; padding: 3px 12px; border-radius: 999px; font-weight: 700; font-size: 0.9rem; }
+.outcome.PASS { background: #e3f6e6; color: #1a7f33; }
+.outcome.FAIL { background: #fdeaea; color: #b3261e; }
+.outcome.BLOCKED { background: #fff4e0; color: #9a6400; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.82rem; white-space: nowrap; }
+.badge.passed { background: #e3f6e6; color: #1a7f33; }
+.badge.failed { background: #fdeaea; color: #b3261e; }
+.badge.blocked { background: #fff4e0; color: #9a6400; }
+.step { border-top: 1px solid #eef0f3; padding-top: 4px; }
+.step img { max-width: 100%; border: 1px solid #dfe3e8; border-radius: 6px; display: block; margin: 10px 0; }
+pre { background: #f6f8fa; border: 1px solid #e3e6ea; border-radius: 6px; padding: 10px 12px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+pre.error { background: #fdf3f2; border-color: #f3cfcb; }
+.muted { color: #6b7280; font-size: 0.88rem; }
+.desc { margin: 2px 0; }
+blockquote { margin: 8px 0; padding: 8px 14px; background: #fff4e0; border-left: 4px solid #d79a25; }
+@media (prefers-color-scheme: dark) {
+  body { background: #16181c; color: #e6e8ea; }
+  th { background: #21242a; }
+  th, td { border-color: #31363d; }
+  pre { background: #1d2026; border-color: #31363d; }
+  pre.error { background: #2a1d1d; border-color: #5a2f2c; }
+  h2 { border-color: #31363d; }
+  .step, .step img { border-color: #31363d; }
+}
+</style>
+</head>
+<body>
+<h1>旅程报告 · zh-CN: manage Specialist cards and trial drafts</h1>
+<p><span class="outcome PASS">PASS</span></p>
+<table><tr><th>结果</th><td>PASS</td></tr>
+<tr><th>被测 SHA</th><td>8e648e8f80221641e43504e571a73dc1641c8104</td></tr>
+<tr><th>规格文件</th><td>test/journey-desktop-specialist-toggle.spec.ts</td></tr>
+<tr><th>用例</th><td>zh-CN: manage Specialist cards and trial drafts</td></tr>
+<tr><th>分组</th><td>mocked (@isolation:global @fixture:standard @category:e2e @os:linux @arch:amd64 @model:mock @status:reviewed @mocked)</td></tr>
+<tr><th>开始</th><td>2026-11-26T08:58:59.203Z</td></tr>
+<tr><th>结束</th><td>2026-11-26T09:00:27.296Z</td></tr>
+<tr><th>耗时</th><td>88.1s</td></tr>
+<tr><th>步骤</th><td>8 / 8 通过</td></tr></table>
+<h2>场景目标</h2>
+<p>Create, configure, inspect and safely try a custom Specialist without executing a model.</p>
+<h2>前置条件</h2><ul><li>Actual isolated API and compiled Desktop</li>
+<li>zh-CN</li>
+<li>Owned data and loopback model only</li></ul>
+
+
+<h2>步骤总览</h2>
+<table class="steps">
+<thead><tr><th>#</th><th>用户步骤</th><th>用户应看到</th><th>结果</th><th>耗时</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><a href="#step-1">1. Inspect catalog controls</a></td><td>Source tabs, search and the primary create action are available.</td><td><span class="badge passed">✅ 通过</span></td><td>20.8s</td></tr>
+<tr><td>2</td><td><a href="#step-2">2. Create with capability drawers and examples</a></td><td>Only confirmed drawer selections are saved; prompt examples stay separate from instructions.</td><td><span class="badge passed">✅ 通过</span></td><td>6.7s</td></tr>
+<tr><td>3</td><td><a href="#step-3">3. Preserve and explicitly clear a disabled current binding</a></td><td>The bound name, state, full narrow hint and inactive selected option remain truthful.</td><td><span class="badge passed">✅ 通过</span></td><td>23.5s</td></tr>
+<tr><td>4</td><td><a href="#step-4">4. Recover a toggle failure and exercise bulk actions</a></td><td>A failed write stays off, retry succeeds, and fixed Reviewer has no switch.</td><td><span class="badge passed">✅ 通过</span></td><td>4.4s</td></tr>
+<tr><td>5</td><td><a href="#step-5">5. Toggle and repair after removing a selected skill</a></td><td>A stale skill does not prevent disabling; explicit removal preserves the remaining MCP selection.</td><td><span class="badge passed">✅ 通过</span></td><td>13.1s</td></tr>
+<tr><td>6</td><td><a href="#step-6">6. Try an example without starting a Run</a></td><td>A new inbox Session binds the role and only prefills the editable composer.</td><td><span class="badge passed">✅ 通过</span></td><td>12.3s</td></tr>
+<tr><td>7</td><td><a href="#step-7">7. Inspect builtins and narrow actions</a></td><td>Built-ins have read-only details; custom actions stay reachable at 960px.</td><td><span class="badge passed">✅ 通过</span></td><td>1.7s</td></tr>
+<tr><td>8</td><td><a href="#step-8">8. Cancel then pointer-confirm deletion</a></td><td>Cancel preserves the role; confirmation removes it from the real API.</td><td><span class="badge passed">✅ 通过</span></td><td>3.4s</td></tr>
+</tbody></table>
+<h2>步骤详情</h2><section class="step" id="step-1">
+<h3>1. 1. Inspect catalog controls <span class="badge passed">✅ 通过</span></h3>
+<p class="desc"><strong>用户应看到：</strong>Source tabs, search and the primary create action are available.</p>
+<p class="muted">耗时 20.8s</p>
+<a href="01-1-Inspect-catalog-controls.png"><img src="01-1-Inspect-catalog-controls.png" alt="步骤 1 截图" /></a>
+
+<h4>关键日志</h4>
+<pre class="logs">network: GET https://api.github.com/repos/openJiuwen-ai/sciencediscovery failed: net::ERR_BLOCKED_BY_CLIENT.Inspector
+console: [error] Failed to load resource: net::ERR_BLOCKED_BY_CLIENT.Inspector @ https://api.github.com/repos/openJiuwen-ai/sciencediscovery</pre>
+</section>
+<section class="step" id="step-2">
+<h3>2. 2. Create with capability drawers and examples <span class="badge passed">✅ 通过</span></h3>
+<p class="desc"><strong>用户应看到：</strong>Only confirmed drawer selections are saved; prompt examples stay separate from instructions.</p>
+<p class="muted">耗时 6.7s</p>
+<a href="02-2-Create-with-capability-drawers-and-exa.png"><img src="02-2-Create-with-capability-drawers-and-exa.png" alt="步骤 2 截图" /></a>
+
+<h4>关键日志</h4>
+<p class="muted">无 console 错误/警告，无失败请求。</p>
+</section>
+<section class="step" id="step-3">
+<h3>3. 3. Preserve and explicitly clear a disabled current binding <span class="badge passed">✅ 通过</span></h3>
+<p class="desc"><strong>用户应看到：</strong>The bound name, state, full narrow hint and inactive selected option remain truthful.</p>
+<p class="muted">耗时 23.5s</p>
+<a href="03-3-Preserve-and-explicitly-clear-a-disabl.png"><img src="03-3-Preserve-and-explicitly-clear-a-disabl.png" alt="步骤 3 截图" /></a>
+
+<h4>关键日志</h4>
+<pre class="logs">network: GET http://127.0.0.1:4178/src/assets/brand/app-mark.png failed: net::ERR_ABORTED
+network: GET http://127.0.0.1:4178/src/assets/landing/mascot.png failed: net::ERR_ABORTED
+network: GET http://127.0.0.1:4178/src/assets/icons/migration.svg failed: net::ERR_ABORTED
+network: GET https://api.github.com/repos/openJiuwen-ai/sciencediscovery failed: net::ERR_BLOCKED_BY_CLIENT.Inspector
+console: [error] Failed to load resource: net::ERR_BLOCKED_BY_CLIENT.Inspector @ https://api.github.com/repos/openJiuwen-ai/sciencediscovery</pre>
+</section>
+<section class="step" id="step-4">
+<h3>4. 4. Recover a toggle failure and exercise bulk actions <span class="badge passed">✅ 通过</span></h3>
+<p class="desc"><strong>用户应看到：</strong>A failed write stays off, retry succeeds, and fixed Reviewer has no switch.</p>
+<p class="muted">耗时 4.4s</p>
+<a href="04-4-Recover-a-toggle-failure-and-exercise-.png"><img src="04-4-Recover-a-toggle-failure-and-exercise-.png" alt="步骤 4 截图" /></a>
+
+<h4>关键日志</h4>
+<pre class="logs">network: PUT http://127.0.0.1:4178/api/specialists/d4abb31d-cd21-4add-95d4-b891b42e4005 failed: net::ERR_FAILED
+console: [error] Failed to load resource: net::ERR_FAILED @ http://127.0.0.1:4178/api/specialists/d4abb31d-cd21-4add-95d4-b891b42e4005</pre>
+</section>
+<section class="step" id="step-5">
+<h3>5. 5. Toggle and repair after removing a selected skill <span class="badge passed">✅ 通过</span></h3>
+<p class="desc"><strong>用户应看到：</strong>A stale skill does not prevent disabling; explicit removal preserves the remaining MCP selection.</p>
+<p class="muted">耗时 13.1s</p>
+<a href="05-5-Toggle-and-repair-after-removing-a-sel.png"><img src="05-5-Toggle-and-repair-after-removing-a-sel.png" alt="步骤 5 截图" /></a>
+
+<h4>关键日志</h4>
+<pre class="logs">network: GET https://api.github.com/repos/openJiuwen-ai/sciencediscovery failed: net::ERR_BLOCKED_BY_CLIENT.Inspector
+console: [error] Failed to load resource: net::ERR_BLOCKED_BY_CLIENT.Inspector @ https://api.github.com/repos/openJiuwen-ai/sciencediscovery</pre>
+</section>
+<section class="step" id="step-6">
+<h3>6. 6. Try an example without starting a Run <span class="badge passed">✅ 通过</span></h3>
+<p class="desc"><strong>用户应看到：</strong>A new inbox Session binds the role and only prefills the editable composer.</p>
+<p class="muted">耗时 12.3s</p>
+<a href="06-6-Try-an-example-without-starting-a-Run.png"><img src="06-6-Try-an-example-without-starting-a-Run.png" alt="步骤 6 截图" /></a>
+
+<h4>关键日志</h4>
+<pre class="logs">network: GET https://api.github.com/repos/openJiuwen-ai/sciencediscovery failed: net::ERR_BLOCKED_BY_CLIENT.Inspector
+console: [error] Failed to load resource: net::ERR_BLOCKED_BY_CLIENT.Inspector @ https://api.github.com/repos/openJiuwen-ai/sciencediscovery</pre>
+</section>
+<section class="step" id="step-7">
+<h3>7. 7. Inspect builtins and narrow actions <span class="badge passed">✅ 通过</span></h3>
+<p class="desc"><strong>用户应看到：</strong>Built-ins have read-only details; custom actions stay reachable at 960px.</p>
+<p class="muted">耗时 1.7s</p>
+<a href="07-7-Inspect-builtins-and-narrow-actions.png"><img src="07-7-Inspect-builtins-and-narrow-actions.png" alt="步骤 7 截图" /></a>
+
+<h4>关键日志</h4>
+<p class="muted">无 console 错误/警告，无失败请求。</p>
+</section>
+<section class="step" id="step-8">
+<h3>8. 8. Cancel then pointer-confirm deletion <span class="badge passed">✅ 通过</span></h3>
+<p class="desc"><strong>用户应看到：</strong>Cancel preserves the role; confirmation removes it from the real API.</p>
+<p class="muted">耗时 3.4s</p>
+<a href="08-8-Cancel-then-pointer-confirm-deletion.png"><img src="08-8-Cancel-then-pointer-confirm-deletion.png" alt="步骤 8 截图" /></a>
+
+<h4>关键日志</h4>
+<p class="muted">无 console 错误/警告，无失败请求。</p>
+</section>
+
+<h2>运行元数据（来自 E2E-META）</h2>
+<table><tr><th>类型</th><td>-</td></tr>
+<tr><th>模型</th><td>-</td></tr>
+<tr><th>凭据</th><td>-</td></tr>
+<tr><th>成本与副作用</th><td>-</td></tr></table>
+</body>
+</html>

@@ -1,0 +1,110 @@
+{
+  "source": "3a00fd822e7cd88f0044e7c2e562febb8eb06dd1",
+  "product": "apps/desktop",
+  "images": [
+    {
+      "file": "zh-catalog-1920.png",
+      "source": "3a00fd822e7cd88f0044e7c2e562febb8eb06dd1",
+      "state": "catalog-1920",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "2d212c39009b529e935b789ebb641a03289fee13749ab18a2260d7efa269183a"
+    },
+    {
+      "file": "zh-create-1920.png",
+      "source": "3a00fd822e7cd88f0044e7c2e562febb8eb06dd1",
+      "state": "create-1920",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "7e322e18ae54c1f1632dd9a0ea43f2f6b866cacbe9d88dcce32c00a975566836"
+    },
+    {
+      "file": "zh-catalog-1440.png",
+      "source": "3a00fd822e7cd88f0044e7c2e562febb8eb06dd1",
+      "state": "catalog-1440",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "295e2f764b4990c46edb85ecfac6f95f580e8f7678e3ac85f15452733fb45469"
+    },
+    {
+      "file": "zh-catalog-960.png",
+      "source": "3a00fd822e7cd88f0044e7c2e562febb8eb06dd1",
+      "state": "catalog-960",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "1afcdc5c99aadea6acc5e9e497ad4ca4d71d22cf64e31e16569e17897c826b73"
+    },
+    {
+      "file": "en-catalog-1920.png",
+      "source": "3a00fd822e7cd88f0044e7c2e562febb8eb06dd1",
+      "state": "catalog-1920",
+      "locale": "en",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "fd0591f1170d847e9e2a95c435a5de8ac29ea6fc305b1880ec1e45c03eef133d"
+    },
+    {
+      "file": "en-create-1920.png",
+      "source": "3a00fd822e7cd88f0044e7c2e562febb8eb06dd1",
+      "state": "create-1920",
+      "locale": "en",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "c3999d3eca8e7e3c6dc505380505a6f124ec844cf8e70013aac4dd308b90bdfd"
+    },
+    {
+      "file": "en-catalog-1440.png",
+      "source": "3a00fd822e7cd88f0044e7c2e562febb8eb06dd1",
+      "state": "catalog-1440",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "fd75648b9f261dacc96ebc3cd4d781426751c38954ec475558e1c7fc2f6fac79"
+    },
+    {
+      "file": "en-catalog-960.png",
+      "source": "3a00fd822e7cd88f0044e7c2e562febb8eb06dd1",
+      "state": "catalog-960",
+      "locale": "en",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "cdf3edce34a9abd5917b11cbaca089cb7569aabe304dd25a32e9879cae08f69b"
+    }
+  ]
+}

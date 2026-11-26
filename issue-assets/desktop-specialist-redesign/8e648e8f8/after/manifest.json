@@ -1,0 +1,292 @@
+{
+  "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+  "product": "apps/desktop",
+  "images": [
+    {
+      "file": "zh-catalog-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "catalog-1920",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "20d15fa5f0c8a2ef1340973935ecdc9d400167970999366c8fbd04b4faac8051"
+    },
+    {
+      "file": "zh-detail-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "detail-1920",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "06381879672e299e0623fd244cf80efcadba71c058b7a21f5a81fef1c180b71e"
+    },
+    {
+      "file": "zh-editor-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "editor-1920",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "06c202119f70a84e6b18f774a4e9f152ffd9db052bbc498a359926c238b07906"
+    },
+    {
+      "file": "zh-skills-drawer-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "skills-drawer-1920",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "3cb2a45264e7bd910bce00adcac7a95d9952ff4449155f9fbfe2ea514d46e84a"
+    },
+    {
+      "file": "zh-mcp-drawer-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "mcp-drawer-1920",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "8772b60c8d008af44e8b8fd9bc702ad824c8cbc69fb6269e13ed02b1658935e1"
+    },
+    {
+      "file": "zh-editor-lower-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "editor-lower-1920",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "db59c11b78dd662ae08c7284781e9a186efcaba5ec924caa48a026ef4e7ddcdd"
+    },
+    {
+      "file": "zh-editor-960.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "editor-960",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "703ddaf56337809379718477cfda9811c7cad44f5cc9d86d394034a9595b0372"
+    },
+    {
+      "file": "zh-skills-drawer-960.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "skills-drawer-960",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "b664dfdd909d47dee30401506a6f3ea724971c47ac8b03f2f3c58f14c746fe36"
+    },
+    {
+      "file": "zh-create-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "create-1920",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "b845fa85c581a7b588bf4b4118174bed7e0333695f6ab4e1f613618cabf8028c"
+    },
+    {
+      "file": "zh-catalog-1440.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "catalog-1440",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "97324c6076790cada84147837d19cbd569a153ab36e0074b86594f640d9c93ec"
+    },
+    {
+      "file": "zh-catalog-960.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "catalog-960",
+      "locale": "zh-CN",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "a8de07c2ebb5a5665b383524d2d4002cdfe6affa7fee22a298149d15c0044a8b"
+    },
+    {
+      "file": "en-catalog-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "catalog-1920",
+      "locale": "en",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "40330b9bf38e2af964235671e91f10444f4e2e048d3c2302e935800142f64926"
+    },
+    {
+      "file": "en-detail-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "detail-1920",
+      "locale": "en",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "cec45fcfe054ec0e3ab9924cee7c9ff0daa3c9eb02780331d9d0d6704adea1f7"
+    },
+    {
+      "file": "en-editor-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "editor-1920",
+      "locale": "en",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "58623cbdb3994e3087f1d2470629bcbf66462d265fd4a6cc4452bc9b1028131c"
+    },
+    {
+      "file": "en-skills-drawer-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "skills-drawer-1920",
+      "locale": "en",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "1a118743657d4aca8c65ea77044dba2375ebd222973ae77ca7e558519ba1f882"
+    },
+    {
+      "file": "en-mcp-drawer-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "mcp-drawer-1920",
+      "locale": "en",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "a77a71e743cdfd76b5b112e359cd8ebe3dbf7022361f91aae597577b4a79e647"
+    },
+    {
+      "file": "en-editor-lower-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "editor-lower-1920",
+      "locale": "en",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "10a0c1f2c42cddeed226a7304a2f015b7b8c177a766e6ac0d6ef6fcd5c0d80cb"
+    },
+    {
+      "file": "en-editor-960.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "editor-960",
+      "locale": "en",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "df0d2dc2cd50f64452283b156dd016b2e3f6a9bd7bd49ba4c1a8df8fe495f713"
+    },
+    {
+      "file": "en-skills-drawer-960.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "skills-drawer-960",
+      "locale": "en",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "0f7e916f43a19cc44a6b3ea2f97344fcf2d5b283dff66f1060ed6856bb9e43c7"
+    },
+    {
+      "file": "en-create-1920.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "create-1920",
+      "locale": "en",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "7d64ed6424e55d6efc6dc1b926069b857ee63d5f4b7e828f9338fd7aa071d738"
+    },
+    {
+      "file": "en-catalog-1440.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "catalog-1440",
+      "locale": "en",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "de0e356ea1cbc972ce081495915c9aa38e5de730ddeaf562e2cc7b31a6499fc9"
+    },
+    {
+      "file": "en-catalog-960.png",
+      "source": "8e648e8f80221641e43504e571a73dc1641c8104",
+      "state": "catalog-960",
+      "locale": "en",
+      "viewport": {
+        "width": 960,
+        "height": 720
+      },
+      "dpr": 1,
+      "fixture": "deterministic browser API; no live backend/model",
+      "sha256": "7203f586b10189b800a330d4a62c49b6e27177511d6ebe87cd2031243558bc58"
+    }
+  ]
+}
