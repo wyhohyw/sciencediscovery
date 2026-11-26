@@ -31,6 +31,7 @@ from sciencediscovery_evolve.cdr_engine import (
     _draw_skill,
     _measure_reading,
     _select,
+    _temperature,
     positive_llr_substitutions,
 )
 from sciencediscovery_evolve.engine import RunSpec
@@ -357,6 +358,254 @@ def test_a_positive_llr_keeps_only_cdr_substitutions():
         [["D", 1, "W"]],
         [["D", 2, "D"]],
     ]
+
+
+def test_temperature_anneals_geometrically_by_cycle():
+    assert _temperature(0, 10) == 1.0
+    assert abs(_temperature(3, 10) - 0.2 ** (3 / 9)) < 1e-9
+    assert abs(_temperature(9, 10) - 0.2) < 1e-9
+    assert abs(_temperature(40, 10) - 0.2) < 1e-9
+
+
+def test_the_agent_route_sees_the_search_state_and_earlier_cycles():
+    prompts = []
+    proposals = iter([
+        [[["D", 2, "W"]], [["D", 1, "Y"]]],
+        [[["D", 2, "F"]], [["D", 3, "H"]]],
+    ])
+
+    def measure(payload):
+        return {
+            "ok": True, "score": -1.0, "error": "",
+            "backbone_pdb": "BACK", "sequence": payload["sequence"],
+            "mutations": payload.get("mutations") or [],
+        }
+
+    def complete(prompt: str) -> str:
+        if prompt.startswith("Return plain text"):
+            return "the loop tip drives contact"
+        if "ROUTER-ALLOWED" in prompt:
+            prompts.append(prompt)
+            return json.dumps({"skill_id": POINT_SKILL, "selection_reason": "refine"})
+        return json.dumps({"mutations": next(proposals)})
+
+    events = []
+    CdrEngine(measure=measure, complete=complete).run(
+        spec(expansions=4, baseline_code=baseline()),
+        events.append,
+        lambda: False,
+    )
+    assert len(prompts) == 2
+    assert "backend=llm; prior=" in prompts[0]
+    assert "Consecutive cycles without global-best improvement: 0" in prompts[0]
+    assert "HISTORICAL SKILL OUTCOMES" not in prompts[0]
+    assert "Consecutive cycles without global-best improvement: 1" in prompts[1]
+    assert "`cdr-point-mutation`: folded 2, admitted 2" in prompts[1]
+
+
+def test_parent_select_normalises_fitness_before_the_temperature():
+    population = [
+        _Member(index=0, sequence="A", score=-2.2),
+        _Member(index=1, sequence="B", score=-1.7),
+    ]
+    rng = random.Random(7)
+    picks = [_select(population, 1.0, rng, 0.0).index for _ in range(4000)]
+    assert 0.69 < picks.count(1) / len(picks) < 0.77
+
+
+def test_a_child_is_one_level_below_its_parent():
+    def measure(payload):
+        if payload.get("propose") is True:
+            return {
+                "ok": True, "score": -1.0, "error": "", "backbone_pdb": "CHILD",
+                "sequence": "AWDE", "mutations": [["D", 2, "W"]],
+                "portfolio": [{"sequence": "AYDE", "mutations": [["D", 2, "Y"]]}],
+            }
+        return {
+            "ok": True, "score": -1.0, "error": "", "backbone_pdb": "CHILD",
+            "sequence": payload["sequence"], "mutations": payload["mutations"],
+        }
+
+    starting = json.loads(baseline())
+    starting["skill_weights"] = {ESM_SKILL: 1.0}
+    starting["router_selection_strategy"] = "weighted"
+    events = []
+    CdrEngine(measure=measure).run(
+        spec(expansions=6, baseline_code=json.dumps(starting)),
+        events.append,
+        lambda: False,
+    )
+    depth = {0: 0}
+    for event in events:
+        if event["type"] == "expanded":
+            assert event["depth"] == depth[event["parentIndex"]] + 1
+            depth[event["nodeIndex"]] = event["depth"]
+    assert max(depth.values()) >= 2
+
+
+def test_a_runner_that_drops_ends_the_search_without_spending_expansions():
+    calls = []
+
+    def measure(payload):
+        calls.append(payload)
+        if len(calls) == 1:
+            return {"ok": True, "score": -1.5, "error": "", "sequence": payload["sequence"]}
+        return {
+            "ok": False,
+            "error": "runner GET /shell-executions/x returned 502: Remote runner is not connected",
+            "runner_lost": True,
+        }
+
+    starting = json.loads(baseline())
+    starting["skill_weights"] = {ESM_SKILL: 1.0}
+    starting["router_selection_strategy"] = "weighted"
+    events = []
+    CdrEngine(measure=measure).run(
+        spec(expansions=5, baseline_code=json.dumps(starting)),
+        events.append,
+        lambda: False,
+    )
+    assert events[-1]["status"] == "failed"
+    assert events[-1]["stopReason"] == "runner_lost"
+    assert events[-1]["candidates"] == 0
+    assert len(calls) == 2
+
+
+def test_a_refused_submission_waits_for_the_runner_then_folds(monkeypatch):
+    from sciencediscovery_evolve import cdr_engine, npu_job
+
+    monkeypatch.setattr(cdr_engine, "RUNNER_RETRY_WAITS", (0, 0))
+    refused = npu_job.NpuJobError(
+        'runner POST /shell-executions returned 409: {"error":"the selected runner is not connected"}'
+    )
+    attempts = []
+
+    class Client:
+        def run(self, code, should_stop=None):
+            attempts.append(code)
+            if len(attempts) < 3:
+                raise refused
+            return {"state": "succeeded"}, {"sequence": "AWDE", "mutations": [["D", 2, "W"]]}
+
+    monkeypatch.setattr(npu_job, "npu_client_from_spec", lambda options, timeout: Client())
+    monkeypatch.setattr(npu_job, "interpret_npu_job", lambda job, artifact, metric_key: (True, {"score": -1.0}, ""))
+    reading = cdr_engine._npu_measure(spec(), lambda: False)({"sequence": "ACDE"})
+    assert len(attempts) == 3
+    assert reading["ok"] is True
+    assert "runner_lost" not in reading
+
+
+def test_a_lost_status_read_is_not_resubmitted(monkeypatch):
+    from sciencediscovery_evolve import cdr_engine, npu_job
+
+    monkeypatch.setattr(cdr_engine, "RUNNER_RETRY_WAITS", (0, 0))
+    attempts = []
+
+    class Client:
+        def run(self, code, should_stop=None):
+            attempts.append(code)
+            raise npu_job.NpuJobError("runner GET /shell-executions/x returned 502: Remote runner is not connected")
+
+    monkeypatch.setattr(npu_job, "npu_client_from_spec", lambda options, timeout: Client())
+    reading = cdr_engine._npu_measure(spec(), lambda: False)({"sequence": "ACDE"})
+    assert len(attempts) == 1
+    assert reading["runner_lost"] is True
+
+
+def test_the_design_prompt_carries_the_fold_metrics_the_gate_and_what_was_tried():
+    prompts = []
+
+    def measure(payload):
+        return {
+            "ok": payload["sequence"] != "AWDE",
+            "score": -1.0 if payload["sequence"] == "AWDE" else -1.4,
+            "error": "cdr_fraction 0.31 below 0.5" if payload["sequence"] == "AWDE" else "",
+            "sequence": payload["sequence"],
+            "mutations": payload.get("mutations") or [],
+            "metrics": {
+                "iptm": 0.62, "plddt": 81.4, "cdr_contact_fraction": 0.31,
+                "gate_passed": payload["sequence"] != "AWDE",
+                "components": {"iptm": 0.9, "pae": 0.4},
+            },
+        }
+
+    proposals = iter([
+        [[["D", 2, "W"]], [["D", 1, "Y"]]],
+        [[["D", 3, "F"]], [["D", 2, "H"]]],
+    ])
+
+    def complete(prompt: str) -> str:
+        if prompt.startswith("Return plain text"):
+            return "the loop tip drives contact"
+        if "ROUTER-ALLOWED" in prompt:
+            return json.dumps({"skill_id": POINT_SKILL, "selection_reason": "refine"})
+        prompts.append(prompt)
+        return json.dumps({"mutations": next(proposals)})
+
+    events = []
+    CdrEngine(measure=measure, complete=complete).run(
+        spec(expansions=4, baseline_code=baseline()),
+        events.append,
+        lambda: False,
+    )
+    assert "=== OBJECTIVE ===" in prompts[0]
+    assert "- iptm: 0.62" in prompts[0]
+    assert "- cdr_contact_fraction: 0.31" in prompts[0]
+    assert "Largest loss terms: iptm=0.9, pae=0.4" in prompts[0]
+    assert "ANTIBODY HEADER / CDR MAP" in prompts[0]
+    assert "the loop tip drives contact" in prompts[0]
+    assert "ALREADY MEASURED" not in prompts[0]
+    assert "D2CW -> score -1.0 gate: cdr_fraction 0.31 below 0.5" in prompts[1]
+    assert "REFLECTION ON THE LAST CYCLE" in prompts[1]
+
+
+def test_a_chat_cycle_after_a_proposed_batch_reflects_on_the_batch():
+    """The NPU branch folds a whole batch; the next cycle still has to reflect."""
+    skills = iter([ESM_SKILL, POINT_SKILL, POINT_SKILL])
+    reflections = []
+
+    def measure(payload):
+        if payload.get("propose") is True:
+            return {
+                "ok": True, "score": -1.2, "error": "", "sequence": "AWDE",
+                "mutations": [["D", 2, "W"]],
+                "portfolio": [{"sequence": "AYDE", "mutations": [["D", 2, "Y"]]}],
+            }
+        return {
+            "ok": True, "score": -1.1, "error": "",
+            "sequence": payload["sequence"], "mutations": payload["mutations"],
+        }
+
+    def complete(prompt: str) -> str:
+        if prompt.startswith("Return plain text under 80 words"):
+            reflections.append(prompt)
+            return "the tip helped"
+        if prompt.startswith("Return plain text"):
+            return "the loop tip drives contact"
+        if "ROUTER-ALLOWED" in prompt:
+            return json.dumps({"skill_id": next(skills), "selection_reason": "go"})
+        return json.dumps({"mutations": [[["D", 3, "F"]], [["D", 1, "Y"]]]})
+
+    events = []
+    CdrEngine(measure=measure, complete=complete).run(
+        spec(expansions=4, baseline_code=baseline()),
+        events.append,
+        lambda: False,
+    )
+    assert events[-1]["status"] == "succeeded"
+    assert reflections, "the cycle after the proposed batch never reflected"
+    assert "`esm2-guided-mutation`" in reflections[0]
+    assert "D2CW -> score -1.2" in reflections[0]
+
+
+def test_a_measurement_keeps_the_metrics_behind_its_score():
+    reading = _measure_reading(
+        {"iptm": 0.7, "plddt": 80.0, "gate_passed": True, "chatter": "drop me"},
+        True,
+        {"score": -1.2},
+        "",
+    )
+    assert reading["metrics"] == {"iptm": 0.7, "plddt": 80.0, "gate_passed": True}
 
 
 def test_a_starting_point_without_cdr_ranges_fails_before_a_model_call():

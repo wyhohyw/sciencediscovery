@@ -30,6 +30,7 @@ import hashlib
 import json
 import math
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -46,6 +47,12 @@ FULL_SKILL = "cdr-full-redesign"
 ESM_SKILL = "esm2-guided-mutation"
 MPNN_SKILL = "antibody-inverse-folding"
 CHAT_SKILLS = frozenset({POINT_SKILL, FULL_SKILL})
+SKILL_BACKENDS = {
+    POINT_SKILL: "llm",
+    FULL_SKILL: "llm",
+    MPNN_SKILL: "inverse_folding",
+    ESM_SKILL: "esm2",
+}
 # Match the colleague CRLF2 workflow weights.
 DEFAULT_SKILL_WEIGHTS = {
     POINT_SKILL: 0.5,
@@ -55,6 +62,12 @@ DEFAULT_SKILL_WEIGHTS = {
 }
 DEFAULT_UNIFORM_FRACTION = 0.1
 DEFAULT_ROUTER_STRATEGY = "agent"
+RUNNER_RETRY_WAITS = (30, 60, 120)
+#: Fold evidence the evaluator already returns, carried into the design prompt.
+REPORTED_METRICS = (
+    "iptm", "plddt", "cdr_contact_fraction", "framework_contact_fraction",
+    "gate_passed", "esm2", "components",
+)
 ScoreFn = Callable[[dict[str, Any]], tuple[bool, float | None, str]]
 CompleteFn = Callable[[str], str]
 MeasureFn = Callable[[dict[str, Any]], dict[str, Any]]
@@ -68,6 +81,10 @@ class _Member:
     visits: int = 0
     mutations: list[list[Any]] = field(default_factory=list)
     backbone: str | None = None
+    depth: int = 0
+    metrics: dict[str, Any] = field(default_factory=dict)
+    gate: str = ""
+    summary: str = "starting sequence"
 
 
 class CdrEngine:
@@ -155,7 +172,7 @@ class CdrEngine:
                 node += 1
                 produced += 1
                 emit(events.expanded(
-                    node, parent.index, 1, None, False,
+                    node, parent.index, parent.depth + 1, None, False,
                     change_summary="proposal rejected",
                     error=str(refusal),
                 ))
@@ -165,7 +182,7 @@ class CdrEngine:
                 node += 1
                 produced += 1
                 emit(events.expanded(
-                    node, parent.index, 1, None, False,
+                    node, parent.index, parent.depth + 1, None, False,
                     change_summary="no mutations",
                     error="the model returned no CDR mutations",
                 ))
@@ -181,19 +198,22 @@ class CdrEngine:
                 child, summary, error = _apply(parent.sequence, config, mutations)
                 if child is None:
                     emit(events.expanded(
-                        node, parent.index, 1, None, False,
+                        node, parent.index, parent.depth + 1, None, False,
                         change_summary=summary, error=error,
                     ))
                     emit(events.merged(node, False, error or "rejected", category="constraint-violated"))
                     continue
                 ok, value, why = score(_payload(config, child, mutations))
                 admitted = _publish(
-                    emit, node, parent.index, summary, _digest(child), len(child), ok, value, why,
+                    emit, node, parent.index, parent.depth + 1, summary, _digest(child), len(child),
+                    ok, value, why,
                 )
                 if not admitted:
                     emit(events.merged(node, False, why or "not scored", category="candidate-failed"))
                     continue
-                population.append(_Member(index=node, sequence=child, score=value, mutations=mutations))
+                population.append(_Member(
+                    index=node, sequence=child, score=value, mutations=mutations, depth=parent.depth + 1,
+                ))
                 emit(events.merged(node, True, "entered the population"))
                 current = None if best is None else _score_of(population, best)
                 if value is not None and (current is None or value >= current):
@@ -217,6 +237,12 @@ class CdrEngine:
         rng = random.Random(int(spec.options.get("seed", 42)))
         seed_payload = _payload(config, config["sequence"], [])
         seed_reading = measure(seed_payload)
+        if seed_reading.get("runner_lost"):
+            emit(events.log("error", str(seed_reading.get("error") or "runner lost")))
+            emit(events.search_finished(
+                "failed", None, 0, stop_reason="runner_lost", expansions_planned=spec.expansions,
+            ))
+            return
         seed_score = seed_reading.get("score")
         seed_ok = bool(seed_reading.get("ok"))
         seed_error = str(seed_reading.get("error") or "")
@@ -226,6 +252,8 @@ class CdrEngine:
             index=0, sequence=config["sequence"],
             score=float(seed_score) if seed_admitted else None,
             backbone=seed_reading.get("backbone_pdb") if isinstance(seed_reading.get("backbone_pdb"), str) else None,
+            metrics=seed_reading.get("metrics") or {},
+            gate=seed_error,
         )
         emit(events.seeded(
             0, float(seed_score) if seed_measured else None,
@@ -248,15 +276,30 @@ class CdrEngine:
         # Inverse folding rewrites the CDR. The 1–3 cap stays on the chat path.
         accepting = dict(config)
         accepting["mutation_max"] = max(int(config["mutation_max"]), len(config["mutable"]))
+        lost = False
+        outcomes: list[dict[str, Any]] = []
+        tries: list[dict[str, Any]] = []
+        reflection = "none"
+        folded_cycle: tuple[int, str, int] | None = None
+        analysis = _analyze(complete, config) if complete is not None else "none"
+        streak = 0
+        seen_best: float | None = None
+        cycles = max(1, -(-spec.expansions // _batch(config, spec, 0)))
 
         def record(parent: _Member, reading: dict[str, Any], mutations: list, *, budget=accepting) -> None:
-            nonlocal node, produced, best
+            nonlocal node, produced, best, lost, status, reason
+            if reading.get("runner_lost"):
+                # The runner never ran this candidate, so it does not spend an expansion.
+                lost = True
+                status, reason = "failed", "runner_lost"
+                emit(events.log("error", str(reading.get("error") or "the runner was lost")))
+                return
             node += 1
             produced += 1
             emit(events.selected(parent.index, [{"nodeIndex": parent.index, "visits": parent.visits}]))
             if reading.get("empty") or not isinstance(mutations, list):
                 emit(events.expanded(
-                    node, parent.index, 1, None, False,
+                    node, parent.index, parent.depth + 1, None, False,
                     change_summary="no mutations",
                     error=str(reading.get("error") or "the model returned no CDR mutations"),
                 ))
@@ -266,7 +309,7 @@ class CdrEngine:
             reported = reading.get("sequence")
             if child is None or (isinstance(reported, str) and reported != child):
                 emit(events.expanded(
-                    node, parent.index, 1, None, False,
+                    node, parent.index, parent.depth + 1, None, False,
                     change_summary=summary, error=error or "the folded sequence does not match the mutations",
                 ))
                 emit(events.merged(node, False, error or "rejected", category="constraint-violated"))
@@ -275,28 +318,49 @@ class CdrEngine:
             value = reading.get("score")
             why = str(reading.get("error") or "")
             admitted = _publish(
-                emit, node, parent.index, summary, _digest(child), len(child),
+                emit, node, parent.index, parent.depth + 1, summary, _digest(child), len(child),
                 bool(reading.get("ok")), value if isinstance(value, (int, float)) else None, why,
             )
+            if outcomes and isinstance(value, (int, float)):
+                outcomes[-1]["scores"].append(round(float(value), 4))
+            tries.append({
+                "node": node, "parent": parent.index, "summary": summary,
+                "score": round(float(value), 4) if isinstance(value, (int, float)) else None,
+                "gate": why, "metrics": reading.get("metrics") or {},
+            })
             if not admitted:
                 emit(events.merged(node, False, why or "not scored", category="candidate-failed"))
                 return
+            if outcomes:
+                outcomes[-1]["admitted"] += 1
             population.append(_Member(
                 index=node, sequence=child, score=value, mutations=mutations,
                 backbone=reading.get("backbone_pdb") if isinstance(reading.get("backbone_pdb"), str) else None,
+                depth=parent.depth + 1,
+                metrics=reading.get("metrics") or {},
+                gate=why,
+                summary=summary,
             ))
             emit(events.merged(node, True, "entered the population"))
             current = None if best is None else _score_of(population, best)
             if isinstance(value, (int, float)) and (current is None or value >= current):
                 best = node
 
-        while produced < spec.expansions:
+        while produced < spec.expansions and not lost:
             if should_stop():
                 status, reason = "stopped", "stopped"
                 break
+            top = max((member.score for member in population if member.score is not None), default=None)
+            if outcomes:
+                streak = 0 if top is not None and (seen_best is None or top > seen_best) else streak + 1
+            seen_best = top
+            if folded_cycle is not None and complete is not None:
+                # The harness reflects after every cycle (reflection_interval 1).
+                reflection = _reflect(complete, folded_cycle[0], folded_cycle[1], tries[folded_cycle[2]:])
+                folded_cycle = None
             parent = _select(
                 population,
-                _temperature(produced, spec.expansions),
+                _temperature(cycle, cycles),
                 rng,
                 float(config.get("parent_fitness_uniform_fraction") or DEFAULT_UNIFORM_FRACTION),
             )
@@ -310,7 +374,32 @@ class CdrEngine:
                 config.get("skill_weights"),
                 chat_ok=complete is not None,
                 strategy=str(config.get("router_selection_strategy") or DEFAULT_ROUTER_STRATEGY),
+                state={
+                    "parent": {"score": parent.score, "sequence": parent.sequence},
+                    "best": top,
+                    "streak": streak,
+                    "outcomes": outcomes,
+                },
             )
+            outcomes.append({"cycle": cycle, "skill": skill, "scores": [], "admitted": 0})
+            design_state = {
+                "analysis": analysis,
+                "best": top,
+                "streak": streak,
+                "reflection": reflection,
+                "tries": tries,
+                "population": [
+                    {
+                        "node": member.index, "score": member.score,
+                        "depth": member.depth, "summary": member.summary,
+                    }
+                    for member in sorted(
+                        (item for item in population if item.score is not None),
+                        key=lambda item: -item.score,
+                    )
+                ],
+            }
+            folded_cycle = (cycle, skill, len(tries))
             if skill in CHAT_SKILLS and complete is not None:
                 cycle += 1
                 budget = dict(config)
@@ -319,16 +408,16 @@ class CdrEngine:
                     budget["mutation_max"] = max(1, len(config["mutable"]))
                 try:
                     proposals = (
-                        _proposals_full(complete, config, parent, width)
+                        _proposals_full(complete, config, parent, width, design_state)
                         if skill == FULL_SKILL
-                        else _proposals(complete, config, parent, width)
+                        else _proposals(complete, config, parent, width, design_state)
                     )
                 except _Refusal as refusal:
                     record(parent, {"empty": True, "error": str(refusal)}, [], budget=budget)
                     continue
                 folded = 0
                 for mutations in proposals:
-                    if produced >= spec.expansions:
+                    if produced >= spec.expansions or lost:
                         break
                     if folded and should_stop():
                         status, reason = "stopped", "stopped"
@@ -339,7 +428,7 @@ class CdrEngine:
                     follow = _payload(config, child, mutations)
                     record(parent, measure(follow), mutations, budget=budget)
                     folded += 1
-                if folded == 0:
+                if folded == 0 and not lost:
                     record(parent, {
                         "empty": True,
                         "error": "the model returned no new CDR mutations",
@@ -356,6 +445,9 @@ class CdrEngine:
             if parent.backbone:
                 payload["parent_backbone_pdb"] = parent.backbone
             reading = measure(payload)
+            if reading.get("runner_lost"):
+                record(parent, reading, [])
+                continue
             pending = _pending_folds(reading)
             if not pending:
                 record(parent, reading if reading.get("empty") else {
@@ -364,7 +456,7 @@ class CdrEngine:
                 }, [])
                 continue
             for offset, item in enumerate(pending):
-                if produced >= spec.expansions:
+                if produced >= spec.expansions or lost:
                     break
                 if offset and should_stop():
                     status, reason = "stopped", "stopped"
@@ -502,16 +594,56 @@ def _agent_pick_skill(
     complete: CompleteFn,
     legal: list[str],
     weights: list[float],
+    state: dict[str, Any] | None = None,
 ) -> str:
-    """Ask the chat model to pick one legal skill, the harness agent route."""
+    """Ask the chat model to pick one legal skill, the harness agent route.
+
+    The harness design agent compares the routes against the parent, the search
+    state and what earlier cycles did, so the prompt carries the same evidence.
+    """
+    state = state or {}
     total = sum(weights) or float(len(legal))
+    streak = int(state.get("streak") or 0)
     lines = [
-        "Return JSON only. Pick exactly one skill_id from the list.",
-        "Compare the priors and choose the skill that best continues the search.",
+        "You are the Design Agent for an antibody CDR search. Return one JSON object only.",
+        "",
+        "SKILL SELECTION",
+        "- Choose exactly one Router-allowed primary skill. Compare available routes against current evidence,",
+        "  bottlenecks, and search radius, not list order or a single metric.",
+        "",
+        "=== ROUTER-ALLOWED PRIMARY SKILLS ===",
+        "The Router checked runtime legality. Compare all listed skills and select exactly one.",
     ]
     for name, weight in zip(legal, weights):
-        lines.append(f"- `{name}`: prior={weight / total:.4f}")
-    lines.append('{"skill_id": "<id>"}')
+        lines.append(f"- `{name}`: backend={SKILL_BACKENDS[name]}; prior={weight / total:.4f}")
+    lines.append("- Return the chosen ID once as top-level `skill_id`; do not compose skills.")
+    parent = state.get("parent")
+    if isinstance(parent, dict):
+        lines.extend([
+            "",
+            "=== PARENT ===",
+            f"- Score (higher is better, score = -loss): {parent.get('score')}",
+            f"- Sequence: {parent.get('sequence')}",
+        ])
+    lines.extend([
+        "",
+        "=== SEARCH STATE ===",
+        f"- Best score so far: {state.get('best')}",
+        f"- Consecutive cycles without global-best improvement: {streak}",
+        "- " + (
+            "Use the gate evidence and historical skill outcomes to choose a legal basin-changing proposal."
+            if streak else "Continue refining the improved lineage."
+        ),
+    ])
+    outcomes = state.get("outcomes") or []
+    if outcomes:
+        lines.extend(["", "=== HISTORICAL SKILL OUTCOMES ==="])
+        for item in outcomes[-6:]:
+            lines.append(
+                f"- cycle {item['cycle']} `{item['skill']}`: folded {len(item['scores'])}, "
+                f"admitted {item['admitted']}, best score {max(item['scores']) if item['scores'] else 'none'}"
+            )
+    lines.extend(["", '{"skill_id": "<id>", "selection_reason": "<short comparison>"}'])
     text = complete("\n".join(lines))
     try:
         start, end = text.find("{"), text.rfind("}")
@@ -533,11 +665,12 @@ def _choose_skill(
     *,
     chat_ok: bool,
     strategy: str,
+    state: dict[str, Any] | None = None,
 ) -> str:
     legal, chosen = _legal_skills(has_backbone, weights, chat_ok=chat_ok)
     if strategy == "agent" and complete is not None and chat_ok:
         try:
-            return _agent_pick_skill(complete, legal, chosen)
+            return _agent_pick_skill(complete, legal, chosen, state)
         except _Refusal:
             pass
     return random.Random(f"protein-design-router:{seed}:{cycle}").choices(legal, weights=chosen, k=1)[0]
@@ -567,7 +700,7 @@ def _measured(ok: bool, value: float | None) -> bool:
 
 
 def _publish(
-    emit: Emit, node: int, parent: int, summary: str, code_hash: str, code_chars: int,
+    emit: Emit, node: int, parent: int, depth: int, summary: str, code_hash: str, code_chars: int,
     ok: bool, value: float | None, why: str,
 ) -> bool:
     """Record a fold the way the run card reads it, and say whether it may breed.
@@ -577,7 +710,7 @@ def _publish(
     """
     measured = _measured(ok, value)
     emit(events.expanded(
-        node, parent, 1, float(value) if measured else None, measured,
+        node, parent, depth, float(value) if measured else None, measured,
         change_summary=summary,
         code_hash=code_hash,
         code_chars=code_chars,
@@ -685,6 +818,9 @@ def _measure_reading(
         "mutations": artifact.get("mutations") if artifact else None,
         "sequence": artifact.get("sequence") if artifact else None,
         "backbone_pdb": artifact.get("backbone_pdb") if artifact else None,
+        # The design prompt needs the evidence behind the score, the way the
+        # harness hands the agent its metric context and gate feedback.
+        "metrics": {name: artifact.get(name) for name in REPORTED_METRICS if artifact and name in artifact},
     }
     portfolio = artifact.get("portfolio") if artifact else None
     if isinstance(portfolio, list):
@@ -703,6 +839,19 @@ def _measure_reading(
     return reading
 
 
+def _runner_absent(error: Exception) -> bool:
+    text = str(error)
+    return text.startswith("runner ") and ("not connected" in text or "failed:" in text)
+
+
+def _pause(seconds: float, should_stop: Callable[[], bool]) -> bool:
+    for _ in range(int(seconds)):
+        if should_stop():
+            return False
+        time.sleep(1)
+    return True
+
+
 def _npu_measure(spec: RunSpec, should_stop: Callable[[], bool]) -> MeasureFn:
     """One runner execution returns the proposal, the fold, and the backbone."""
     from .npu_job import NpuJobError, interpret_npu_job, npu_client_from_spec
@@ -717,10 +866,20 @@ def _npu_measure(spec: RunSpec, should_stop: Callable[[], bool]) -> MeasureFn:
     def measure(payload: dict[str, Any]) -> dict[str, Any]:
         if should_stop():
             return {"ok": False, "error": "the search was stopped"}
-        try:
-            job, artifact = client.run(json.dumps(payload, sort_keys=True), should_stop)
-        except NpuJobError as error:
-            return {"ok": False, "error": str(error)}
+        code = json.dumps(payload, sort_keys=True)
+        for wait in (*RUNNER_RETRY_WAITS, None):
+            try:
+                job, artifact = client.run(code, should_stop)
+                break
+            except NpuJobError as error:
+                if not _runner_absent(error):
+                    return {"ok": False, "error": str(error)}
+                # A refused submission never reached the runner, so trying again cannot
+                # put a second fold on the card. A lost status read might have run it.
+                if wait is None or "POST /shell-executions" not in str(error):
+                    return {"ok": False, "error": str(error), "runner_lost": True}
+                if not _pause(wait, should_stop):
+                    return {"ok": False, "error": "the search was stopped"}
         if artifact and artifact.get("proposal") == "empty":
             return {
                 "ok": False,
@@ -733,22 +892,125 @@ def _npu_measure(spec: RunSpec, should_stop: Callable[[], bool]) -> MeasureFn:
     return measure
 
 
-def _proposals(complete: CompleteFn, config: dict[str, Any], parent: _Member, count: int) -> list[list[list[Any]]]:
+def _evidence(
+    config: dict[str, Any], parent: _Member, state: dict[str, Any] | None,
+) -> list[str]:
+    """The context blocks the harness design prompt carries around a proposal.
+
+    Scoring evidence is the difference between a blind edit and a directed one:
+    the fold already measured ipTM, pLDDT and the contact fractions, and the
+    gate already said why it refused a sequence.
+    """
+    state = state or {}
+    lines = [
+        "=== OBJECTIVE ===",
+        "- Minimize the OpenDDE fold loss; the reported score is -loss, so a higher score is better.",
+        "- Loss combines pLDDT, interface pLDDT, PAE, interface PAE, ipTM, contact and radius terms,",
+        "  minus 0.1 x the ESM-2 pseudo-log-likelihood.",
+        "- A sequence only enters the population when the 5 A contact gate passes:",
+        "  the CDR share of interface contacts must exceed 0.5.",
+    ]
+    if state.get("analysis"):
+        lines.extend(["", "=== ANTIBODY HEADER / CDR MAP ===", str(state["analysis"])])
+    lines.extend(["", "=== PARENT ===", f"- Score: {parent.score}"])
+    if parent.metrics:
+        for name in ("iptm", "plddt", "cdr_contact_fraction", "framework_contact_fraction", "esm2"):
+            if parent.metrics.get(name) is not None:
+                lines.append(f"- {name}: {parent.metrics[name]}")
+        components = parent.metrics.get("components")
+        if isinstance(components, dict):
+            worst = sorted(components.items(), key=lambda item: -float(item[1] or 0.0))[:4]
+            lines.append("- Largest loss terms: " + ", ".join(f"{k}={v}" for k, v in worst))
+    if parent.gate:
+        lines.append(f"- Gate feedback: {parent.gate}")
+    population = state.get("population") or []
+    if population:
+        lines.extend(["", "=== POPULATION ==="])
+        for item in population[:8]:
+            lines.append(
+                f"- node {item['node']} score {item['score']} depth {item['depth']} {item['summary']}"
+            )
+    tries = state.get("tries") or []
+    if tries:
+        lines.extend(["", "=== ALREADY MEASURED (do not repeat these edits) ==="])
+        for item in tries[-14:]:
+            gate = f" gate: {item['gate']}" if item.get("gate") else ""
+            lines.append(f"- {item['summary'] or 'no change'} -> score {item['score']}{gate}")
+    lines.extend([
+        "",
+        "=== SEARCH STATE ===",
+        f"- Best score so far: {state.get('best')}",
+        f"- Consecutive cycles without global-best improvement: {int(state.get('streak') or 0)}",
+        "- " + (
+            "Use the gate evidence and the measured history to choose a basin-changing proposal."
+            if state.get("streak") else "Continue refining the improved lineage."
+        ),
+    ])
+    if state.get("reflection") and state["reflection"] != "none":
+        lines.extend(["", "=== REFLECTION ON THE LAST CYCLE ===", str(state["reflection"])])
+    return lines
+
+
+def _analyze(complete: CompleteFn, config: dict[str, Any]) -> str:
+    """One opening read of the CDR map, the harness analyze phase."""
+    groups = "; ".join(f"{start}-{end}" for start, end in config["cdr_regions"])
+    prompt = "\n".join([
+        "Return plain text under 120 words. Do not name or discuss the protein.",
+        "Describe what the designable loops of this binder look like and which residues",
+        "are most likely to drive interface contact, as guidance for later edits.",
+        f"Chain {config['chain']} sequence:\n{config['sequence']}",
+        f"Designable CDR ranges (1-based, last range is CDR3): {groups}.",
+        f"Target chain {config['target_chain']} sequence:\n{config['target_sequence']}",
+        f"Target hotspots (1-based): {config['target_hotspots'] or 'none given'}.",
+    ])
+    try:
+        return complete(prompt).strip()[:900] or "none"
+    except _Refusal:
+        return "none"
+
+
+def _reflect(complete: CompleteFn, cycle: int, skill: str, results: list[dict[str, Any]]) -> str:
+    """Summarise the cycle that just folded, the harness reflect phase."""
+    if not results:
+        return "none"
+    lines = [
+        "Return plain text under 80 words. Do not name or discuss the protein.",
+        f"Cycle {cycle} used skill `{skill}`. These edits were folded:",
+    ]
+    for item in results:
+        gate = f" gate: {item['gate']}" if item.get("gate") else ""
+        lines.append(f"- {item['summary'] or 'no change'} -> score {item['score']}{gate}")
+    lines.append(
+        "Say which positions or substitutions helped, which hurt, and what the next cycle should try."
+    )
+    try:
+        return complete("\n".join(lines)).strip()[:600] or "none"
+    except _Refusal:
+        return "none"
+
+
+def _proposals(
+    complete: CompleteFn, config: dict[str, Any], parent: _Member, count: int,
+    state: dict[str, Any] | None = None,
+) -> list[list[list[Any]]]:
     positions = ", ".join(str(pos) for pos in sorted(config["mutable"]))
     how_many = (
         "Exactly one substitution"
         if count == 1
         else f"{count} candidates, each with {config['mutation_min']} to {config['mutation_max']} substitutions"
     )
-    prompt = (
-        "Return JSON only. Do not name or discuss the protein.\n"
-        f"Chain {config['chain']}. {how_many}, "
-        "encoded as [chain, 1-based position, new amino acid].\n"
-        f"Allowed positions: {positions}.\n"
-        f"Sequence:\n{parent.sequence}\n"
-        "The new amino acid must differ from the sequence at that position.\n"
-        '{"mutations": [[["<chain>", 0, "X"]]]}'
-    )
+    prompt = "\n".join([
+        "Return JSON only. Do not name or discuss the protein.",
+        f"Chain {config['chain']}. {how_many}, encoded as [chain, 1-based position, new amino acid].",
+        f"Allowed positions: {positions}.",
+        f"Sequence:\n{parent.sequence}",
+        "The new amino acid must differ from the sequence at that position.",
+        "Candidates must yield distinct sequences.",
+        "",
+        *_evidence(config, parent, state),
+        "",
+        '{"mutations": [[["<chain>", 0, "X"]]]}',
+    ])
     text = complete(prompt)
     try:
         start, end = text.find("{"), text.rfind("}")
@@ -767,21 +1029,25 @@ def _proposals(complete: CompleteFn, config: dict[str, Any], parent: _Member, co
 
 def _proposals_full(
     complete: CompleteFn, config: dict[str, Any], parent: _Member, count: int,
+    state: dict[str, Any] | None = None,
 ) -> list[list[list[Any]]]:
     """Ask for a complete CDR assignment, then keep only residues that change."""
     ordered = sorted(config["mutable"])
     positions = ", ".join(str(pos) for pos in ordered)
-    prompt = (
-        "Return JSON only. Do not name or discuss the protein.\n"
-        f"Chain {config['chain']}. {count} full CDR redesign candidates.\n"
+    prompt = "\n".join([
+        "Return JSON only. Do not name or discuss the protein.",
+        f"Chain {config['chain']}. {count} full CDR redesign candidates.",
         "Each candidate must assign exactly one amino acid to every allowed "
-        "position, including unchanged parent residues.\n"
-        f"Allowed positions: {positions}.\n"
-        f"Sequence:\n{parent.sequence}\n"
+        "position, including unchanged parent residues.",
+        f"Allowed positions: {positions}.",
+        f"Sequence:\n{parent.sequence}",
         "Candidates must yield different sequences; change at least three "
-        "positions when that many exist.\n"
-        '{"mutations": [[["<chain>", 0, "X"]]]}'
-    )
+        "positions when that many exist.",
+        "",
+        *_evidence(config, parent, state),
+        "",
+        '{"mutations": [[["<chain>", 0, "X"]]]}',
+    ])
     text = complete(prompt)
     try:
         start, end = text.find("{"), text.rfind("}")
@@ -856,11 +1122,20 @@ def _select(
     pool = scored or population
     if len(pool) == 1:
         return pool[0]
-    fitness = [math.exp((member.score or 0.0) / max(temperature, 1e-6)) for member in pool]
-    total = sum(fitness) or float(len(pool))
+    finite = [member.score for member in pool if member.score is not None and math.isfinite(member.score)]
+    if not finite or max(finite) == min(finite):
+        softmax = [1.0] * len(pool)
+    else:
+        lower, upper = min(finite), max(finite)
+        softmax = [
+            math.exp(max(-700.0, ((member.score - lower) / (upper - lower) - 1.0) / max(temperature, 1e-6)))
+            if member.score is not None else 0.0
+            for member in pool
+        ]
+    total = sum(softmax)
     mix = min(1.0, max(0.0, float(uniform_fraction)))
     uniform = mix / len(pool)
-    weights = [(1.0 - mix) * value / total + uniform for value in fitness]
+    weights = [(1.0 - mix) * value / total + uniform for value in softmax]
     draw = rng.random() * sum(weights)
     cursor = 0.0
     for member, weight in zip(pool, weights):
@@ -870,10 +1145,10 @@ def _select(
     return pool[-1]
 
 
-def _temperature(produced: int, total: int) -> float:
-    if total <= 1:
-        return 1.0
-    return 1.0 + (0.2 - 1.0) * (produced / total)
+def _temperature(cycle: int, cycles: int) -> float:
+    """Anneal 1.0 to 0.2 geometrically over the cycles, as ``ParentSampler.temperature`` does."""
+    progress = min(1.0, max(0.0, cycle / max(1, cycles - 1)))
+    return 1.0 * (0.2 / 1.0) ** progress
 
 
 def _score_of(population: list[_Member], index: int) -> float:
