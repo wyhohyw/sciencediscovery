@@ -1,0 +1,29 @@
+{
+  "source": "6a55baeb28ca1aa3c73b1d0648bc32d2c7c63190",
+  "renderer": "Desktop Vite in Chromium",
+  "backend": "isolated ScienceDiscovery API",
+  "locale": "en",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "deviceScaleFactor": 1,
+  "images": [
+    {
+      "file": "02-create.png",
+      "sha256": "c0afe6b9214de8fe96fa1f28c6bbcf264a8157e26f6bbf224d42b54d199643fd"
+    },
+    {
+      "file": "03-detail.png",
+      "sha256": "b6d887b87f8677251706acbd145cc499d0740ea6d33fde4d7d552fd1d6edcd88"
+    },
+    {
+      "file": "04-edit.png",
+      "sha256": "9fb9040f651b1e80b5f442fdadf3615be64798cccdde75bd7ed1d3988ff9cd2d"
+    },
+    {
+      "file": "01-catalog.png",
+      "sha256": "c4311c28c046332993e7dd0423ce5cff46e136ab7aae157e7b9ec5e58d51a03d"
+    }
+  ]
+}
