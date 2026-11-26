@@ -32,7 +32,7 @@ import { clearSession, readSession, saveSession, sessionRefreshDelayMs, type Use
 import { ensureFreshAccountSession } from "./auth/session-refresh.js";
 import { LoginPage, hasAuthCallback, settleAuthCallback } from "./views/LoginPage.js";
 import { AccountPage, SignedOutAccount } from "./views/AccountPage.js";
-import { cancelRun, createSession, ensureInbox, getSubagent } from "./api/sessions.js";
+import { cancelRun, createSession, deleteSession, ensureInbox, getSubagent } from "./api/sessions.js";
 import { listSpecialists } from "./api/settings.js";
 import { newSessionRequest } from "./app/approval-mode-preference.js";
 import type {
@@ -1263,7 +1263,7 @@ export function App({ initialToken }: Props) {
       specialistId: specialist.id, ...(state.selectedModelId ? { settingsOverrides: { modelId: state.selectedModelId } } : {}) });
     if (created.specialistId !== specialist.id) {
       // A concurrent disable must not leave an apparently bound Try session behind.
-      await client.request(`/api/sessions/${encodeURIComponent(created.id)}`, { method: "DELETE" });
+      await deleteSession(client, created.id);
       throw new Error(TEXT.settings.system.specialists.tryDisabled);
     }
     await actions.refreshSessions();

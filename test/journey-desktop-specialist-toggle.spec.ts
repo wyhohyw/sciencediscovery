@@ -120,7 +120,7 @@ test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fi
           await detail.getByRole("button", { name: new RegExp(example, "u") }).click(); await expect(settings).toBeHidden(); await expect(page.locator("#composer-textarea")).toHaveValue(example);
           const trials = (await api<Session[]>(page, `/api/projects/${inbox.id}/sessions`)).filter(s => s.title === name); expect(trials).toHaveLength(1); expect(trials[0]!.specialistId).toBe(created!.id);
           expect(await api(page, `/api/sessions/${trials[0]!.id}/runs`)).toEqual([]); expect(model.calls).toHaveLength(0);
-          await api(page, `/api/sessions/${trials[0]!.id}`, { method: "DELETE" }); await openDesktopSession(page, { ...fixture!, modelOwned: true }); await openSettings();
+          await api(page, `/api/sessions/${trials[0]!.id}`, { method: "DELETE", data: { confirmationId: trials[0]!.id } }); await openDesktopSession(page, { ...fixture!, modelOwned: true }); await openSettings();
         });
         await journey.step("7. Inspect builtins and narrow actions", "Built-ins have read-only details; custom actions stay reachable at 960px.", async () => {
           const builtin = baseline.find(s => s.builtIn)!; expect(builtin).toBeTruthy(); await settings.getByRole("button", { name: zh ? `查看专家「${builtin.name}」` : `View specialist "${builtin.name}"`, exact: true }).click();
@@ -135,7 +135,7 @@ test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fi
       } finally {
         try {
           for (const role of baseline) await api(page, `/api/specialists/${role.id}`, { method: "PUT", data: { enabled: role.enabled !== false } });
-          if (inboxId) for (const trial of (await api<Session[]>(page, `/api/projects/${inboxId}/sessions`)).filter(s => s.title === name)) await api(page, `/api/sessions/${trial.id}`, { method: "DELETE" });
+          if (inboxId) for (const trial of (await api<Session[]>(page, `/api/projects/${inboxId}/sessions`)).filter(s => s.title === name)) await api(page, `/api/sessions/${trial.id}`, { method: "DELETE", data: { confirmationId: trial.id } });
           if (fixture) await cleanupJourney(page, fixture);
           created ??= (await api<Specialist[]>(page, "/api/specialists")).find(s => s.name === name);
           if (created) await api(page, `/api/specialists/${created.id}`, { method: "DELETE" });
