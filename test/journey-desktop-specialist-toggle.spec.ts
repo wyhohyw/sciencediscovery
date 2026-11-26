@@ -41,7 +41,7 @@ test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fi
       const w = zh ? { settings: "设置", specialists: "专家", add: "新增专家", edit: "编辑", editTitle: "编辑专家", details: "专家详情", name: "专家名称", description: "描述", instructions: "指令", save: "保存", back: "返回", search: "搜索", specific: "指定可用能力", configureSkills: "配置技能", configureMcp: "配置 MCP 服务", confirm: "确定", cancel: "取消", remove: "删除", try: "去试试", enableAll: "一键启用", disableAll: "一键关闭" }
         : { settings: "Settings", specialists: "Specialists", add: "Add specialist", edit: "Edit", editTitle: "Edit specialist", details: "Specialist details", name: "Name", description: "Description", instructions: "Instructions", save: "Save", back: "Back", search: "Search", specific: "Choose available capabilities", configureSkills: "Configure skills", configureMcp: "Configure MCP services", confirm: "Confirm", cancel: "Cancel", remove: "Delete", try: "Try it", enableAll: "Enable all", disableAll: "Disable all" };
       const suffix = randomUUID().slice(0, 8), name = `UI-${locale}-${suffix} Specialist`, example = "Check this research dataset before analysing it.";
-      const model = await scriptedModel([{ content: "No call expected" }]);
+      const model = await scriptedModel([{ text: "No call expected" }]);
       let fixture: JourneyFixture | undefined, created: Specialist | undefined, ownedSkillId: string | undefined, inboxId: string | undefined;
       let baseline: Specialist[] = [];
       const settings = page.getByRole("dialog", { name: w.settings, exact: true });
