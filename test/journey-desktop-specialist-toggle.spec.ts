@@ -116,8 +116,8 @@ test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fi
           await detail.getByRole("switch").click(); await expect(detail.getByRole("switch")).toHaveAttribute("aria-checked", "true");
         });
         await journey.step("6. Try an example without starting a Run", "A new inbox Session binds the role and only prefills the editable composer.", async () => {
-          await detail.getByRole("button", { name: new RegExp(example, "u") }).click(); await expect(settings).toBeHidden(); await expect(page.locator("#composer-textarea")).toHaveValue(example);
           const inbox = await api<{ id: string }>(page, "/api/inbox", { method: "POST", data: {} }); inboxId = inbox.id;
+          await detail.getByRole("button", { name: new RegExp(example, "u") }).click(); await expect(settings).toBeHidden(); await expect(page.locator("#composer-textarea")).toHaveValue(example);
           const trials = (await api<Session[]>(page, `/api/projects/${inbox.id}/sessions`)).filter(s => s.title === name); expect(trials).toHaveLength(1); expect(trials[0]!.specialistId).toBe(created!.id);
           expect(await api(page, `/api/sessions/${trials[0]!.id}/runs`)).toEqual([]); expect(model.calls).toHaveLength(0);
           await api(page, `/api/sessions/${trials[0]!.id}`, { method: "DELETE" }); await openDesktopSession(page, { ...fixture!, modelOwned: true }); await openSettings();
@@ -129,7 +129,7 @@ test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fi
         });
         await journey.step("8. Cancel then pointer-confirm deletion", "Cancel preserves the role; confirmation removes it from the real API.", async () => {
           await actions().click(); await card.getByRole("menuitem", { name: w.remove, exact: true }).click(); const confirmation = page.getByRole("dialog").filter({ has: page.locator("#confirm-title") });
-          await confirmation.getByRole("button", { name: w.cancel, exact: true }).click(); expect(await readCreated()).toBeTruthy(); await actions().click(); await card.getByRole("menuitem", { name: w.remove, exact: true }).click(); await confirmation.getByRole("button", { name: w.remove, exact: true }).click();
+          await confirmation.getByRole("button", { name: w.cancel, exact: true }).last().click(); expect(await readCreated()).toBeTruthy(); await actions().click(); await card.getByRole("menuitem", { name: w.remove, exact: true }).click(); await confirmation.getByRole("button", { name: w.remove, exact: true }).click();
           await expect(card).toHaveCount(0); expect(await readCreated()).toBeUndefined(); created = undefined;
         });
       } finally {

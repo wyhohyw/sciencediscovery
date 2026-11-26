@@ -203,6 +203,7 @@ test.describe("专家", () => {
       await form.getByRole("radio", { name: /指定可用能力/u }).click();
       await form.getByRole("button", { name: /配置技能/u }).click();
       const drawer = page.getByRole("dialog", { name: "配置技能", exact: true });
+      await expect(drawer.getByRole("tab")).toHaveText(["全部技能", "我的技能", "官方技能"]);
       await drawer.getByRole("checkbox", { name: /文献检索/u }).check();
       await drawer.getByRole("button", { name: "取消", exact: true }).click();
       await expect(form.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
@@ -214,6 +215,7 @@ test.describe("专家", () => {
     await journey.step("2. Apply MCP and an external runtime", "Saved capabilities and runtime match the explicit draft.", async () => {
       await form.getByRole("button", { name: /配置 MCP 服务/u }).click();
       const drawer = page.getByRole("dialog", { name: "配置 MCP 服务", exact: true });
+      await expect(drawer.getByRole("tab")).toHaveText(["全部 MCP", "我的 MCP", "官方 MCP"]);
       await drawer.getByRole("checkbox", { name: "PubMed", exact: true }).check();
       await drawer.getByRole("button", { name: "确定", exact: true }).click();
       await form.getByLabel("运行配置", { exact: true }).selectOption("codex");
@@ -256,7 +258,7 @@ test.describe("专家", () => {
       await menu.click(); await expect(card.getByRole("menuitem")).toHaveText(["去试试", "删除"]);
       await card.getByRole("menuitem", { name: "删除", exact: true }).click();
       let confirm = page.getByRole("dialog", { name: "删除专家「晶体专家改」？", exact: true });
-      await confirm.getByRole("button", { name: "取消", exact: true }).click();
+      await confirm.getByRole("button", { name: "取消", exact: true }).last().click();
       await expect(card).toBeVisible(); await menu.click(); await card.getByRole("menuitem", { name: "删除", exact: true }).click();
       confirm = page.getByRole("dialog", { name: "删除专家「晶体专家改」？", exact: true });
       await confirm.getByRole("button", { name: "删除", exact: true }).click();

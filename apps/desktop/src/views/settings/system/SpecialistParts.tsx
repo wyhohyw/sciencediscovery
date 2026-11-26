@@ -21,10 +21,10 @@ export function SpecialistMark({ name, small = false }: { name: string; small?: 
   return <span aria-hidden="true" className={`specialist-mark is-${colours[code % colours.length]}${small ? " is-small" : ""}`}>{Array.from(name.trim())[0]?.toUpperCase() ?? "S"}</span>;
 }
 
-export function SpecialistSourceTabs({ value, onChange, counts }: {
+export function SpecialistSourceTabs({ value, onChange, counts, labels = TEXT.settings.system.specialists }: {
   value: SpecialistSource; onChange: (value: SpecialistSource) => void; counts?: Record<SpecialistSource, number>;
+  labels?: Record<SpecialistSource, string> & { sourceFilter: string };
 }) {
-  const labels = TEXT.settings.system.specialists;
   return <div className="specialist-source-tabs" role="tablist" aria-label={labels.sourceFilter}>
     {(["all", "mine", "official"] as const).map(source => <button type="button" role="tab" aria-selected={value === source} key={source} onClick={() => onChange(source)}>
       {labels[source]}{counts ? `（${counts[source]}）` : ""}
@@ -48,8 +48,8 @@ export function SpecialistActions({ name, enabled, canDelete, busy, onTry, onDel
     const pointer = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
     const key = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); setOpen(false); root.current?.querySelector("button")?.focus(); } };
     document.addEventListener("pointerdown", pointer, true);
-    document.addEventListener("keydown", key);
-    return () => { document.removeEventListener("pointerdown", pointer, true); document.removeEventListener("keydown", key); };
+    document.addEventListener("keydown", key, true);
+    return () => { document.removeEventListener("pointerdown", pointer, true); document.removeEventListener("keydown", key, true); };
   }, [open]);
   const labels = TEXT.settings.system.specialists;
   return <div className="specialist-actions" ref={root}>

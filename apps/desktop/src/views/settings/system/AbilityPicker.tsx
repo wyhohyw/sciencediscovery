@@ -37,7 +37,7 @@ export function AbilityPicker({ connectors, initialTab, onApply, onClose, select
   };
   return <SettingsModal side label={showingSkills ? labels.configureSkills : labels.configureMcp} onClose={onClose}>
     <div className="specialist-drawer-body">
-      <SpecialistSourceTabs value={source} onChange={setSource} />
+      <SpecialistSourceTabs value={source} onChange={setSource} labels={showingSkills ? labels.skillSources : labels.mcpSources} />
       <SpecialistSearch value={query} onChange={setQuery} />
       <div className="specialist-picker-grid">
         {filtered.map(row => <label className={`specialist-capability-card${ids.includes(row.id) ? " is-selected" : ""}`} key={row.id}>

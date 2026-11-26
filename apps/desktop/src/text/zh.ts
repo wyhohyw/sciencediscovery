@@ -1674,6 +1674,8 @@ export const ZH = {
       },
       specialists: {
         all: "全部专家", mine: "我的专家", official: "官方专家", external: "外部",
+        skillSources: { all: "全部技能", mine: "我的技能", official: "官方技能", sourceFilter: "技能来源" },
+        mcpSources: { all: "全部 MCP", mine: "我的 MCP", official: "官方 MCP", sourceFilter: "MCP 来源" },
         sourceFilter: "专家来源", search: "搜索", noResults: "没有匹配的专家或能力。",
         configuration: "配置", allCapabilities: "全部能力", configureSkills: "配置技能", configureMcp: "配置 MCP 服务",
         skillConfiguration: "技能配置", mcpConfiguration: "MCP 服务配置", unconfigured: "尚未配置",

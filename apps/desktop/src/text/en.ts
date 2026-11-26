@@ -1635,6 +1635,8 @@ export const EN: Text = {
       },
       specialists: {
         all: "All specialists", mine: "My specialists", official: "Official specialists", external: "Custom",
+        skillSources: { all: "All skills", mine: "My skills", official: "Official skills", sourceFilter: "Skill source" },
+        mcpSources: { all: "All MCP", mine: "My MCP", official: "Official MCP", sourceFilter: "MCP source" },
         sourceFilter: "Specialist source", search: "Search", noResults: "No matching specialists or capabilities.",
         configuration: "Configuration", allCapabilities: "All capabilities", configureSkills: "Configure skills", configureMcp: "Configure MCP services",
         skillConfiguration: "Skill configuration", mcpConfiguration: "MCP service configuration", unconfigured: "Not configured",
