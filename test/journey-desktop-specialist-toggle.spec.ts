@@ -116,9 +116,13 @@ test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fi
           await back(); await closeSettings(); await page.getByRole("button", { name: zh ? "会话设置" : "Session settings", exact: true }).click(); await page.getByRole("button", { name: zh ? /^专家/u : /^Experts/u }).click(); await page.locator(".expert-row").filter({ hasText: name }).click();
           await expect.poll(async () => (await api<Session>(page, `/api/sessions/${fixture!.session.id}`)).specialistId).toBe(created!.id);
           await openSettings(); await card.getByRole("switch").click(); await expect(card.getByRole("switch")).toHaveAttribute("aria-checked", "false");
-          await page.reload(); await openDesktopSession(page, { ...fixture!, modelOwned: true });
+          await openDesktopSession(page, { ...fixture!, modelOwned: true });
+          // The composer also renders while configuration loads. Open the
+          // menu after Landing mounts so the final render keeps it open.
+          await expect(page.locator(".landing #composer-textarea")).toBeVisible();
+          await page.setViewportSize({ width: 960, height: 720 });
           await page.getByRole("button", { name: zh ? "会话设置" : "Session settings", exact: true }).click(); const row = page.getByRole("button", { name: zh ? /^专家/u : /^Experts/u });
-          await expect(row).toContainText(name); await expect(row).toContainText(zh ? "已停用" : "Disabled"); await page.setViewportSize({ width: 960, height: 720 }); await row.hover();
+          await expect(row).toContainText(name); await expect(row).toContainText(zh ? "已停用" : "Disabled"); await row.hover();
           await expect(row.locator(".session-menu-tip")).toHaveCSS("opacity", "1"); await expect(row.locator(".session-menu-tip")).toBeInViewport({ ratio: 1 });
           await row.click(); const option = page.locator(".expert-row").filter({ hasText: name }); await expect(option).toHaveAttribute("aria-current", "true"); await expect(option).toBeDisabled(); await option.hover(); await expect(option).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
           await page.locator(".expert-list").getByRole("button", { name: zh ? "无" : "None", exact: true }).click(); await expect.poll(async () => (await api<Session>(page, `/api/sessions/${fixture!.session.id}`)).specialistId ?? null).toBe(null);
