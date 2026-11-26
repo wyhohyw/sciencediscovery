@@ -112,7 +112,7 @@ export function SpecialistForm({ client, connectors, onCancel, onSaved, skills, 
         {failure ? <p className="specialist-feedback is-error" role="alert">{failure} <button type="button" disabled={busy} onClick={() => void save()}>{labels.retry}</button></p> : null}
       </form>
     </div>
-    <footer className="specialist-editor-footer"><button type="button" className="pill-button" disabled={busy} onClick={onCancel}>{TEXT.settings.cancel}</button><button className="pill-button is-dark" type="submit" form={formId} disabled={busy || !canSave}>{busy ? labels.saving : TEXT.settings.save}</button></footer>
+    <footer className="specialist-editor-footer"><button type="button" className="pill-button" disabled={busy} onClick={onCancel}>{TEXT.settings.cancel}</button><button className="pill-button is-dark" type="submit" form={formId} disabled={busy || !canSave}>{busy ? labels.saving : TEXT.settings.system.save}</button></footer>
     {picking ? <AbilityPicker initialTab={picking} skills={skills} connectors={connectors} selectedSkillIds={skillIds} selectedConnectorIds={connectorIds} onClose={() => setPicking(undefined)} onApply={value => { setSkillIds(value.skillIds); setConnectorIds(value.connectorIds); setPicking(undefined); }} /> : null}
   </section>;
 }
