@@ -17,19 +17,26 @@
 Evolve binds ``_EVOLVE_CANDIDATE`` before this file runs. The last stdout line
 is the measurement. ``score`` is the negation of the VHH confidence loss, so
 the search can maximise it. The structural terms match
-``vhh-confidence-contact8-proxy-esm2-v2``. ESM-2 pseudo-log-likelihood is not
-in a one-shot fold, so that weight stays zero instead of being replaced by
-another model's ranking score.
+``vhh-confidence-contact8-proxy-esm2-v2``. A one-shot fold still omits ESM-2
+until a pseudo-log-likelihood is passed in; then its weight is 0.1 and the
+formula id becomes the esm2 version. The term is never replaced by another
+model's ranking score.
 
-Set ``OPENDDE_CODE_DIR``, ``OPENDDE_CHECKPOINT`` and, when the interpreter that
-launches this file is not the OpenDDE environment, ``OPENDDE_PYTHON``.
+Set ``OPENDDE_CODE_DIR``, ``OPENDDE_CHECKPOINT`` and ``OPENDDE_PYTHON``. ESM-2
+and SolubleMPNN run as child processes of this same job under that Python,
+because the job interpreter does not have those packages. Each child exits
+before the next one starts, so the card is free for the fold. The fold stays
+its own child and imports rdkit before OpenDDE.
 """
 
 from __future__ import annotations
 
+import base64
+import gzip
 import json
 import math
 import os
+import random
 import subprocess
 import sys
 import tempfile
@@ -51,6 +58,8 @@ CONTACT_PROBABILITY_CUTOFF = 8.0
 GATE_CUTOFF = 5.0
 CDR_FRACTION_THRESHOLD = 0.5
 FORMULA = "vhh-confidence-contact8-proxy-v2"
+ESM2_FORMULA = "vhh-confidence-contact8-proxy-esm2-v2"
+ESM2_WEIGHT = 0.1
 
 
 def emit(payload: dict) -> None:
@@ -403,7 +412,258 @@ def structure_loss(
     }
 
 
-def score_fold(candidate: dict, summary: dict, full: dict, structure: Path) -> dict:
+def backbone_pdb(atoms: list[dict], chains: set[str]) -> str:
+    """A PDB with only backbone atoms, small enough to hand to the next round.
+
+    SolubleMPNN redesigns the binder. The target chain is left out so the next
+    job does not push the candidate past the runner's argument-length limit.
+    """
+    lines = ["REMARK parent backbone"]
+    serial = 1
+    for atom in atoms:
+        if str(atom.get("chain")) not in chains or atom.get("name") not in {"N", "CA", "C", "O"}:
+            continue
+        if atom.get("sequence_index") is None:
+            continue
+        name = str(atom["name"])
+        padded = f" {name:<3}" if len(name) < 4 else name[:4]
+        element = str(atom.get("element") or name[:1])[:2]
+        lines.append(
+            f"ATOM  {serial:5d} {padded} ALA {atom['chain']}{int(atom['residue_number']):4d}    "
+            f"{float(atom['x']):8.3f}{float(atom['y']):8.3f}{float(atom['z']):8.3f}"
+            f"  1.00  0.00           {element:>2}"
+        )
+        serial += 1
+    lines.append("END")
+    return "\n".join(lines) + "\n"
+
+
+def pack_backbone(pdb: str) -> str:
+    """Compress a backbone so the next job can carry it in the candidate JSON."""
+    if not pdb:
+        return pdb
+    if pdb.startswith("gz:"):
+        return pdb
+    packed = base64.b64encode(gzip.compress(pdb.encode("utf-8"), compresslevel=9)).decode("ascii")
+    return "gz:" + packed
+
+
+def unpack_backbone(value: str) -> str:
+    """Accept a plain PDB or the compressed form from ``pack_backbone``."""
+    if not isinstance(value, str) or not value.startswith("gz:"):
+        return value
+    return gzip.decompress(base64.b64decode(value[3:].encode("ascii"))).decode("utf-8")
+
+
+ESM_SKILL = "esm2-guided-mutation"
+MPNN_SKILL = "antibody-inverse-folding"
+# The harness default for one design call. A width of 1 is the single top
+# substitution, which is the same child on every later call.
+HARNESS_BATCH = 8
+
+
+def sequence_mutations(
+    parent: str, child: str, chain: str, mutable: set[int],
+) -> list[list] | None:
+    """CDR substitutions that turn ``parent`` into ``child``, or None.
+
+    Inverse folding may rewrite every designable CDR residue. A framework
+    change is not a proposal. The 1–3 budget belongs to the chat
+    point-mutation skill, which the engine runs outside this evaluator.
+    """
+    if len(parent) != len(child) or parent == child:
+        return None
+    mutations = []
+    for index, (left, right) in enumerate(zip(parent, child), start=1):
+        if left == right:
+            continue
+        if index not in mutable or right not in AMINO_ACIDS:
+            return None
+        mutations.append([chain, index, right])
+    if not mutations:
+        return None
+    return mutations
+
+
+def design_skill(
+    seed: int,
+    cycle: int,
+    has_backbone: bool,
+    forced: str | None = None,
+) -> str:
+    """Pick the NPU generation skill for this propose job.
+
+    The engine draws among point mutation, ESM-2, and SolubleMPNN. Point
+    mutation never reaches this evaluator. When the engine already chose
+    ESM-2 or SolubleMPNN, ``forced`` is that name. Without a backbone,
+    SolubleMPNN falls back to ESM-2. A missing force keeps the equal-weight
+    ESM/MPNN draw used by older payloads.
+    """
+    if forced == MPNN_SKILL and has_backbone:
+        return MPNN_SKILL
+    if forced == ESM_SKILL or (forced == MPNN_SKILL and not has_backbone):
+        return ESM_SKILL
+    legal = [ESM_SKILL]
+    weights = [1.0]
+    if has_backbone:
+        legal.append(MPNN_SKILL)
+        weights.append(1.0)
+    return random.Random(f"protein-design-router:{seed}:{cycle}").choices(legal, weights=weights, k=1)[0]
+
+
+def esm_batch(
+    parent: str,
+    chain: str,
+    mutable: set[int],
+    dms_rows: list,
+    limit: int,
+) -> list[tuple[str, list[list], str]]:
+    """One ESM-2 call's diverse substitutions, matching ``_generate_esm2_guided``.
+
+    Positive and zero log-likelihood ratios are kept. The list is sorted by
+    ratio, then filled up to ``limit`` with a new CDR site first and a second
+    amino acid at a used site only after that. History is not an index into
+    this list: the same parent yields the same batch.
+    """
+    if limit < 1:
+        return []
+    ranked: list[tuple[float, str, str, list[list], str, int]] = []
+    for row in dms_rows:
+        position = row.get("Pos") if isinstance(row, dict) else None
+        wild = row.get("WT") if isinstance(row, dict) else None
+        if isinstance(position, bool) or not isinstance(position, int) or position not in mutable:
+            continue
+        if not isinstance(wild, str) or len(wild) != 1:
+            continue
+        if position < 1 or position > len(parent) or parent[position - 1] != wild:
+            continue
+        for amino, value in row.items():
+            if not isinstance(amino, str) or amino not in AMINO_ACIDS or amino == wild:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                continue
+            ratio = float(value)
+            if ratio < 0:
+                continue
+            child = parent[:position - 1] + amino + parent[position:]
+            ranked.append((
+                ratio,
+                f"esm2_{chain}{position}{wild}{amino}",
+                child,
+                [[chain, position, amino]],
+                f"{chain}{position}{wild}{amino}",
+                position,
+            ))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    selected: list[tuple[str, list[list], str]] = []
+    used_sites: set[int] = set()
+    chosen: set[str] = set()
+    for require_new_site in (True, False):
+        for _ratio, identity, child, mutations, summary, position in ranked:
+            if identity in chosen or (require_new_site and position in used_sites):
+                continue
+            chosen.add(identity)
+            used_sites.add(position)
+            selected.append((child, mutations, summary))
+            if len(selected) >= limit:
+                return selected
+    return selected
+
+
+def inverse_folding_batch(
+    parent: str,
+    chain: str,
+    mutable: set[int],
+    rounds: list[list[str]],
+    limit: int,
+    blocked: set[str] | None = None,
+) -> list[tuple[str, list[list], str]]:
+    """Unique SolubleMPNN sequences from at most three sampling rounds.
+
+    A round is one ``design`` call. Duplicates and sequences already folded
+    are dropped. The next round uses the next seed, which the caller passes
+    by sampling again. A framework edit is dropped. CDR edits are not capped
+    at three. The function does not walk an ESM-2 ranking to fill a shortfall.
+    """
+    if limit < 1:
+        return []
+    seen = set(blocked or ())
+    seen.add(parent)
+    selected: list[tuple[str, list[list], str]] = []
+    for sequences in rounds[:3]:
+        if len(selected) >= limit:
+            break
+        if not isinstance(sequences, list):
+            continue
+        for sequence in sequences:
+            if not isinstance(sequence, str) or sequence in seen:
+                continue
+            mutations = sequence_mutations(parent, sequence, chain, mutable)
+            if not mutations:
+                continue
+            seen.add(sequence)
+            notes = [f"{item[0]}{item[1]}{parent[item[1] - 1]}{item[2]}" for item in mutations]
+            selected.append((sequence, mutations, " ".join(notes)))
+            if len(selected) >= limit:
+                break
+    return selected
+
+
+def without_folded(
+    batch: list[tuple[str, list[list], str]],
+    blocked: set[str],
+) -> list[tuple[str, list[list], str]]:
+    """Drop sequences already folded. Do not replace them from further down a list."""
+    return [item for item in batch if item[0] not in blocked]
+
+
+def cycle_batch(
+    parent: str,
+    chain: str,
+    mutable: set[int],
+    skill: str,
+    limit: int,
+    esm_rows: list,
+    mpnn_rounds: list[list[str]],
+    has_backbone: bool,
+    blocked: set[str] | None = None,
+) -> tuple[str, list[tuple[str, list[list], str]]]:
+    """The drawn skill's batch, or the other legal skill when that batch is already folded.
+
+    ESM-2 is not asked for the next ranked substitution to fill a gap. A short
+    or empty inverse-folding sample stays short. The other skill runs only
+    when the drawn skill produced nothing new.
+    """
+    used = set(blocked or ())
+    used.add(parent)
+
+    def materialize(name: str) -> list[tuple[str, list[list], str]]:
+        if name == MPNN_SKILL:
+            if not has_backbone:
+                return []
+            return inverse_folding_batch(parent, chain, mutable, mpnn_rounds, limit, used)
+        return without_folded(esm_batch(parent, chain, mutable, esm_rows, limit), used)
+
+    fresh = materialize(skill)
+    if fresh:
+        return skill, fresh
+    # An empty source means that model has not been run yet. Leave the skill
+    # unchanged so the caller can run it, then ask again. Do not fill the gap
+    # from the next ESM-2 rank.
+    other = ""
+    if skill == ESM_SKILL and has_backbone and mpnn_rounds:
+        other = MPNN_SKILL
+    elif skill == MPNN_SKILL and esm_rows:
+        other = ESM_SKILL
+    if not other:
+        return skill, []
+    return other, materialize(other)
+
+
+def score_fold(
+    candidate: dict, summary: dict, full: dict, structure: Path,
+    esm2_pll: float | None = None,
+) -> dict:
     binder = str(candidate.get("chain") or "D")
     target = str(candidate.get("target_chain") or "A")
     sequence = str(candidate["sequence"])
@@ -423,6 +683,18 @@ def score_fold(candidate: dict, summary: dict, full: dict, structure: Path) -> d
     gate = contact_gate(atoms, binder, target, set(cdr), cdr3, hotspot_positions)
     components = structure_loss(full, summary, atoms, sequences, binder, cdr, hotspot_positions)
     loss = sum(WEIGHTS[name] * components[name] for name in WEIGHTS)
+    esm2: float | str = "omitted"
+    formula = FORMULA
+    if esm2_pll is not None:
+        pll = float(esm2_pll)
+        if not math.isfinite(pll):
+            raise ValueError("esm2 pll must be finite")
+        # The harness subtracts weight * pll. A typical pll is negative, so
+        # this penalizes a less natural sequence. Weight 0.1 matches
+        # vhh-confidence-contact8-proxy-esm2-v2.
+        loss += -ESM2_WEIGHT * pll
+        esm2 = pll
+        formula = ESM2_FORMULA
     reason = ""
     if not gate["gate_passed"]:
         reason = (
@@ -432,8 +704,8 @@ def score_fold(candidate: dict, summary: dict, full: dict, structure: Path) -> d
     return {
         "components": {name: round(components[name], 6) for name in WEIGHTS},
         "device": "npu",
-        "esm2": "omitted",
-        "formula": FORMULA,
+        "esm2": round(esm2, 6) if isinstance(esm2, float) else esm2,
+        "formula": formula,
         "gate_passed": gate["gate_passed"],
         "cdr_contact_fraction": gate["cdr_contact_fraction"],
         "framework_contact_fraction": gate["framework_contact_fraction"],
@@ -455,6 +727,186 @@ def input_document(candidate: dict) -> list[dict]:
             {"proteinChain": {"count": 1, "id": [str(candidate.get("chain") or "D")], "sequence": candidate["sequence"]}},
         ],
     }]
+
+
+def stage(name: str) -> None:
+    print(f"EVOLVE_STAGE {name}", flush=True)
+
+
+def _device() -> str:
+    return os.environ.get("ESM_DEVICE") or os.environ.get("OPENDDE_DEVICE") or "npu"
+
+
+# The NPU job interpreter does not have the harness. This program runs under
+# OPENDDE_PYTHON, prints one JSON object, and exits so the card is released.
+_MODEL_WORKER = r'''
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+
+def plain(value):
+    if isinstance(value, dict):
+        return {str(key): plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [plain(item) for item in value]
+    item = getattr(value, "item", None)
+    if callable(item) and not isinstance(value, (str, bytes)):
+        try:
+            return item()
+        except Exception:
+            return value
+    return value
+
+
+def install_ligand(ligand):
+    root = tempfile.mkdtemp(prefix="cdr-ligand-")
+    external = Path(root) / "external"
+    package = external / "ligandmpnn"
+    external.mkdir()
+    (external / "__init__.py").write_text("")
+    package.symlink_to(ligand)
+    return root
+
+
+def main():
+    request = json.loads(sys.stdin.read())
+    harness = os.environ.get("OPENDDE_HARNESS_DIR", "/data1/gs_agent/opendde/OpenDDE-Harness")
+    ligand = os.environ.get("LIGANDMPNN_DIR", "/data1/gs_agent/opendde/LigandMPNN")
+    sys.path.insert(0, harness)
+    device = request.get("device") or "npu"
+    model = os.environ.get("ESM_MODEL_NAME", "/data1/gs_agent/opendde/weights/esm2")
+    operation = request["op"]
+    if operation == "scan":
+        from opendde_harness.plugin.protein_design.servers.backends.esm_backend import ESMClient
+        client = ESMClient(model_name=model, offline=True, device=device)
+        rows = client.calculate_deep_mutation_scan(request["sequence"], scoring_mode="llr")
+        print(json.dumps({"rows": plain(list(rows))}), flush=True)
+        return
+    if operation == "pll":
+        from opendde_harness.plugin.protein_design.servers.backends.esm_backend import ESMClient
+        client = ESMClient(model_name=model, offline=True, device=device)
+        print(json.dumps({"pll": float(client.calculate_pseudo_log_likelihood(request["sequence"]))}), flush=True)
+        return
+    if operation == "soluble":
+        import shutil
+        ligand_root = install_ligand(ligand)
+        try:
+            sys.path.insert(0, ligand_root)
+            from opendde_harness.plugin.protein_design.servers.backends.soluble_mpnn import SolubleMPNNClient
+            weights = os.environ.get(
+                "SOLUBLE_MPNN_WEIGHTS",
+                "/data1/gs_agent/opendde/weights/soluble_mpnn/solublempnn_v_48_020.pt",
+            )
+            anchor = request.get("anchor")
+            forced = None
+            if isinstance(anchor, list) and len(anchor) == 3:
+                forced = {int(anchor[1]) - 1: str(anchor[2])}
+            raw_seed = request.get("seed", 42)
+            seed = raw_seed if isinstance(raw_seed, int) and not isinstance(raw_seed, bool) and raw_seed >= 0 else 42
+            raw_count = request.get("num_sequences", 1)
+            count = raw_count if isinstance(raw_count, int) and not isinstance(raw_count, bool) and raw_count >= 1 else 1
+            client = SolubleMPNNClient(weights_path=weights, device=device, seed=seed)
+            with tempfile.TemporaryDirectory(prefix="cdr-mpnn-") as work:
+                pdb_path = Path(work) / "parent.pdb"
+                pdb_path.write_text(request["backbone"], encoding="utf-8")
+                designs = client.design(
+                    pdb_path=str(pdb_path),
+                    chain=request["chain"],
+                    designable_positions=sorted(int(position) - 1 for position in request["mutable"]),
+                    expected_length=len(request["sequence"]),
+                    temperature=0.1,
+                    num_sequences=count,
+                    seed=seed,
+                    forced_residues=forced,
+                )
+            sequences = [str(item["sequence"]) for item in designs if isinstance(item, dict) and item.get("sequence")]
+            print(json.dumps({"sequences": sequences}), flush=True)
+        finally:
+            shutil.rmtree(ligand_root, ignore_errors=True)
+        return
+    raise SystemExit("unknown model operation")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _model_python() -> str:
+    return configured("OPENDDE_PYTHON", "/data1/gs_agent/opendde/venv_pd/bin/python") or sys.executable
+
+
+def _model_call(op: str, payload: dict) -> dict:
+    """One child under the OpenDDE Python. It exits before the caller continues."""
+    python = _model_python()
+    if not python:
+        raise RuntimeError("OPENDDE_PYTHON is required for ESM-2 and SolubleMPNN")
+    with tempfile.TemporaryDirectory(prefix="cdr-model-") as work:
+        script = Path(work) / "worker.py"
+        script.write_text(_MODEL_WORKER, encoding="utf-8")
+        completed = subprocess.run(
+            [python, str(script)],
+            input=json.dumps({"op": op, "device": _device(), **payload}),
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "model worker failed").strip()
+        raise RuntimeError(detail[-2000:])
+    line = next((item for item in reversed(completed.stdout.splitlines()) if item.strip()), "")
+    try:
+        loaded = json.loads(line)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(line[-500:] or "model worker returned no JSON") from error
+    if not isinstance(loaded, dict):
+        raise RuntimeError("model worker returned a non-object")
+    return loaded
+
+
+def esm_scan(sequence: str) -> list:
+    """Deep mutational scan in its own process, so the model is gone before the fold."""
+    stage("esm2-scan")
+    rows = _model_call("scan", {"sequence": sequence}).get("rows")
+    if not isinstance(rows, list):
+        raise RuntimeError("ESM-2 scan returned no rows")
+    return rows
+
+
+def esm_pll(sequence: str) -> float:
+    stage("esm2-pll")
+    value = float(_model_call("pll", {"sequence": sequence})["pll"])
+    if not math.isfinite(value):
+        raise ValueError("esm2 pll must be finite")
+    return value
+
+
+def soluble_sequences(
+    backbone_pdb: str,
+    chain: str,
+    sequence: str,
+    mutable: set[int],
+    anchor: list | None,
+    seed: int = 42,
+    num_sequences: int = 1,
+) -> list[str]:
+    """One SolubleMPNN sampling round. Framework positions stay fixed."""
+    stage("soluble-mpnn")
+    sequences = _model_call("soluble", {
+        "backbone": backbone_pdb,
+        "chain": chain,
+        "sequence": sequence,
+        "mutable": sorted(mutable),
+        "anchor": anchor,
+        "seed": seed,
+        "num_sequences": num_sequences,
+    }).get("sequences")
+    if not isinstance(sequences, list):
+        raise RuntimeError("SolubleMPNN returned no sequences")
+    return [str(item) for item in sequences]
 
 
 def configured(name: str, default: str) -> str:
@@ -513,7 +965,21 @@ def predict(candidate: dict) -> dict:
         full = json.loads(full_paths[0].read_text(encoding="utf-8"))
         if not isinstance(summary, dict) or not isinstance(full, dict):
             raise RuntimeError("OpenDDE confidence output is not an object")
-        return score_fold(candidate, summary, full, structures[0])
+        atoms = load_atoms(structures[0])
+        # Only the binder chain is needed for SolubleMPNN. Keeping the target
+        # here made CRLF2-sized complexes exceed the runner argument limit.
+        backbone = pack_backbone(backbone_pdb(atoms, {str(candidate.get("chain") or "D")}))
+        pll = None
+        esm_error = ""
+        try:
+            pll = esm_pll(str(candidate["sequence"]))
+        except Exception as error:
+            esm_error = str(error).splitlines()[-1][:300]
+        scored = score_fold(candidate, summary, full, structures[0], esm2_pll=pll)
+        scored["backbone_pdb"] = backbone
+        if esm_error:
+            scored["esm2_error"] = esm_error
+        return scored
 
 
 def main() -> None:
@@ -526,9 +992,98 @@ def main() -> None:
         emit({"device": "npu", "error": "sequence is not amino acids", "ran": False})
         return
     try:
-        emit(predict(candidate))
+        folding = candidate
+        mpnn_error = ""
+        portfolio: list[dict] = []
+        skill_used = ""
+        if candidate.get("propose") is True:
+            chain = str(candidate.get("chain") or "D")
+            mutable = set(position + 1 for position in cdr_positions(candidate.get("cdr_regions"), len(sequence)))
+            raw_limit = candidate.get("num_sequences", HARNESS_BATCH)
+            limit = raw_limit if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) and raw_limit >= 1 else HARNESS_BATCH
+            raw_seed = candidate.get("proposal_seed", 42)
+            proposal_seed = raw_seed if isinstance(raw_seed, int) and not isinstance(raw_seed, bool) and raw_seed >= 0 else 42
+            raw_cycle = candidate.get("cycle", 0)
+            cycle = raw_cycle if isinstance(raw_cycle, int) and not isinstance(raw_cycle, bool) and raw_cycle >= 0 else 0
+            blocked = {
+                item for item in candidate.get("excluded_sequences") or []
+                if isinstance(item, str)
+            }
+            blocked.add(sequence)
+            raw_backbone = candidate.get("parent_backbone_pdb")
+            backbone = unpack_backbone(raw_backbone) if isinstance(raw_backbone, str) else ""
+            has_backbone = isinstance(backbone, str) and bool(backbone.strip()) and bool(mutable)
+            forced = candidate.get("skill") if isinstance(candidate.get("skill"), str) else None
+            skill = design_skill(proposal_seed, cycle, has_backbone, forced=forced)
+            rows: list = []
+            rounds: list[list[str]] = []
+
+            def sample_mpnn() -> None:
+                nonlocal mpnn_error
+                if not has_backbone:
+                    return
+                try:
+                    for attempt in range(3):
+                        shortfall = limit - len(inverse_folding_batch(
+                            sequence, chain, mutable, rounds, limit, blocked,
+                        ))
+                        if shortfall <= 0:
+                            break
+                        got = soluble_sequences(
+                            backbone, chain, sequence, mutable, None,
+                            proposal_seed + attempt, shortfall,
+                        )
+                        rounds.append([str(item) for item in got])
+                except Exception as error:
+                    mpnn_error = str(error).splitlines()[-1][:300]
+
+            if skill == MPNN_SKILL:
+                sample_mpnn()
+            else:
+                rows = esm_scan(sequence)
+            skill_used, batch = cycle_batch(
+                sequence, chain, mutable, skill, limit, rows, rounds, has_backbone, blocked,
+            )
+            if not batch and skill_used == ESM_SKILL and has_backbone and not rounds:
+                sample_mpnn()
+                skill_used, batch = cycle_batch(
+                    sequence, chain, mutable, skill, limit, rows, rounds, has_backbone, blocked,
+                )
+            elif not batch and skill_used == MPNN_SKILL and not rows:
+                try:
+                    rows = esm_scan(sequence)
+                except Exception as error:
+                    mpnn_error = mpnn_error or str(error).splitlines()[-1][:300]
+                skill_used, batch = cycle_batch(
+                    sequence, chain, mutable, skill, limit, rows, rounds, has_backbone, blocked,
+                )
+            if not batch:
+                emit({
+                    "device": "npu",
+                    "error": "the model returned no CDR mutations",
+                    "proposal": "empty",
+                    "ran": False,
+                    "skill": skill_used,
+                })
+                return
+            child, mutations, _summary = batch[0]
+            folding = dict(candidate)
+            folding["sequence"] = child
+            folding["mutations"] = mutations
+            portfolio = [{"sequence": item[0], "mutations": item[1]} for item in batch[1:]]
+        stage("fold")
+        scored = predict(folding)
+        scored["sequence"] = folding["sequence"]
+        scored["mutations"] = folding.get("mutations") or []
+        if portfolio:
+            scored["portfolio"] = portfolio
+        if skill_used:
+            scored["skill"] = skill_used
+        if mpnn_error:
+            scored["soluble_error"] = mpnn_error
+        emit(scored)
     except Exception as error:
-        emit({"device": "npu", "error": str(error), "ran": False})
+        emit({"device": "npu", "error": str(error).splitlines()[-1][:500], "ran": False})
 
 
 if __name__ == "__main__":

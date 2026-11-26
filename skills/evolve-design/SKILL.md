@@ -24,21 +24,39 @@ or a tree.
 sequence, not a program. The starting point is JSON with `sequence` (amino acids),
 `cdr_regions` (inclusive 1-based ranges), `chain` (default `D`), `target_sequence`, and
 `target_chain`. Optional `target_hotspots` lists 1-based positions on the target chain.
-`candidates_per_cycle` defaults to 4. `expansions` is how many children are scored. Set
+`candidates_per_cycle` defaults to 8, the harness batch size. A value below 2 also
+generates 8, because 1 is only the top ESM-2 substitution. `expansions` is how many
+children are scored. Set
 `algorithm` to `cdr` and `mode` to `npu_job`. `editableFields` is `["sequence"]` so the
 probe can damage that field; the engine itself only writes inside `cdr_regions`.
 `evaluatorSource` is the whole of `scripts/cdr_opendde_evaluator.py` in this skill. The
 runner needs `OPENDDE_CODE_DIR`, `OPENDDE_CHECKPOINT`, and `OPENDDE_PYTHON` when the job
 interpreter is not the OpenDDE environment. `OPENDDE_ROOT_DIR` defaults to the
-checkpoint directory's parent, where `common/components.cif` already lives. One job loads the checkpoint, folds that
-sequence, and exits. The printed `score` is the negation of the VHH confidence loss
-(`plddt`, `i_plddt`, `pae`, `i_pae`, `i_ptm`, `con`, `i_con`, `rg`, `dgram_cce`), so
-higher is better. The ESM-2 term is recorded as omitted and its weight stays zero. A fold
-that finishes also has to pass the 5 Å gate: more than half of the interface residues are
-CDR, and, when hotspots are given, CDR3 touches at least one. The last `cdr_regions`
-range is CDR3. A failed gate is `ran: true` with `gate_passed: false` and does not enter
-the population. A sequence that is not amino acids, or a fold that fails, is `ran: false`
-and does not enter the population.
+checkpoint directory's parent, where `common/components.cif` already lives. One cycle picks one skill. Default `router_selection_strategy` is `agent`:
+the run's chat model chooses among legal skills using CRLF2 priors (point
+`0.5`, full redesign `0.1`, ESM-2 `0.2`, SolubleMPNN `0.2`). Set the strategy
+to `weighted` to force `protein-design-router` sampling. Optional
+`skill_weights` and `parent_fitness_uniform_fraction` (default `0.1`) in the
+starting JSON match the harness knobs. Point mutation uses the chat model for
+1–3 CDR substitutions; full redesign assigns every mutable CDR site then keeps
+real changes; both then NPU-fold only. ESM-2 or SolubleMPNN still run inside
+one NPU job: that job generates the harness batch, folds the first sequence,
+and leaves the rest in `portfolio` for later folds. ESM-2 fills new CDR sites before a second amino
+acid at a used site. SolubleMPNN samples unique sequences at temperature 0.1,
+retrying at most three times with the seed incremented. A sequence already in
+the batch and already folded is dropped; the search does not walk to the next
+ranked substitution. Both model steps are child processes under
+`OPENDDE_PYTHON`, and each exits before the next step. Do not invent ESM or
+MPNN mutations in the chat. The fold is its own child process so rdkit loads before
+OpenDDE. The printed
+`score` is the negation of the VHH confidence loss plus `0.1` times the negated ESM-2
+pseudo-log-likelihood when that likelihood was measured. Higher is better. A missing
+likelihood leaves `esm2` omitted and does not fail the fold. A fold that finishes also
+has to pass the 5 Å gate: more than half of the interface residues are CDR, and, when
+hotspots are given, CDR3 touches at least one. The last `cdr_regions` range is CDR3.
+A failed gate is `ran: true` with `gate_passed: false` and does not enter the population.
+A sequence that is not amino acids, or a fold that fails, is `ran: false` and does not
+enter the population.
 Do not start a resident OpenDDE service. Skip the dataset split and the PUCT/OpenEvolve
 search knobs. The checkpoints still happen: what is better (higher score), the JSON starting
 point, the cost from `get_evolve_budget` (the `cdr` ceiling, not the program-rewrite one),

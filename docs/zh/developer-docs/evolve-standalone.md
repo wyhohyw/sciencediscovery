@@ -7,7 +7,7 @@
 
 - **PUCT**（`puct_engine.py`）：flat-PUCT 树搜索，通过访问次数和排名引导探索。适合在一个起点上持续精炼。
 - **OpenEvolve**（`openevolve_engine.py`）：MAP-Elites 多岛搜索 + 环形迁移，按代码复杂度和多样性分箱归档。适合解空间宽、容易早熟收敛的任务。
-- **CDR**（`cdr_engine.py`）：固定长度抗体序列的种群。模型只提议 CDR 点突变，Python 写入序列并拒绝框架位点，每条序列单独调一次打分程序。设计见 [CDR 序列搜索 v1](evolve-cdr.v1.md)。
+- **CDR**（`cdr_engine.py`）：固定长度抗体序列的种群。一轮按 harness 抽一个技能，ESM-2 或 SolubleMPNN，一次生成一批序列再逐条折叠，并把 ESM-2 似然加进同一次损失。Python 拒绝框架位点。设计见 [CDR 序列搜索 v2](evolve-cdr.v2.md)，v1 保留没有这两项时的行为。
 
 PUCT 与 OpenEvolve 共用 Domain 接缝（四种评分模式）、事件流、沙箱、模型代理和探针——只换算法核心（`PuctTree` ↔ `OpenEvolveArchive`）。CDR 共用同一条 `Engine.run` 和事件流，候选是序列而不是 Python。`algorithm` 字段选择引擎，`/evolve-design` 命令让用户在发送前选择。
 
