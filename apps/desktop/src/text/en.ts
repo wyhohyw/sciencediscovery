@@ -98,6 +98,27 @@ function runSpan(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+/**
+ * Large counts the way English reads them: 15K, 24M, 1.5B.
+ *
+ * This is the counterpart of the Chinese table's 万 scale (#1394): the unit is
+ * part of the sentence, so each dictionary states its own. Both switch at
+ * 10 000, below which the plain grouped number is clearer in either language.
+ */
+function compactCount(value: number): string {
+  if (value < 10_000) return Math.round(value).toLocaleString("en-US");
+  const tiers = [[1_000_000_000, "B"], [1_000_000, "M"], [1_000, "K"]] as const;
+  for (const [divisor, unit] of tiers) {
+    const scaled = value / divisor;
+    // A value that would print as four digits belongs to the next unit up (or,
+    // above B, to the plain grouped number) — never to "1000K".
+    if (scaled < 1 || scaled >= 999.5) continue;
+    const rounded = scaled >= 100 ? Math.round(scaled) : Math.round(scaled * 10) / 10;
+    return `${rounded}${unit}`;
+  }
+  return Math.round(value).toLocaleString("en-US");
+}
+
 export const EN: Text = {
   configurationLegacy: {
     title: "Enable connector", awaiting: "Awaiting confirmation", change: "Change", scope: "Scope", session: "This session only",
@@ -211,6 +232,7 @@ export const EN: Text = {
     creditsUnit: "credits",
     tokenEstimate: "Approx. tokens",
     tokensUnit: "tokens",
+    tokenCount: compactCount,
     conversations: "Conversations",
     conversationsUnit: "turns",
     earned: "Total earned",
@@ -225,6 +247,14 @@ export const EN: Text = {
     ledgerCapped: (rows: number) => `Showing the latest ${rows} rows; older activity is no longer listed.`,
     filter: { all: "All", earned: "Earned", spent: "Spent" },
     ledgerEmpty: "No credit activity yet.",
+    biz: {
+      REGISTER: "Sign-up bonus",
+      CHECKIN: "Daily check-in",
+      BONUS: "7-day check-in bonus",
+      LLM_USAGE: "Model usage",
+      ADMIN: "Manual adjustment",
+      REFUND: "Refund",
+    },
     afterBalance: (balance: string) => `Balance ${balance}`,
     perPage: "Rows per page",
     perPageUnit: "",
@@ -297,7 +327,11 @@ export const EN: Text = {
     newSessionInProject: (name: string) => `New session in ${name}`,
     projectMenu: "Project menu",
     noTasks: "No sessions yet",
-    showMore: "Show more",
+    /** The fold control's label: how many older Sessions pressing it reveals,
+     *  computed from the list itself so the tail never reads as deleted. */
+    showMore: (count: number) => `Show ${count} older ${count === 1 ? "Session" : "Sessions"}`,
+    /** The rule a folded Project states above its page: the newest N are shown. */
+    pageRule: (count: number) => `Latest ${count}`,
     collapseSidebar: "Collapse sidebar",
     expandSidebar: "Show sidebar",
     renameHint: "Double-click to rename",
@@ -920,17 +954,17 @@ export const EN: Text = {
       timeoutSub: "The execution engine may be slow on its first preparation; wait a moment and check again.",
       fallbackError:
         "Unknown reason. Check the logs and try again; antivirus software may be blocking the preparation.",
-      seatbeltFailedTitle: "macOS sandbox (Seatbelt) not detected",
-      seatbeltRetryHint: "If an MDM restriction was just lifted or system settings changed, restart the app and check again.",
+      /* [U5c] The Seatbelt keys of this block (items.seatbelt,
+         seatbeltFailedTitle/RetryHint/NotApplicable/OptInTitle) are retired
+         with the wizard's Seatbelt row and banner: sandbox health lives in
+         设置 › 连接 › 沙箱网络's status row alone (owner decision 2026-11-23). */
       items: {
-        seatbelt: "macOS sandbox (Seatbelt)",
         api: "Local API service",
         runner: "Execution engine (Python runtime)",
         model: "Default task model (optional; can be configured later in settings)",
       },
       notChecked: "Not checked",
       runnerNeedsToken: "Not checked (token required)",
-      seatbeltNotApplicable: "Not checked (the sandbox is macOS-only)",
       retry: "Check again",
       retryBoot: "Try again",
       logs: "Open the logs folder",
@@ -1057,6 +1091,8 @@ export const EN: Text = {
       empty: "No skills found.",
       search: "Search skills",
       searchPlaceholder: "Search skills…",
+      /** The × inside the search field that puts the whole list back. */
+      clearSearch: "Clear search",
       noMatches: "No skills match your search.",
 
       heading: "Skills",
@@ -1064,9 +1100,40 @@ export const EN: Text = {
       noProject: "No project is available, so skill choices cannot be read.",
       off: "Off",
       on: "On",
-      scope: "These switches control the global enabled state of skills in ScienceDiscovery. They apply to every task.",
       toggle: (name: string) => `Enable or disable "${name}"`,
       installedCount: (count: number) => `${count} installed`,
+      /** The three tabs above the list. The count is part of the label, as in
+       *  the handoff: every row the tab holds, not only those matching the
+       *  current search. */
+      tabs: {
+        label: "Skill categories",
+        all: (count: number) => `All skills (${count})`,
+        mine: (count: number) => `My skills (${count})`,
+        official: (count: number) => `Official skills (${count})`,
+        basic: "Overview",
+        files: "Files",
+      },
+      /** The way out of a package's own page. */
+      back: "Back",
+      /** 技能详情: the package's files on the left, one of them open on the right. */
+      fileTree: {
+        list: "Files",
+        reading: "Reading the file…",
+        copy: "Copy",
+        download: "Download",
+        copied: "Copied",
+      },
+      /** The tag on a card: a package that ships with the app, or one the user
+       *  brought in. */
+      cardTag: {
+        builtIn: "Built-in",
+        external: "External",
+      },
+      /** A category the user opened that holds no rows at all. */
+      emptyScope: "No skills in this category yet.",
+      /** The list's own subtitle. The directory's entry keeps the shorter line
+       *  it uses as a tooltip; this page says what the page itself does. */
+      listDescription: "Manage and install the skills agents can use",
       /** The native save dialog a Skill export opens. */
       exportDialog: {
         title: "Export Skill",
@@ -1080,11 +1147,8 @@ export const EN: Text = {
       addMenu: {
         label: "Add skill",
         scratch: "Write from scratch",
-        scratchHint: "Start a new skill and write its instructions",
         upload: "Upload skills",
-        uploadHint: "Choose a SKILL.md or a ZIP package",
         git: "Import from GitHub",
-        gitHint: "Inspect a repository and import its packages",
       },
       backToList: "Back to skills",
       createView: {
@@ -1152,16 +1216,41 @@ export const EN: Text = {
         writeInstead: "Write from scratch instead",
       },
       importAction: "Import",
+      /** The close control every 技能 dialog carries. */
+      closeDialog: "Close",
+      /** 技能 › 上传技能, as the handoff's dialog. */
+      uploadDialog: {
+        hint: "A folder or .zip must contain SKILL.md; a .md file must carry the skill name and description in YAML.",
+        chooseFile: "Choose file",
+        dropTitle: "Choose a SKILL.md file",
+        dropHint: "Click, or drag a package or file here",
+        reselect: "Choose again",
+        cancel: "Cancel",
+        confirm: "OK",
+      },
+      /** 技能 › 从 GitHub 导入, as the handoff's dialog. */
+      gitDialog: {
+        subtitle: "Import from a public GitHub repository",
+        advanced: "Advanced options",
+        progress: (done: number, total: number) => `Importing (${done}/${total})`,
+        importing: "Importing",
+        invalidUrl: "That is not a valid URL. Enter it again.",
+      },
       importBusy: "Importing…",
-      backgroundImportRunning: (done: number, total: number) => `Importing in the background ${done} / ${total}…`,
       backgroundImportDone: (count: number) => `Imported ${count} skills.`,
       backgroundImportPartial: (imported: number, failed: number) => `Imported ${imported}; ${failed} failed.`,
       backgroundImportFailed: "The background import failed.",
       backgroundImportFailures: (names: string, count: number) =>
         count > 3 ? `Failed: ${names} and ${count - 3} more` : `Failed: ${names}`,
-      backgroundImportDismiss: "Dismiss the import notice",
       importFailed: "The import failed.",
       importSucceeded: (name: string) => `Imported "${name}".`,
+      /** The 技能 page's own notices (design 1-4). */
+      toastUploadDone: (name: string) => `"${name}" uploaded.`,
+      toastGitDone: "GitHub import done.",
+      toastGitFailed: "GitHub import failed.",
+      toastProgress: (done: number, total: number) => `Importing (${done}/${total})`,
+      toastRetry: "Retry",
+      toastClose: "Dismiss notice",
       git: {
         title: "Import from GitHub",
         description:
@@ -1240,6 +1329,26 @@ export const EN: Text = {
         editingResource: (path: string) => `Editing reference file: ${path}`,
         saveFile: "Save file",
         closeReferenceEditor: "Close reference editor",
+        /** 2-3: the file editor. */
+        exit: "Exit editing",
+        unsaved: "Unsaved",
+        unsavedTitle: "Unsaved changes",
+        unsavedBody: "This file is not saved. Any changes made here will be lost after leaving. Leave anyway?",
+        deleteTitle: "Delete this item?",
+        deleteBody: "This cannot be undone. Delete this item?",
+        newFolder: "New folder",
+        newFile: "New file",
+        newFileIn: (path: string) => `New file in "${path}"`,
+        uploadFile: "Upload",
+        filePathPlaceholder: "File name or path, for example references/new.md",
+        folderPathPlaceholder: "Folder name, for example references",
+        invalidPath: "A name cannot be empty, start with /, or contain . or .. segments.",
+        editPath: (path: string) => `Rename ${path}`,
+        rename: "Rename",
+        deleteAction: "Delete",
+        deletePath: (path: string) => `Delete ${path}`,
+        saveFailed: "The file could not be saved.",
+        uploadNotText: (name: string) => `"${name}" is not a text file, so it cannot be uploaded as a skill file.`, 
         referenceEditingHint: "Change it, then press Save file.",
         referenceNotText: (name: string) => `"${name}" is not UTF-8 text and cannot be imported as a reference file.`,
         addReferenceFailed: "The reference file could not be read.",
@@ -1263,6 +1372,77 @@ export const EN: Text = {
         emptyDomains: "Add at least one allowed domain.",
         saveDomains: "Save",
         scope: "Applies only to run_shell and code inside the sandbox.",
+        /** [mac-direct] Installation-level opt-in. With it on, local code
+         *  execution leaves the sandbox: the full local execution stack is
+         *  affected — the Agent's own ephemeral Shell/Python and evolution
+         *  candidates run with your own file, network and environment access;
+         *  persistent shell sessions and persistent kernels are offered only
+         *  when a sandbox is available, so they are unavailable without one;
+         *  evolution runs still ask to confirm each time. macOS shell only.
+         *  Copy red line: state the full blast radius — never narrowed to
+         *  "candidates only" (review 2026-11-23).
+         *  [hint-split] Layered presentation (2026-11-24 user feedback): the
+         *  hint keeps one lead sentence and the full blast radius moves to
+         *  hintDetails; every point is preserved, the red line is unchanged —
+         *  the copy tests assert over hint + hintDetails combined.
+         *  [F29] The restart clause stays in the lead hint, not the details:
+         *  flipping the switch gives no immediate feedback (the status row
+         *  states the spawn-time mode until the next spawn), so the clause
+         *  is the only thing that explains the window right after the flip —
+         *  the one moment it matters, it must be always visible. */
+        directExecution: {
+          heading: "Sandbox",
+          field: "Run local code without a sandbox",
+          hint: "With this on, local code execution leaves the sandbox. Applies after a restart.",
+          hintDetails: [
+            "Code runs with your own file, network and environment access (including the Agent's own ephemeral Shell/Python and evolution candidates)",
+            "Persistent shell sessions and persistent kernels need a sandbox, so they are unavailable",
+            "R execution needs a sandbox and is unavailable while this is on (the direct channel supports Python only)",
+            "Evolution runs still ask to confirm each time",
+            ],
+          showDetails: "Show full impact",
+          hideDetails: "Hide",
+        },
+        /** [U5c] The sandbox status row of 设置 › 连接 › 沙箱网络 — the one place
+         *  sandbox health is surfaced (owner decision 2026-11-23: the boot
+         *  neither blocks nor mentions the sandbox; monitoring lives in
+         *  settings alone). */
+        status: {
+          field: "Sandbox status",
+          ok: "✓ macOS sandbox (Seatbelt) running — local code executes sandboxed",
+          /** [F26] The adopted-stack window: this session attached to an
+           *  already-running backend, so the mode the ok/optedOut sentences
+           *  would assert is an inference from this shell's inputs, not the
+           *  survivor's env — the row says so instead of guessing.
+           *  [F26-followup] No restart advice: quitting stops only a stack
+           *  this shell spawned, so a restart usually re-adopts the same
+           *  surviving stack. The honest way to verify is to stop that
+           *  backend and let the app spawn its own. */
+          attached: "This session attached to an already-running backend stack; its sandbox mode is not verified by this session (not knowable from outside). To have the mode confirmed, stop that backend process first — interrupt it in the terminal that started it, or quit it from Activity Monitor — then let the app spawn its own stack.",
+          /** [F16] The honest row: when the switch is ON, the session runs
+           *  direct no matter what the probe said — the row must say so. The
+           *  way back is the switch, not "restore and restart". */
+          optedOut: "Local code currently executes directly, unsandboxed (the switch below is ON). Turn it off and restart the app to return to sandboxed mode.",
+          /** [F22] The mid-session toggle-off window: the stack still runs
+           *  direct but the switch is already OFF — tell the user the restart
+           *  is what applies their change, not "turn off the switch" (which
+           *  they just did). [F24] No probe clause here: this sentence only
+           *  renders when the probe verdict is not "failed" (the failed branch
+           *  wins the row), so a probe cause can never reach it. */
+          optedOutSwitchOff: "Local code currently executes directly, unsandboxed (this session started with the switch on). Restart the app to return to sandboxed mode.",
+          /** The probe failed this session — the cause follows from the
+           *  structured detail (failCause sentence), the raw reason rides the
+           *  dot's tooltip with the diagnostics. R execution needs a sandbox
+           *  and is refused in this session too (F17). */
+          failed: "The sandbox is unavailable: this session runs local code unsandboxed; R execution and persistent shell sessions/kernels are unavailable (see the switch below for what that means); evolution runs still ask to confirm each time.",
+          /** Composed from detail.failCode — en sentences for the three
+           *  structured causes (spawn-error / signal / exit-code). */
+          failCause: {
+            "spawn-error": "Cause: the sandbox-exec command was not found.",
+            signal: "Cause: the probe process was killed by a signal before it could confirm Seatbelt.",
+            "exit-code": "Cause: Seatbelt may be disabled under MDM control or nested virtualization.",
+            },
+        },
       },
     },
     runtime: {
@@ -1856,7 +2036,7 @@ export const EN: Text = {
         gatewayIdle: "Gateway idle timeout",
         gatewayIdleHint: "How long to wait when a connection sends no new data.",
         gatewayTurn: "Turn timeout",
-        gatewayTurnHint: "The longest a single conversational turn may take.",
+        gatewayTurnHint: "The longest a single conversational turn may take. When both are set, the turn limit is at least the idle limit; setting either one to unlimited removes the rule.",
         kernelIdle: "Kernel idle timeout",
         kernelIdleHint: "How long a persistent kernel may sit idle before it is reclaimed.",
         permissionWait: "Approval wait timeout",
@@ -1866,6 +2046,7 @@ export const EN: Text = {
         seconds: "seconds",
         unlimited: "Unlimited",
         saved: "Saved",
+        orderError: "The turn timeout cannot be shorter than the gateway idle timeout. Raise the turn timeout, lower the idle timeout, or set one of them to unlimited.",
       },
       quotas: {
         heading: "Quotas",
@@ -1991,6 +2172,10 @@ export const EN: Text = {
     open: "Program evolution",
     moreRuns: (count: number) => `${count} more`,
     fewerRuns: "Show fewer",
+    /* The whole card is a button, and what it opens is the task panel in the
+       right column rather than an inline expand; the card says so instead of
+       drawing a chevron that promises the other thing. */
+    openPanel: "Open task panel",
     /* The run card at the foot of the transcript: waiting to start, or how long
        the search has been going. */
     notStarted: "Not started",
@@ -2137,6 +2322,13 @@ export const EN: Text = {
       close: "Close",
       stop: "Stop",
       stopping: "Stopping…",
+      /* Between the stop request and the run settling, the card says what is
+         still being wound down; otherwise those seconds look like nothing
+         happened. Deliberately not a count: `selected` means the parent under
+         puct and the new candidate under openevolve, and a discarded proposal
+         never emits `expanded`, so the log has no trustworthy in-flight number
+         and one would be a promise that never falls. */
+      stoppingDetail: "Finishing the in-flight candidates…",
       stopHint: "Candidates found so far remain available after stopping.",
       fullscreen: "Full screen",
       exitFullscreen: "Exit full screen",

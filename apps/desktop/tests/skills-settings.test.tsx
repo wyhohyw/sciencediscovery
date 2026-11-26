@@ -142,7 +142,37 @@ test("a failed first enable stays visible even when the refreshed catalog is emp
   } finally { await act(async () => { view.unmount(); }); }
 });
 
-test("the search field narrows the installed list", async () => {
+test("the tabs split the catalog by origin and narrow the grid", async () => {
+  const mine = { ...skill, id: "mine", name: "mine", description: "Mine to keep." };
+  const official = {
+    ...skill, id: "official", name: "official", description: "Ships with the app.", source: "built-in" as const,
+  };
+  const stub = new StubClient().reply([mine, official]).reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(stub.asClient());
+  try {
+    const markup = text(view);
+    assert.ok(markup.includes(TEXT.settings.skills.tabs.all(2)), "全部技能 does not count both");
+    assert.ok(markup.includes(TEXT.settings.skills.tabs.mine(1)), "我的技能 does not count the managed package");
+    assert.ok(markup.includes(TEXT.settings.skills.tabs.official(1)), "官方技能 does not count the built-in");
+    const officialTab = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.tabs.official(1)));
+    assert.ok(officialTab, "the 官方技能 tab is not a button");
+    await act(async () => { officialTab.props.onClick(); });
+    const selected = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.tabs.official(1)));
+    assert.equal(selected?.props["aria-selected"], true, "the pressed tab is not the selected one");
+    assert.match(text(view), /Ships with the app/);
+    assert.ok(!text(view).includes("Mine to keep"), "a managed package stayed under 官方技能");
+    const mineTab = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.tabs.mine(1)));
+    assert.ok(mineTab);
+    await act(async () => { mineTab.props.onClick(); });
+    assert.match(text(view), /Mine to keep/);
+    assert.ok(!text(view).includes("Ships with the app"), "a built-in stayed under 我的技能");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("the search field narrows the installed list by name only", async () => {
   const other = { ...skill, id: "draft", name: "draft", description: "A different package." };
   const stub = new StubClient().reply([skill, other]).reply({ backend: "jiuwenswarm", skills: [] });
   const view = await mount(stub.asClient());
@@ -152,9 +182,93 @@ test("the search field narrows the installed list", async () => {
     const input = view.root.findAllByType("input")
       .find((node) => node.props["aria-label"] === TEXT.settings.skills.search);
     assert.ok(input);
-    await act(async () => { input.props.onChange({ target: { value: "different" } }); });
+    await act(async () => { input.props.onChange({ target: { value: "draft" } }); });
     assert.match(text(view), /A different package/);
     assert.ok(!text(view).includes("Review a draft"), "the non-matching row stayed");
+    // A word that appears only in a description is not a match: the search is
+    // for the name the reader remembers, not for prose inside the package.
+    await act(async () => { input.props.onChange({ target: { value: "different" } }); });
+    assert.ok(!text(view).includes("A different package"), "a description-only match stayed");
+    assert.match(text(view), new RegExp(TEXT.settings.skills.noMatches));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a bulk action covers the tab on screen, not every package on the machine", async () => {
+  const mine = { ...skill, id: "mine", name: "mine", description: "Mine to keep." };
+  const official = {
+    ...skill, id: "official", name: "official", description: "Ships with the app.", source: "built-in" as const,
+  };
+  const page = {
+    backend: "jiuwenswarm",
+    skills: [installedSkill("mine"), installedSkill("official")],
+  };
+  const stub = new StubClient().reply([mine, official]).reply(page);
+  const view = await mount(stub.asClient());
+  try {
+    const mineTab = view.root.findAllByType("button")
+      .find((node) => node.children.includes(TEXT.settings.skills.tabs.mine(1)));
+    assert.ok(mineTab, "the 我的技能 tab is not a button");
+    await act(async () => { mineTab.props.onClick(); });
+    stub.reply({ enabled: false, results: [] }).reply([mine, official]).reply(page);
+    await act(async () => { bulkButton(view, TEXT.settings.disableAll).props.onClick(); });
+    const writes = stub.calls.filter((call) => call.init.method === "PUT");
+    assert.equal(writes.length, 1);
+    const body = json(writes[0]!) as { enabled: boolean; targets: Array<Record<string, unknown>> };
+    assert.equal(body.enabled, false);
+    // 我的技能 shows one card, so the batch carries one target.
+    assert.deepEqual(body.targets, [{ skillId: "mine", name: "mine" }]);
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a match is marked in the name and the clear control restores the list", async () => {
+  const other = { ...skill, id: "draft", name: "draft", description: "A different package." };
+  const stub = new StubClient().reply([skill, other]).reply({ backend: "jiuwenswarm", skills: [] });
+  const view = await mount(stub.asClient());
+  try {
+    const input = view.root.findAllByType("input")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.search);
+    assert.ok(input);
+    await act(async () => { input.props.onChange({ target: { value: "dra" } }); });
+    const marks = view.root.findAllByType("mark");
+    assert.equal(marks.length, 1, "the matched run is not marked");
+    assert.deepEqual(marks[0]?.children, ["dra"]);
+    const clear = view.root.findAllByType("button")
+      .find((node) => node.props["aria-label"] === TEXT.settings.skills.clearSearch);
+    assert.ok(clear, "the search field has no clear control");
+    await act(async () => { clear.props.onClick(); });
+    assert.match(text(view), /Review a draft/);
+    assert.equal(view.root.findAllByType("mark").length, 0, "a mark survived the clear");
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("a refused switch on a package's page is explained there", async () => {
+  const page = {
+    backend: "jiuwenswarm" as const,
+    skills: [installedSkill("review")],
+  };
+  const stub = new StubClient().reply([skill]).reply(page).reply(detail);
+  const view = await mount(stub.asClient());
+  try {
+    const card = view.root.findAllByType("button")
+      .find((node) => node.props.className === "settings-card-main");
+    assert.ok(card);
+    await act(async () => { card.props.onClick(); });
+    for (let tick = 0; tick < 4; tick += 1) {
+      await act(async () => { await Promise.resolve(); });
+    }
+    assert.ok(text(view).includes("Review carefully"), "the package page did not load");
+    stub.fail(new Error("switch refused")).reply([skill]).reply(page);
+    await act(async () => { view.root.findAllByProps({ role: "switch" })[0]!.props.onClick(); });
+    assert.match(text(view), /switch refused/);
+    assert.ok(view.root.findAllByProps({ role: "alert" }).length > 0);
+    // The message belongs to the page that produced it.
+    await act(async () => {
+      const back = view.root.findAllByType("button")
+        .find((node) => node.props["aria-label"] === TEXT.settings.skills.backToList);
+      assert.ok(back);
+      back.props.onClick();
+    });
+    assert.ok(!text(view).includes("switch refused"), "the refusal followed the reader to the list");
   } finally { await act(async () => { view.unmount(); }); }
 });
 
@@ -230,6 +344,30 @@ test("Disable all is one write for the whole page and every switch moves on the 
     // Mount read the list once; the bulk action read it once more. No per-skill read.
     assert.equal(stub.calls.filter((call) => call.path === "/api/jiuwenswarm/skills").length, 2);
     assert.deepEqual(switchValues(view), Array(31).fill(false));
+  } finally { await act(async () => { view.unmount(); }); }
+});
+
+test("the bulk pair sits on the tab row, each label behind its own glyph", async () => {
+  const alpha = { ...skill, id: "alpha", name: "alpha" };
+  const page = { backend: "jiuwenswarm", skills: [installedSkill("alpha")] };
+  const stub = new StubClient().reply([alpha]).reply(page);
+  const view = await mount(stub.asClient());
+  try {
+    // The handoff draws the pair in the toolbar beside the filters, not on a
+    // line over the list: 技能's two writes are looked for there now.
+    const toolbarEnd = view.root.findAllByProps({ className: "skill-toolbar-end" });
+    assert.equal(toolbarEnd.length, 1, "the list has no toolbar end");
+    const bulk = toolbarEnd[0]!.findAllByProps({ className: "settings-bulk is-toolbar" });
+    assert.equal(bulk.length, 1, "the bulk pair is not in the toolbar");
+    const labels = bulk[0]!.findAllByType("button").map((button) => button.children.at(-1));
+    assert.deepEqual(labels, [TEXT.settings.enableAll, TEXT.settings.disableAll]);
+    for (const button of bulk[0]!.findAllByType("button")) {
+      assert.equal(button.findAllByType("svg").length, 1, "a bulk label lost its glyph");
+      assert.equal(button.props["aria-label"], undefined, "the glyph must not rename the button");
+    }
+    const panel = view.root.findAllByProps({ id: "skill-list-panel" });
+    assert.equal(panel.length, 1);
+    assert.equal(panel[0]!.findAllByProps({ className: "settings-bulk" }).length, 0, "the pair is still over the list");
   } finally { await act(async () => { view.unmount(); }); }
 });
 

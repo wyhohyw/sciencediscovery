@@ -2,11 +2,31 @@
 // SPDX-License-Identifier: Apache-2.0
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
-import { expect } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 import type { ConnectorManifest, Session, Specialist } from "@sciencediscovery/schema";
 import { test } from "./helpers/e2e.ts";
 import { api, openDesktopSession, seedDesktopOrigin, startDesktopEntry, stopDesktopEntry } from "./helpers/desktop-evolve.ts";
 import { cleanupJourney, createProjectAndSession, scriptedModel, type JourneyFixture } from "./helpers/journeys.ts";
+
+async function toolbarActionAppearance(tabs: Locator, action: Locator) {
+  await expect(tabs).toBeVisible();
+  await expect(action).toBeVisible();
+  const [tabsBox, actionBox] = await Promise.all([tabs.boundingBox(), action.boundingBox()]);
+  if (!tabsBox || !actionBox) throw new Error("The tabs and add action must both be laid out.");
+  const tabsCenter = tabsBox.y + tabsBox.height / 2;
+  const actionCenter = actionBox.y + actionBox.height / 2;
+  expect(Math.abs(actionCenter - tabsCenter)).toBeLessThanOrEqual(2);
+
+  return action.evaluate(element => {
+    const style = getComputedStyle(element);
+    return {
+      background: style.backgroundColor,
+      color: style.color,
+      radius: style.borderRadius,
+      height: style.height,
+    };
+  });
+}
 
 test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fixture:standard", "@category:e2e", "@os:linux", "@arch:amd64", "@model:mock", "@status:reviewed"] }, () => {
   let entry: ChildProcess | undefined;
@@ -17,7 +37,7 @@ test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fi
      * E2E-META
      * Purpose: Manage Specialists through the 2026-11-26 card, detail, editor and drawer design with real API persistence.
      * Steps:
-     *   1. Open the Specialist catalog, inspect source tabs, search and Add action.
+     *   1. Compare the Skills and Specialist add actions, check each aligns with its own tabs, and search the Specialist catalog.
      *   2. Create a role with explicitly selected skill/MCP capabilities and persisted prompt examples.
      *   3. Bind and disable it, verify the truthful disabled binding and narrow hint, then explicitly unbind.
      *   4. Observe a failed toggle and retry; bulk switches preserve the fixed Reviewer.
@@ -54,13 +74,20 @@ test.describe("Desktop Specialist management", { tag: ["@isolation:global", "@fi
       const actions = () => card.getByRole("button", { name: zh ? `「${name}」的操作` : `Actions for "${name}"`, exact: true });
       journey.scenario({ goal: "Create, configure, inspect and safely try a custom Specialist without executing a model.", preconditions: ["Actual isolated API and compiled Desktop", locale, "Owned data and loopback model only"] });
       try {
-        await journey.step("1. Inspect catalog controls", "Source tabs, search and the primary create action are available.", async () => {
+        await journey.step("1. Inspect catalog controls", "Both add actions share the same appearance and each aligns with its page's tabs.", async () => {
           baseline = await api<Specialist[]>(page, "/api/specialists");
           fixture = await createProjectAndSession(page, { projectName: `${name} workspace`, sessionTitle: `${name} source`, model: { apiToken: model.apiToken, baseUrl: model.baseUrl, model: model.model, name } });
           await seedDesktopOrigin(page); await page.addInitScript(language => localStorage.setItem("sciencediscovery-desktop:locale", language), locale);
           await page.setViewportSize({ width: 1920, height: 1080 }); await openDesktopSession(page, { ...fixture, modelOwned: true }); await openSettings();
           await expect(settings.getByRole("tab")).toHaveCount(3);
-          await expect(settings.getByRole("button", { name: w.add, exact: true })).toHaveCSS("background-color", "rgb(25, 25, 25)");
+          const tabs = settings.getByRole("tablist");
+          const specialistAdd = settings.getByRole("button", { name: w.add, exact: true });
+          await expect(specialistAdd).toHaveCSS("background-color", "rgb(25, 25, 25)");
+          const specialistAppearance = await toolbarActionAppearance(tabs, specialistAdd);
+          await settings.getByRole("button", { name: zh ? "技能" : "Skills", exact: true }).click();
+          const skillAdd = settings.getByRole("button", { name: zh ? "添加技能" : "Add skill", exact: true });
+          expect(await toolbarActionAppearance(tabs, skillAdd)).toEqual(specialistAppearance);
+          await settings.getByRole("button", { name: w.specialists, exact: true }).click();
           await settings.getByRole("searchbox", { name: w.search, exact: true }).fill("no-matching-owned-role"); await expect(settings.locator(".specialist-card")).toHaveCount(0);
           await settings.getByRole("searchbox", { name: w.search, exact: true }).fill("");
         });

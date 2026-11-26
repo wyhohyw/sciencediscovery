@@ -2322,6 +2322,90 @@
       ]
     },
     {
+      "source": "apps/desktop/src/views/settings/SkillConfirmDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SkillDialog.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SkillFileEditorView.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SkillToasts.tsx",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/skill-files.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skills-import-edit.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/skill-tone.ts",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skill-parts.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/skill-tree-glyphs.tsx",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/skill-parts.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/settings/rows.tsx",
       "risk": "P1",
       "owner": "desktop",
@@ -2446,6 +2530,11 @@
           "source": "apps/desktop/tests/settings-pages.test.tsx",
           "layer": "ut",
           "complexity": "C3"
+        },
+        {
+          "source": "apps/desktop/tests/timeout-ordering.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
         },
         {
           "source": "apps/desktop/e2e/settings-interactions.spec.ts",
@@ -3460,6 +3549,18 @@
       ]
     },
     {
+      "source": "apps/desktop/src/text/columns.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/text-columns.test.ts",
+          "layer": "ut",
+          "complexity": "C2"
+        }
+      ]
+    },
+    {
       "source": "apps/desktop/src/views/settings/system/Sessions.tsx",
       "risk": "P1",
       "owner": "desktop",
@@ -3576,6 +3677,81 @@
           "source": "apps/web/tests/idea-research-notice.test.ts",
           "layer": "ut",
           "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/AccountPage.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/account-format.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/account-reward-progress.test.ts",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/account-format.ts",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/account-format.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/text/en.ts",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/language.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/account-format.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/text/zh.ts",
+      "risk": "P2",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/language.test.tsx",
+          "layer": "ut",
+          "complexity": "C2"
+        },
+        {
+          "source": "apps/desktop/tests/account-format.test.tsx",
+          "layer": "ut",
+          "complexity": "C1"
+        }
+      ]
+    },
+    {
+      "source": "apps/desktop/src/views/settings/SandboxDirectSettings.tsx",
+      "risk": "P1",
+      "owner": "desktop",
+      "tests": [
+        {
+          "source": "apps/desktop/tests/settings-pages.test.tsx",
+          "layer": "ut",
+          "complexity": "C3"
         }
       ]
     }
