@@ -32,12 +32,34 @@ probe can damage that field; the engine itself only writes inside `cdr_regions`.
 `evaluatorSource` is the whole of `scripts/cdr_opendde_evaluator.py` in this skill. The
 runner needs `OPENDDE_CODE_DIR`, `OPENDDE_CHECKPOINT`, and `OPENDDE_PYTHON` when the job
 interpreter is not the OpenDDE environment. `OPENDDE_ROOT_DIR` defaults to the
-checkpoint directory's parent, where `common/components.cif` already lives. One cycle picks one skill. Default `router_selection_strategy` is `agent`:
+checkpoint directory's parent, where `common/components.cif` already lives.
+
+Before the first candidate, the NPU job runs one probe (`{"probe": true}`) under
+`OPENDDE_PYTHON`. It checks the NPU devices, rdkit, biotite, the fold code and checkpoint,
+the ESM-2 package and weights, the harness modules, the SolubleMPNN weights, and the
+LigandMPNN code. A missing component is installed when it has a pinned source: the pip
+packages `fair-esm==2.0.0`, `rdkit==2025.9.3`, `biotite==1.4.0` (with `--no-deps`), and the
+weights ESM-2 (`biohub/esm2_t33_650M_UR50D` at the colleague's revision, through
+`hf-mirror.com`), SolubleMPNN (`files.ipd.uw.edu`), and `opendde_abag.pt` (the pinned
+Hugging Face revision, SHA-256 checked). The three code trees (OpenDDE, OpenDDE-Harness,
+LigandMPNN) are reproduced: a clone at the pinned upstream commit, with the colleague's
+local changes applied from `skills/evolve-design/patches/`. The result must match the
+colleague's tree digest, or the install fails. Everything installs under `SD_DEPS_DIR`, which defaults to
+`/data1/gs_agent/sciencediscovery-deps`, a directory beside the colleague's OpenDDE tree
+and never inside it. A location resolves to the colleague's copy when it exists, and
+otherwise to the sibling install. A skill whose checks still fail is switched off for the
+run (weight 0) and the log says why. If the fold itself cannot run, or no skill can run,
+the search is refused with those reasons.
+
+One cycle picks one skill. Default `router_selection_strategy` is `agent`:
 the run's chat model chooses among legal skills using CRLF2 priors (point
 `0.5`, full redesign `0.1`, ESM-2 `0.2`, SolubleMPNN `0.2`). Set the strategy
 to `weighted` to force `protein-design-router` sampling. Optional
 `skill_weights` and `parent_fitness_uniform_fraction` (default `0.1`) in the
-starting JSON match the harness knobs. Point mutation uses the chat model for
+starting JSON match the harness knobs. `reflection_interval` (harness default
+`20`; the CRLF2 ds10 config sets `1`) decides when the chat model reflects: after
+cycle N only when N + 1 is a multiple of it, and otherwise the latest reflection
+stays in the prompt, as the harness does. Point mutation uses the chat model for
 1–3 CDR substitutions; full redesign assigns every mutable CDR site then keeps
 real changes; both then NPU-fold only. ESM-2 or SolubleMPNN still run inside
 one NPU job: that job generates the harness batch, folds the first sequence,

@@ -26,15 +26,18 @@ it from the event log, so a CDR run is not resumed.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import math
 import random
 import time
 from dataclasses import dataclass, field
+from itertools import zip_longest
 from typing import Any, Callable, Optional
 
 from . import events
+from .capabilities import ESM_SKILL, MPNN_SKILL, assess
 from .engine import RunSpec
 from .events import Emit
 from .logging_config import get_logger
@@ -44,8 +47,6 @@ log = get_logger("cdr")
 AMINO_ACIDS = frozenset("ACDEFGHIKLMNPQRSTVWY")
 POINT_SKILL = "cdr-point-mutation"
 FULL_SKILL = "cdr-full-redesign"
-ESM_SKILL = "esm2-guided-mutation"
-MPNN_SKILL = "antibody-inverse-folding"
 CHAT_SKILLS = frozenset({POINT_SKILL, FULL_SKILL})
 SKILL_BACKENDS = {
     POINT_SKILL: "llm",
@@ -62,6 +63,17 @@ DEFAULT_SKILL_WEIGHTS = {
 }
 DEFAULT_UNIFORM_FRACTION = 0.1
 DEFAULT_ROUTER_STRATEGY = "agent"
+#: Retries of a cycle whose design phase produced nothing, as ``cycle_retry_limit``.
+CYCLE_RETRY_LIMIT = 2
+#: Constrained-elite population, the harness ``ConstrainedElitePopulation`` defaults.
+POPULATION_SIZE = 20
+MIN_CDR_DISTANCE = 0.05
+POSITION_REUSE_FRACTION = 0.75
+MUTATION_REUSE_FRACTION = 0.30
+#: Folds at or above this ipTM go to the quality check, as ``quality_check_threshold``.
+QUALITY_THRESHOLD = 0.7
+#: Harness contract default for ``reflection_interval``. ds10 sets 1.
+DEFAULT_REFLECTION_INTERVAL = 20
 RUNNER_RETRY_WAITS = (30, 60, 120)
 #: Fold evidence the evaluator already returns, carried into the design prompt.
 REPORTED_METRICS = (
@@ -118,6 +130,8 @@ class CdrEngine:
                     except _Refusal as refusal:
                         emit(events.log("warn", f"point mutation unavailable: {refusal}"))
                         complete = None
+                if self._measure is None:
+                    config = _preflight(config, complete, spec, should_stop, emit)
                 self._run_measured(spec, emit, should_stop, config, measure, complete)
                 return
             complete = self._complete or _model_complete(spec, should_stop, emit)
@@ -250,7 +264,7 @@ class CdrEngine:
         seed_admitted = seed_measured and not seed_error
         seed = _Member(
             index=0, sequence=config["sequence"],
-            score=float(seed_score) if seed_admitted else None,
+            score=float(seed_score) if seed_measured else None,
             backbone=seed_reading.get("backbone_pdb") if isinstance(seed_reading.get("backbone_pdb"), str) else None,
             metrics=seed_reading.get("metrics") or {},
             gate=seed_error,
@@ -265,7 +279,11 @@ class CdrEngine:
         if not seed_admitted:
             emit(events.log("warn", seed_error or "the starting sequence was not scored"))
 
-        population = [seed]
+        # Only sequences that pass the gate are population members. A seed that
+        # fails the gate is the first working parent instead, as in the harness.
+        population: list[_Member] = [seed] if seed_admitted else []
+        seed_regions = _cdr_slices(config["sequence"], config["cdr_regions"])
+        working: _Member | None = seed if seed_measured and not seed_admitted else None
         tried = {config["sequence"]}
         best = 0 if seed_admitted else None
         produced = 0
@@ -281,13 +299,17 @@ class CdrEngine:
         tries: list[dict[str, Any]] = []
         reflection = "none"
         folded_cycle: tuple[int, str, int] | None = None
+        attempt = 0
         analysis = _analyze(complete, config) if complete is not None else "none"
         streak = 0
         seen_best: float | None = None
         cycles = max(1, -(-spec.expansions // _batch(config, spec, 0)))
 
-        def record(parent: _Member, reading: dict[str, Any], mutations: list, *, budget=accepting) -> None:
-            nonlocal node, produced, best, lost, status, reason
+        def record(
+            parent: _Member, reading: dict[str, Any], mutations: list, *,
+            budget=accepting, verdict: bool | None = None,
+        ) -> None:
+            nonlocal node, produced, best, lost, status, reason, working
             if reading.get("runner_lost"):
                 # The runner never ran this candidate, so it does not spend an expansion.
                 lost = True
@@ -328,42 +350,62 @@ class CdrEngine:
                 "score": round(float(value), 4) if isinstance(value, (int, float)) else None,
                 "gate": why, "metrics": reading.get("metrics") or {},
             })
-            if not admitted:
-                emit(events.merged(node, False, why or "not scored", category="candidate-failed"))
-                return
-            if outcomes:
-                outcomes[-1]["admitted"] += 1
-            population.append(_Member(
+            candidate = _Member(
                 index=node, sequence=child, score=value, mutations=mutations,
                 backbone=reading.get("backbone_pdb") if isinstance(reading.get("backbone_pdb"), str) else None,
                 depth=parent.depth + 1,
                 metrics=reading.get("metrics") or {},
                 gate=why,
                 summary=summary,
-            ))
-            emit(events.merged(node, True, "entered the population"))
-            current = None if best is None else _score_of(population, best)
-            if isinstance(value, (int, float)) and (current is None or value >= current):
-                best = node
+            )
+            if not admitted and _measured(bool(reading.get("ok")), value if isinstance(value, (int, float)) else None):
+                # Measured but refused by the contact gate: it may still be the working parent.
+                working = _prefer_working(candidate, working)
+            if admitted and verdict is False:
+                admitted = False
+                why = "quality check did not pass"
+            if not admitted:
+                emit(events.merged(node, False, why or "not scored", category="candidate-failed"))
+                return
+            if outcomes:
+                outcomes[-1]["admitted"] += 1
+            population.append(candidate)
+            kept, actions = _retain(population, config, seed_regions)
+            population[:] = [member for member in population if member.index in kept]
+            if node in kept:
+                emit(events.merged(node, True, "entered the population"))
+            else:
+                emit(events.merged(node, False, actions.get(node, "not retained"), category="candidate-failed"))
+            # The best of the survivors, as the harness reads it after each update.
+            best = max(population, key=lambda member: member.score).index if population else None
 
         while produced < spec.expansions and not lost:
             if should_stop():
                 status, reason = "stopped", "stopped"
                 break
             top = max((member.score for member in population if member.score is not None), default=None)
-            if outcomes:
-                streak = 0 if top is not None and (seen_best is None or top > seen_best) else streak + 1
-            seen_best = top
-            if folded_cycle is not None and complete is not None:
-                # The harness reflects after every cycle (reflection_interval 1).
-                reflection = _reflect(complete, folded_cycle[0], folded_cycle[1], tries[folded_cycle[2]:])
+            # A retried cycle never committed, so it does not count as a cycle
+            # without improvement either.
+            if attempt == 0:
+                if outcomes:
+                    streak = 0 if top is not None and (seen_best is None or top > seen_best) else streak + 1
+                seen_best = top
+            if folded_cycle is not None:
+                # As the harness: reflect only when (cycle + 1) % reflection_interval == 0.
+                # Other cycles keep the latest reflection, which the harness also keeps.
+                if complete is not None and (folded_cycle[0] + 1) % config["reflection_interval"] == 0:
+                    reflection = _reflect(complete, folded_cycle[0], folded_cycle[1], tries[folded_cycle[2]:])
                 folded_cycle = None
-            parent = _select(
-                population,
-                _temperature(cycle, cycles),
-                rng,
-                float(config.get("parent_fitness_uniform_fraction") or DEFAULT_UNIFORM_FRACTION),
-            )
+            if population:
+                parent = _select(
+                    population,
+                    _temperature(cycle, cycles),
+                    rng,
+                    float(config.get("parent_fitness_uniform_fraction") or DEFAULT_UNIFORM_FRACTION),
+                )
+            else:
+                # Nothing has passed the gate yet. The harness then breeds from the working parent.
+                parent = working if working is not None else seed
             parent.visits += 1
             width = _batch(config, spec, produced)
             skill = _choose_skill(
@@ -388,6 +430,10 @@ class CdrEngine:
                 "streak": streak,
                 "reflection": reflection,
                 "tries": tries,
+                "working": None if working is None else {
+                    "sequence": working.sequence, "score": working.score,
+                    "metrics": working.metrics, "gate": working.gate,
+                },
                 "population": [
                     {
                         "node": member.index, "score": member.score,
@@ -400,12 +446,13 @@ class CdrEngine:
                 ],
             }
             folded_cycle = (cycle, skill, len(tries))
+            emit(events.log("info", f"cycle {cycle} drew {skill} on node {parent.index}"))
             if skill in CHAT_SKILLS and complete is not None:
-                cycle += 1
                 budget = dict(config)
                 if skill == FULL_SKILL:
                     budget["mutation_min"] = 1
                     budget["mutation_max"] = max(1, len(config["mutable"]))
+                refused = ""
                 try:
                     proposals = (
                         _proposals_full(complete, config, parent, width, design_state)
@@ -413,27 +460,49 @@ class CdrEngine:
                         else _proposals(complete, config, parent, width, design_state)
                     )
                 except _Refusal as refusal:
-                    record(parent, {"empty": True, "error": str(refusal)}, [], budget=budget)
-                    continue
-                folded = 0
+                    proposals, refused = [], str(refusal)
+                # Fold the whole batch first, then one quality check over it, as the harness
+                # cycle does. Only then are the folds recorded, in proposal order.
+                batch: list[tuple[list, dict[str, Any]]] = []
+                children: set[str] = set()
                 for mutations in proposals:
-                    if produced >= spec.expansions or lost:
+                    if produced + len(batch) >= spec.expansions or lost:
                         break
-                    if folded and should_stop():
+                    if batch and should_stop():
                         status, reason = "stopped", "stopped"
                         break
                     child, _summary, _error = _apply(parent.sequence, budget, mutations)
-                    if child is None or child in tried:
+                    if child is None or child in tried or child in children:
                         continue
-                    follow = _payload(config, child, mutations)
-                    record(parent, measure(follow), mutations, budget=budget)
-                    folded += 1
+                    children.add(child)
+                    reading = measure(_payload(config, child, mutations))
+                    reading.setdefault("sequence", child)
+                    batch.append((mutations, reading))
+                    if reading.get("runner_lost"):
+                        break
+                verdicts, quality_error = _quality_verdicts(
+                    complete, analysis, [reading for _m, reading in batch], exempt=skill == FULL_SKILL,
+                )
+                if quality_error:
+                    emit(events.log("warn", f"cycle {cycle} quality check failed: {quality_error}"))
+                for index, (mutations, reading) in enumerate(batch):
+                    record(parent, reading, mutations, budget=budget, verdict=verdicts[index])
+                folded = len(batch)
                 if folded == 0 and not lost:
-                    record(parent, {
-                        "empty": True,
-                        "error": "the model returned no new CDR mutations",
-                    }, [], budget=budget)
+                    why = refused or "the model returned no new CDR mutations"
+                    if attempt < CYCLE_RETRY_LIMIT:
+                        # Nothing was folded, so the cycle has not committed. The harness
+                        # retries it from parent selection instead of charging the budget.
+                        attempt += 1
+                        folded_cycle = None
+                        outcomes.pop()
+                        emit(events.log("warn", f"cycle {cycle} retry {attempt}: {why}"))
+                        continue
+                    record(parent, {"empty": True, "error": why}, [], budget=budget)
+                cycle += 1
+                attempt = 0
                 continue
+            attempt = 0
             payload = _payload(config, parent.sequence, [])
             payload["propose"] = True
             payload["skill"] = skill if skill in {ESM_SKILL, MPNN_SKILL} else ESM_SKILL
@@ -455,17 +524,27 @@ class CdrEngine:
                     "error": reading.get("error") or "the model returned no CDR mutations",
                 }, [])
                 continue
-            for offset, item in enumerate(pending):
-                if produced >= spec.expansions or lost:
+            # The job already folded the first sequence; the rest of its batch folds here.
+            reading.setdefault("sequence", pending[0]["sequence"])
+            batch = [(pending[0]["mutations"], reading)]
+            for item in pending[1:]:
+                if produced + len(batch) >= spec.expansions or lost:
                     break
-                if offset and should_stop():
+                if should_stop():
                     status, reason = "stopped", "stopped"
                     break
-                if offset == 0:
-                    record(parent, reading, item["mutations"])
-                    continue
-                follow = _payload(config, item["sequence"], item["mutations"])
-                record(parent, measure(follow), item["mutations"])
+                measured = measure(_payload(config, item["sequence"], item["mutations"]))
+                measured.setdefault("sequence", item["sequence"])
+                batch.append((item["mutations"], measured))
+                if measured.get("runner_lost"):
+                    break
+            verdicts, quality_error = _quality_verdicts(
+                complete, analysis, [item for _m, item in batch], exempt=False,
+            )
+            if quality_error:
+                emit(events.log("warn", f"cycle {cycle} quality check failed: {quality_error}"))
+            for index, (mutations, item) in enumerate(batch):
+                record(parent, item, mutations, verdict=verdicts[index])
         emit(events.search_finished(
             status, best, produced,
             stop_reason=reason, expansions_planned=spec.expansions,
@@ -523,6 +602,7 @@ def _config(baseline: str) -> dict[str, Any]:
         "parent_fitness_uniform_fraction": _uniform_fraction(
             parsed.get("parent_fitness_uniform_fraction"),
         ),
+        "reflection_interval": _reflection_interval(parsed.get("reflection_interval")),
     }
 
 
@@ -551,6 +631,20 @@ def _uniform_fraction(raw: Any) -> float:
     except (TypeError, ValueError):
         return DEFAULT_UNIFORM_FRACTION
     return min(1.0, max(0.0, value))
+
+
+def _reflection_interval(raw: Any) -> int:
+    """``reflection_interval`` as the harness contract reads it: an integer of at least 1.
+
+    The harness default is 20. The CRLF2 ds10 config sets 1, so each cycle reflects.
+    """
+    if raw is None or isinstance(raw, bool):
+        return DEFAULT_REFLECTION_INTERVAL
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_REFLECTION_INTERVAL
+    return max(1, value)
 
 
 def _legal_skills(
@@ -852,6 +946,55 @@ def _pause(seconds: float, should_stop: Callable[[], bool]) -> bool:
     return True
 
 
+def _npu_probe(spec: RunSpec, should_stop: Callable[[], bool]) -> dict[str, Any]:
+    """One NPU execution that reports which components this host has. It folds nothing."""
+    from .npu_job import NpuJobError, npu_client_from_spec
+
+    try:
+        client = npu_client_from_spec(spec.options, spec.candidate_timeout_seconds)
+    except NpuJobError as error:
+        raise _Refusal(str(error)) from error
+    try:
+        _job, artifact = client.run(json.dumps({"probe": True}), should_stop)
+    except NpuJobError as error:
+        return {"error": str(error)}
+    if not isinstance(artifact, dict):
+        return {"error": "the NPU probe returned no report"}
+    return artifact
+
+
+def _apply_preflight(
+    config: dict[str, Any], report: dict[str, Any], chat_ok: bool, emit: Emit,
+) -> dict[str, Any]:
+    """Switch off each skill the probe could not satisfy, and refuse if nothing can run."""
+    result = assess(report)
+    for note in result.notes:
+        emit(events.log("info", note))
+    if not result.fold_ok:
+        reason = result.fold_reason or str(report.get("error") or "unknown")
+        raise _Refusal(f"this NPU host cannot fold a candidate: {reason}")
+    weights = dict(config.get("skill_weights") or DEFAULT_SKILL_WEIGHTS)
+    for skill, reason in result.unavailable.items():
+        weights[skill] = 0.0
+        emit(events.log("warn", f"skill {skill} is off for this run: {reason}"))
+    runnable = [
+        skill for skill in (POINT_SKILL, FULL_SKILL, ESM_SKILL, MPNN_SKILL)
+        if float(weights.get(skill, 0.0) or 0.0) > 0 and (skill not in CHAT_SKILLS or chat_ok)
+    ]
+    if not runnable:
+        detail = "; ".join(f"{skill}: {reason}" for skill, reason in result.unavailable.items())
+        raise _Refusal(f"no skill can run on this host ({detail or 'no skill weight is set'})")
+    return {**config, "skill_weights": weights}
+
+
+def _preflight(
+    config: dict[str, Any], complete: Optional[CompleteFn], spec: RunSpec,
+    should_stop: Callable[[], bool], emit: Emit,
+) -> dict[str, Any]:
+    report = _npu_probe(spec, should_stop)
+    return _apply_preflight(config, report, complete is not None, emit)
+
+
 def _npu_measure(spec: RunSpec, should_stop: Callable[[], bool]) -> MeasureFn:
     """One runner execution returns the proposal, the fold, and the backbone."""
     from .npu_job import NpuJobError, interpret_npu_job, npu_client_from_spec
@@ -910,6 +1053,13 @@ def _evidence(
         "- A sequence only enters the population when the 5 A contact gate passes:",
         "  the CDR share of interface contacts must exceed 0.5.",
     ]
+    # The harness design context names the target; without it the model cannot tell what the CDRs bind.
+    lines.extend([
+        "",
+        "=== TARGET ===",
+        f"- Chain {config['target_chain']} sequence: {config['target_sequence']}",
+        f"- Hotspots (1-based): {config['target_hotspots'] or 'none given'}",
+    ])
     if state.get("analysis"):
         lines.extend(["", "=== ANTIBODY HEADER / CDR MAP ===", str(state["analysis"])])
     lines.extend(["", "=== PARENT ===", f"- Score: {parent.score}"])
@@ -923,6 +1073,16 @@ def _evidence(
             lines.append("- Largest loss terms: " + ", ".join(f"{k}={v}" for k, v in worst))
     if parent.gate:
         lines.append(f"- Gate feedback: {parent.gate}")
+    working = state.get("working")
+    if isinstance(working, dict) and working.get("sequence") != parent.sequence:
+        lines.extend(["", "=== WORKING PARENT (best sequence measured so far that the gate refused) ==="])
+        working_metrics = working.get("metrics") or {}
+        lines.append(f"- Score: {working.get('score')}")
+        for name in ("iptm", "cdr_contact_fraction"):
+            if working_metrics.get(name) is not None:
+                lines.append(f"- {name}: {working_metrics[name]}")
+        if working.get("gate"):
+            lines.append(f"- Gate feedback: {working['gate']}")
     population = state.get("population") or []
     if population:
         lines.extend(["", "=== POPULATION ==="])
@@ -947,7 +1107,7 @@ def _evidence(
         ),
     ])
     if state.get("reflection") and state["reflection"] != "none":
-        lines.extend(["", "=== REFLECTION ON THE LAST CYCLE ===", str(state["reflection"])])
+        lines.extend(["", "=== REFLECTION (latest reflected cycle) ===", str(state["reflection"])])
     return lines
 
 
@@ -956,8 +1116,13 @@ def _analyze(complete: CompleteFn, config: dict[str, Any]) -> str:
     groups = "; ".join(f"{start}-{end}" for start, end in config["cdr_regions"])
     prompt = "\n".join([
         "Return plain text under 120 words. Do not name or discuss the protein.",
-        "Describe what the designable loops of this binder look like and which residues",
-        "are most likely to drive interface contact, as guidance for later edits.",
+        "Describe the designable loops of this binder and the CDR-localized strategy for later edits.",
+        "Rules, as the harness analyze agent:",
+        "- Use 1-based sequence positions and inclusive ranges, verified against the supplied sequence.",
+        "- The CDR ranges are the annotation. Do not infer CDRs from anything else.",
+        "- Never invent residue-residue contacts, interaction geometry, or affinity.",
+        "- Mark sequence-derived hypotheses as hypotheses. Only state observations the evidence supports.",
+        "- Do not explain standard concepts. Be concise.",
         f"Chain {config['chain']} sequence:\n{config['sequence']}",
         f"Designable CDR ranges (1-based, last range is CDR3): {groups}.",
         f"Target chain {config['target_chain']} sequence:\n{config['target_sequence']}",
@@ -980,9 +1145,11 @@ def _reflect(complete: CompleteFn, cycle: int, skill: str, results: list[dict[st
     for item in results:
         gate = f" gate: {item['gate']}" if item.get("gate") else ""
         lines.append(f"- {item['summary'] or 'no change'} -> score {item['score']}{gate}")
-    lines.append(
-        "Say which positions or substitutions helped, which hurt, and what the next cycle should try."
-    )
+    lines.extend([
+        "Use only the evidence above. Higher score is better; a score of None was not measured.",
+        "Never invent contacts or measurements. Mark anything the evidence does not show as unknown.",
+        "Say which positions or substitutions helped, which hurt, and what the next cycle should try.",
+    ])
     try:
         return complete("\n".join(lines)).strip()[:600] or "none"
     except _Refusal:
@@ -1005,7 +1172,8 @@ def _proposals(
         f"Allowed positions: {positions}.",
         f"Sequence:\n{parent.sequence}",
         "The new amino acid must differ from the sequence at that position.",
-        "Candidates must yield distinct sequences.",
+        "Candidates must yield distinct sequences, not merely different rationale.",
+        "Use the parent sequence given here; do not replace it. Copy the chain ID exactly.",
         "",
         *_evidence(config, parent, state),
         "",
@@ -1110,6 +1278,251 @@ def _apply(
         child = child[:pos - 1] + amino + child[pos:]
         notes.append(f"{chain}{pos}{sequence[pos - 1]}{amino}")
     return child, " ".join(notes), ""
+
+
+def _cdr_slices(sequence: str, regions: list) -> list[str]:
+    return [sequence[int(start) - 1:int(end)] for start, end in regions]
+
+
+def _edit_distance(left: str, right: str) -> float:
+    """Normalised edit distance, as the harness ``_normalized_edit_distance``."""
+    if left == right:
+        return 0.0
+    normalizer = max(len(left), len(right))
+    if normalizer == 0:
+        return 0.0
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) / normalizer
+    previous = list(range(len(right) + 1))
+    for left_index, left_residue in enumerate(left, start=1):
+        current = [left_index]
+        for right_index, right_residue in enumerate(right, start=1):
+            current.append(min(
+                current[-1] + 1,
+                previous[right_index] + 1,
+                previous[right_index - 1] + (left_residue != right_residue),
+            ))
+        previous = current
+    return previous[-1] / normalizer
+
+
+def _cdr_distance(left: list[str], right: list[str]) -> float:
+    """Weighted CDR distance. Three CDRs on one chain weigh 0.25, 0.25, 0.50 as the harness does."""
+    pairs = list(zip_longest(left, right, fillvalue=""))
+    if not pairs:
+        return 0.0
+    weights = [0.25, 0.25, 0.50] if len(pairs) == 3 else [1.0 / len(pairs)] * len(pairs)
+    return sum(weight * _edit_distance(a, b) for weight, (a, b) in zip(weights, pairs))
+
+
+def _mutation_tokens(reference: list[str], regions: list[str]) -> tuple[set[str], set[str]]:
+    """Positions and substitutions that differ from the starting CDRs, as the harness tokens them."""
+    positions: set[str] = set()
+    mutations: set[str] = set()
+    for index, (left, right) in enumerate(zip_longest(reference, regions, fillvalue="")):
+        prefix = f"CDR{index + 1}"
+        matcher = difflib.SequenceMatcher(a=left, b=right, autojunk=False)
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+            paired = min(i2 - i1, j2 - j1)
+            for offset in range(paired):
+                position = f"{prefix}:{i1 + offset + 1}"
+                positions.add(position)
+                mutations.add(f"{position}:{left[i1 + offset]}>{right[j1 + offset]}")
+            for left_index in range(i1 + paired, i2):
+                position = f"{prefix}:{left_index + 1}"
+                positions.add(position)
+                mutations.add(f"{position}:{left[left_index]}>-")
+            for insertion, right_index in enumerate(range(j1 + paired, j2), start=1):
+                position = f"{prefix}:ins{i2 + 1}.{insertion}"
+                positions.add(position)
+                mutations.add(f"{position}:->{right[right_index]}")
+    return positions, mutations
+
+
+def _retain(
+    members: list[_Member], config: dict[str, Any], reference: list[str],
+) -> tuple[set[int], dict[int, str]]:
+    """Which members the population keeps: best first, then the harness constraints.
+
+    The order is the harness ``ConstrainedElitePopulation.update``: duplicates and
+    capacity first, then the minimum CDR distance to every kept member, then the
+    per-position and per-mutation reuse caps counted against the starting CDRs.
+    """
+    cap = max(1, int(config.get("population_size") or POPULATION_SIZE))
+    min_distance = float(config.get("constrained_min_cdr_distance", MIN_CDR_DISTANCE))
+    position_cap = max(1, math.ceil(cap * float(
+        config.get("constrained_max_position_reuse_fraction", POSITION_REUSE_FRACTION))))
+    mutation_cap = max(1, math.ceil(cap * float(
+        config.get("constrained_max_mutation_reuse_fraction", MUTATION_REUSE_FRACTION))))
+    kept: set[int] = set()
+    actions: dict[int, str] = {}
+    kept_regions: list[list[str]] = []
+    positions_used: dict[str, int] = {}
+    mutations_used: dict[str, int] = {}
+    seen: set[str] = set()
+    for member in sorted(members, key=lambda item: item.score, reverse=True):
+        if member.sequence in seen:
+            actions[member.index] = "duplicate_not_retained"
+            continue
+        seen.add(member.sequence)
+        if len(kept_regions) >= cap:
+            actions[member.index] = "capacity_not_retained"
+            continue
+        regions = _cdr_slices(member.sequence, config["cdr_regions"])
+        nearest = min((_cdr_distance(regions, other) for other in kept_regions), default=math.inf)
+        if nearest < min_distance:
+            actions[member.index] = "cdr_distance_not_retained"
+            continue
+        positions, mutations = _mutation_tokens(reference, regions)
+        if any(positions_used.get(token, 0) >= position_cap for token in positions):
+            actions[member.index] = "position_reuse_not_retained"
+            continue
+        if any(mutations_used.get(token, 0) >= mutation_cap for token in mutations):
+            actions[member.index] = "mutation_reuse_not_retained"
+            continue
+        kept.add(member.index)
+        kept_regions.append(regions)
+        actions[member.index] = "retained_constrained_elite"
+        for token in positions:
+            positions_used[token] = positions_used.get(token, 0) + 1
+        for token in mutations:
+            mutations_used[token] = mutations_used.get(token, 0) + 1
+    return kept, actions
+
+
+def _prefer_working(candidate: _Member, incumbent: _Member | None) -> _Member:
+    """The harness ``WorkingParentTracker``: higher CDR contact fraction first, then score."""
+    if incumbent is None:
+        return candidate
+
+    def contact(member: _Member) -> float:
+        value = (member.metrics or {}).get("cdr_contact_fraction")
+        return float(value) if isinstance(value, (int, float)) else 0.0
+
+    def score(member: _Member) -> float:
+        return float(member.score) if isinstance(member.score, (int, float)) else -math.inf
+
+    if contact(candidate) != contact(incumbent):
+        return candidate if contact(candidate) > contact(incumbent) else incumbent
+    return candidate if score(candidate) > score(incumbent) else incumbent
+
+
+#: The harness ``QUALITY_CHECK_SYSTEM_PROMPT``, verbatim. The completion call has no system
+#: role yet, so it leads the quality prompt as its first block.
+QUALITY_SYSTEM_PROMPT = """You are the Antibody Quality Agent.
+
+Assess only the candidates and current-run evidence supplied by the workflow.
+Treat objective measurements as authoritative, preserve candidate IDs exactly,
+and never invent measurements, residue annotations, or experimental facts.
+Missing evidence is uncertainty. Return the configured structured output with
+one result for every supplied candidate and no additional candidates. Keep all
+reasoning concise and use normal English spacing."""
+
+#: The harness ``QUALITY_CHECK_BATCH_PROMPT`` layout, with the structured output
+#: replaced by a JSON shape this engine parses itself.
+QUALITY_PROMPT = "\n".join([
+    "Assess the supplied antibody candidates.",
+    "",
+    "Return JSON only, shaped as {\"results\": {\"<candidate id>\": {\"pass_check\": true, \"reasoning\": \"<short>\"}}}.",
+    "Include every supplied candidate ID exactly once. Do not alter or recompute the objective evidence.",
+    "",
+    "<antibody_identification>",
+    "{analysis}",
+    "</antibody_identification>",
+    "",
+    "<objective_developability_evidence>",
+    "```json",
+    "{objective}",
+    "```",
+    "</objective_developability_evidence>",
+    "",
+    "<candidates>",
+    "{candidates}",
+    "</candidates>",
+])
+
+
+def _context_json(value: Any) -> str:
+    """The harness ``context_json``: compact, sorted keys, non-ASCII kept."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _developability_objective(keys: list[str]) -> dict[str, Any]:
+    """The objective developability result the harness gets for antibody candidates.
+
+    The open-source harness backend (``servers/backends/developability_filter.py``) is a
+    stub that returns ``{"available": False}`` per candidate, and the harness wraps it as
+    ``{"summary": ..., "results": ...}``. The colleague's CRLF2 run logged
+    ``available:false``, so the quality agent judges from sequence alone. A real
+    developability backend would add evidence the harness never had.
+    """
+    results = {key: {"available": False} for key in keys}
+    return {"summary": results, "results": results}
+
+
+def _quality_verdicts(
+    complete: CompleteFn | None,
+    analysis: str,
+    readings: list[dict[str, Any]],
+    *,
+    exempt: bool,
+) -> tuple[list[bool | None], str]:
+    """One batch quality check over the folds that passed the gate with ipTM at the threshold.
+
+    Returns a verdict per reading: ``None`` when the check does not apply, otherwise
+    whether the model let the candidate into the population. A candidate is admitted
+    only when its ``pass_check`` is true. If the check itself fails (model error or
+    no results object), nothing from that batch is admitted. The harness instead
+    retries the cycle, which would fold the batch again; that difference is kept
+    and documented.
+    """
+    verdicts: list[bool | None] = [None] * len(readings)
+    if complete is None or exempt:
+        return verdicts, ""
+    eligible: dict[str, int] = {}
+    summaries: list[dict[str, Any]] = []
+    for index, reading in enumerate(readings):
+        metrics = reading.get("metrics") or {}
+        iptm = metrics.get("iptm")
+        if not reading.get("ok") or reading.get("error"):
+            continue
+        if not isinstance(iptm, (int, float)) or float(iptm) < QUALITY_THRESHOLD:
+            continue
+        key = f"c{index}"
+        eligible[key] = index
+        summaries.append({
+            "candidate_id": key,
+            "sequence": reading.get("sequence"),
+            "score": reading.get("score"),
+            "metrics": {name: metrics.get(name) for name in REPORTED_METRICS if name in metrics},
+        })
+    if not eligible:
+        return verdicts, ""
+    objective = _developability_objective(list(eligible))
+    prompt = "\n\n".join([
+        QUALITY_SYSTEM_PROMPT,
+        QUALITY_PROMPT.replace("{analysis}", analysis)
+        .replace("{objective}", _context_json(objective))
+        .replace("{candidates}", _context_json(summaries)),
+    ])
+    try:
+        text = complete(prompt)
+        start, end = text.find("{"), text.rfind("}")
+        parsed = json.loads(text[start:end + 1] if start >= 0 and end > start else text)
+        results = parsed.get("results") if isinstance(parsed, dict) else None
+        if not isinstance(results, dict):
+            raise ValueError("the quality check returned no results object")
+    except Exception as error:  # the model call or its JSON failed; nothing from this batch is admitted
+        for index in eligible.values():
+            verdicts[index] = False
+        return verdicts, str(error)
+    for key, index in eligible.items():
+        item = results.get(key)
+        passed = isinstance(item, dict) and item.get("pass_check") is True
+        verdicts[index] = passed
+    return verdicts, ""
 
 
 def _select(

@@ -33,13 +33,18 @@ from __future__ import annotations
 
 import base64
 import gzip
+import hashlib
 import json
 import math
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 AMINO_ACIDS = set("ACDEFGHIKLMNPQRSTVWY")
@@ -852,7 +857,7 @@ def _model_call(op: str, payload: dict) -> dict:
             input=json.dumps({"op": op, "device": _device(), **payload}),
             capture_output=True,
             text=True,
-            env=os.environ.copy(),
+            env=_child_env(),
         )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "model worker failed").strip()
@@ -916,21 +921,403 @@ def configured(name: str, default: str) -> str:
     return default if os.path.exists(default) else ""
 
 
-def predict(candidate: dict) -> dict:
-    code = configured("OPENDDE_CODE_DIR", "/data1/gs_agent/opendde/OpenDDE")
-    checkpoint = configured(
-        "OPENDDE_CHECKPOINT",
-        "/data1/gs_agent/opendde/weights/checkpoint/opendde_abag.pt",
+# Environment probe. It runs once per search, before any candidate, and reports
+# each component by name. A missing component is installed when there is a safe
+# source for it; otherwise the report says why. Installs go under DEPS_DIR, a
+# sibling of the colleague's OpenDDE tree, never inside it.
+DEPS_DIR = os.environ.get("SD_DEPS_DIR", "/data1/gs_agent/sciencediscovery-deps")
+PROBE_CHECKS = (
+    "npu", "rdkit", "biotite", "fold_code", "fold_checkpoint", "esm_module",
+    "esm_weights", "harness_modules", "soluble_weights", "ligand_code",
+)
+# pip packages, pinned to the versions in the colleague's working venv.
+PIP_REQUIREMENTS = {
+    "esm_module": "fair-esm==2.0.0",
+    "rdkit": "rdkit==2025.9.3",
+    "biotite": "biotite==1.4.0",
+}
+# Weights, pinned to the revisions the colleague's run used.
+# The repo moved to biohub/ on the mirror; the pinned revision serves byte-identical files.
+ESM_REPO = "biohub/esm2_t33_650M_UR50D"
+ESM_REVISION = "08e4846e537177426273712802403f7ba8261b6c"
+ESM_FILES = {
+    "config.json": 0,
+    "model.safetensors": 2609506392,
+    "special_tokens_map.json": 0,
+    "tokenizer_config.json": 0,
+    "vocab.txt": 0,
+}
+CHECKPOINT_URL = (
+    "https://hf-mirror.com/aurekaresearch/OpenDDE/resolve/"
+    "eddd563ce96571f784012edd8f045181c8f8627d/opendde_abag.pt"
+)
+CHECKPOINT_SHA256 = "5cf37441ddef2a2f148b81dd4a218ad274f996fecaf17dec901ab6cf1351713d"
+CHECKPOINT_SIZE = 2625271509
+SOLUBLE_URL = "https://files.ipd.uw.edu/pub/ligandmpnn/solublempnn_v_48_020.pt"
+# Code is reproduced, not cloned as-is: the colleague's three trees carry local changes, so a
+# clone is pinned to the upstream commit and the colleague's `git diff --binary HEAD` is applied.
+# `tree` is the first 20 hex digits of sha256 over the diff of the reproduced tree; it must
+# equal the colleague's, or the install fails. The patches are also kept in the repo under
+# skills/evolve-design/patches/ for review.
+CODE_SOURCES = {
+    "fold_code": {
+        "name": "OpenDDE",
+        "url": "https://github.com/aurekaresearch/OpenDDE.git",
+        "commit": "9d0d9c975178074c1ce722d2d6eefac8b7057062",
+        "tree": "b9cbbd909abd02550fb1",
+        "dir": "code/OpenDDE",
+    },
+    "harness_modules": {
+        "name": "OpenDDE-Harness",
+        "url": "https://github.com/aurekaresearch/OpenDDE-Harness.git",
+        "commit": "fdab4f0ade76db41a300f1bab4c931540dc7a557",
+        "tree": "cb3d02982a7f01f67ea5",
+        "dir": "code/OpenDDE-Harness",
+    },
+    "ligand_code": {
+        "name": "LigandMPNN",
+        "url": "https://github.com/dauparas/LigandMPNN.git",
+        "commit": "26ec57ac976ade5379920dbd43c7f97a91cf82de",
+        "tree": "b8c71102c3fdd3cfb8a5",
+        "dir": "code/LigandMPNN",
+    },
+}
+CODE_PATCHES = {
+    "OpenDDE": (
+        "ZGlmZiAtLWdpdCBhL29wZW5kZGUvY29uZmlnL3NjaGVtYS5weSBiL29wZW5kZGUvY29uZmlnL3NjaGVtYS5weQppbmRleCBmZmJlNTE2Li42NjcyZjU2IDEwMDY0NAotLS0gYS9vcGVuZGRlL2NvbmZpZy9zY2hlbWEucHkKKysrIGIvb3BlbmRkZS9jb25maWcvc2NoZW1hLnB5CkBAIC0xOCwxMiArMTgsMTMgQEAgZnJvbSBweWRhbnRpYyBpbXBvcnQgQmFzZU1vZGVsLCBDb25maWdEaWN0CiAKIEluZmVyZW5jZUR0eXBlID0gTGl0ZXJhbFsiYmYxNiIsICJmcDMyIl0KIElORkVSRU5DRV9EVFlQRV9DSE9JQ0VTOiB0dXBsZVtJbmZlcmVuY2VEdHlwZSwgLi4uXSA9ICgiYmYxNiIsICJmcDMyIikKLUluZmVyZW5jZURldmljZSA9IExpdGVyYWxbImF1dG8iLCAiY3B1IiwgImN1ZGEiLCAibXBzIl0KK0luZmVyZW5jZURldmljZSA9IExpdGVyYWxbImF1dG8iLCAiY3B1IiwgImN1ZGEiLCAibXBzIiwgIm5wdSJdCiBJTkZFUkVOQ0VfREVWSUNFX0NIT0lDRVM6IHR1cGxlW0luZmVyZW5jZURldmljZSwgLi4uXSA9ICgKICAgICAiYXV0byIsCiAgICAgImNwdSIsCiAgICAgImN1ZGEiLAogICAgICJtcHMiLAorICAgICJucHUiLAogKQogVHJpYW5nbGVLZXJuZWwgPSBMaXRlcmFsWyJhdXRvIiwgImN1ZXF1aXZhcmlhbmNlIiwgInRvcmNoIl0KIApkaWZmIC0tZ2l0IGEvb3BlbmRkZS9tb2RlbC9zYW1wbGVfY29uZmlkZW5jZS5weSBiL29wZW5kZGUvbW9kZWwvc2FtcGxlX2NvbmZpZGVuY2UucHkKaW5kZXggZGZmYzI0Ni4uOTM1N2UxNCAxMDA2NDQKLS0tIGEvb3BlbmRkZS9tb2RlbC9zYW1wbGVfY29uZmlkZW5jZS5weQorKysgYi9vcGVuZGRlL21vZGVsL3NhbXBsZV9jb25maWRlbmNlLnB5CkBAIC03MzMsNyArNzMzLDEyIEBAIGRlZiBjYWxjdWxhdGVfY2hhaW5fYmFzZWRfcGxkZHQoCiAgICAgICAgIGF0b21fbWFzayA9IHRva2VuX21hc2tbYXRvbV90b190b2tlbl9pZHhdCiAgICAgICAgIHN1Yl9wbGRkdCA9IGF0b21fcGxkZHRbOiwgYXRvbV9tYXNrXQogICAgICAgICAjIE1QUyBoYXMgbm8gZmxvYXQ2NDsgZmFsbCBiYWNrIHRvIGZsb2F0MzIgYWNjdW11bGF0aW9uIHRoZXJlLgotICAgICAgICBhY2N1bV9kdHlwZSA9IHRvcmNoLmZsb2F0MzIgaWYgc3ViX3BsZGR0LmRldmljZS50eXBlID09ICJtcHMiIGVsc2UgdG9yY2guZmxvYXQ2NAorICAgICAgICAjIEFzY2VuZCBOUFUgbGlrZXdpc2UgaGFzIG5vIG5hdGl2ZSBmbG9hdDY0IHN1cHBvcnQuCisgICAgICAgIGFjY3VtX2R0eXBlID0gKAorICAgICAgICAgICAgdG9yY2guZmxvYXQzMgorICAgICAgICAgICAgaWYgc3ViX3BsZGR0LmRldmljZS50eXBlIGluICgibXBzIiwgIm5wdSIpCisgICAgICAgICAgICBlbHNlIHRvcmNoLmZsb2F0NjQKKyAgICAgICAgKQogICAgICAgICByZXR1cm4gc3ViX3BsZGR0LnRvKGFjY3VtX2R0eXBlKS5tZWFuKC0xKS50byhhdG9tX3BsZGR0LmR0eXBlKQogCiAgICAgYmF0Y2hfc2hhcGUgPSBhdG9tX3BsZGR0LnNoYXBlWzotMV0KZGlmZiAtLWdpdCBhL29wZW5kZGUvdXRpbHMvZW52aXJvbm1lbnQucHkgYi9vcGVuZGRlL3V0aWxzL2Vudmlyb25tZW50LnB5CmluZGV4IDg3Njc5MzEuLmY2YzdmOTggMTAwNjQ0Ci0tLSBhL29wZW5kZGUvdXRpbHMvZW52aXJvbm1lbnQucHkKKysrIGIvb3BlbmRkZS91dGlscy9lbnZpcm9ubWVudC5weQpAQCAtMjI0LDExICsyMjQsMTYgQEAgZGVmIHNlbGVjdF90b3JjaF9kZXZpY2UoCiAKICAgICBjdWRhX2F2YWlsYWJsZSA9IHRvcmNoLmN1ZGEuaXNfYXZhaWxhYmxlKCkKICAgICBfLCBtcHNfYXZhaWxhYmxlID0gX3Byb2JlX21wcyh0b3JjaCkKKyAgICBucHVfYXZhaWxhYmxlID0gKAorICAgICAgICBib29sKHRvcmNoLm5wdS5pc19hdmFpbGFibGUoKSkgaWYgaGFzYXR0cih0b3JjaCwgIm5wdSIpIGVsc2UgRmFsc2UKKyAgICApCiAgICAgaWYgcmVxdWVzdGVkX2RldmljZSA9PSAiYXV0byI6CiAgICAgICAgIGlmIGN1ZGFfYXZhaWxhYmxlOgogICAgICAgICAgICAgcmVxdWVzdGVkX2RldmljZSA9ICJjdWRhIgogICAgICAgICBlbGlmIG1wc19hdmFpbGFibGU6CiAgICAgICAgICAgICByZXF1ZXN0ZWRfZGV2aWNlID0gIm1wcyIKKyAgICAgICAgZWxpZiBucHVfYXZhaWxhYmxlOgorICAgICAgICAgICAgcmVxdWVzdGVkX2RldmljZSA9ICJucHUiCiAgICAgICAgIGVsc2U6CiAgICAgICAgICAgICByZXF1ZXN0ZWRfZGV2aWNlID0gImNwdSIKIApAQCAtMjU2LDYgKzI2MSwyMSBAQCBkZWYgc2VsZWN0X3RvcmNoX2RldmljZSgKICAgICAgICAgICAgICkKICAgICAgICAgcmV0dXJuIHRvcmNoLmRldmljZShmImN1ZGE6e2xvY2FsX3Jhbmt9IikKIAorICAgIGlmIHJlcXVlc3RlZF9kZXZpY2UgPT0gIm5wdSI6CisgICAgICAgIGlmIG5vdCBucHVfYXZhaWxhYmxlOgorICAgICAgICAgICAgcmFpc2UgUnVudGltZUVycm9yKAorICAgICAgICAgICAgICAgICJOUFUgd2FzIHJlcXVlc3RlZCwgYnV0IHRvcmNoLm5wdS5pc19hdmFpbGFibGUoKSBpcyBmYWxzZS4gIgorICAgICAgICAgICAgICAgICJJbnN0YWxsIHRvcmNoX25wdSwgc291cmNlIHRoZSBDQU5OIHNldF9lbnYuc2ggc2NyaXB0LCBvciB1c2UgIgorICAgICAgICAgICAgICAgICInLS1kZXZpY2UgY3B1Jy4iCisgICAgICAgICAgICApCisgICAgICAgIGRldmljZV9jb3VudCA9IHRvcmNoLm5wdS5kZXZpY2VfY291bnQoKQorICAgICAgICBpZiBsb2NhbF9yYW5rIDwgMCBvciBsb2NhbF9yYW5rID49IGRldmljZV9jb3VudDoKKyAgICAgICAgICAgIHJhaXNlIFJ1bnRpbWVFcnJvcigKKyAgICAgICAgICAgICAgICBmIk5QVSBkZXZpY2UgaW5kZXgge2xvY2FsX3Jhbmt9IGlzIHVuYXZhaWxhYmxlOyBkZXRlY3RlZCAiCisgICAgICAgICAgICAgICAgZiJ7ZGV2aWNlX2NvdW50fSBOUFUgZGV2aWNlKHMpLiIKKyAgICAgICAgICAgICkKKyAgICAgICAgcmV0dXJuIHRvcmNoLmRldmljZShmIm5wdTp7bG9jYWxfcmFua30iKQorCiAgICAgcmV0dXJuIHRvcmNoLmRldmljZSgiY3B1IikKIAogCmRpZmYgLS1naXQgYS9vcGVuZGRlL3V0aWxzL3RvcmNoX3V0aWxzLnB5IGIvb3BlbmRkZS91dGlscy90b3JjaF91dGlscy5weQppbmRleCBkOTE4YzZmLi42Y2ZhNzE3IDEwMDY0NAotLS0gYS9vcGVuZGRlL3V0aWxzL3RvcmNoX3V0aWxzLnB5CisrKyBiL29wZW5kZGUvdXRpbHMvdG9yY2hfdXRpbHMucHkKQEAgLTE3LDE4ICsxNywzMiBAQCBkZWYgX21wc19hdXRvY2FzdF9hdmFpbGFibGUoKSAtPiBib29sOgogICAgICAgICByZXR1cm4gRmFsc2UKIAogCitkZWYgX25wdV9hdXRvY2FzdF9hdmFpbGFibGUoKSAtPiBib29sOgorICAgICIiIldoZXRoZXIgYW4gTlBVIChBc2NlbmQgdG9yY2hfbnB1KSBhdXRvY2FzdCBzdGF0ZSBleGlzdHMgdG8gY2xlYXIuIiIiCisgICAgdHJ5OgorICAgICAgICByZXR1cm4gYm9vbChoYXNhdHRyKHRvcmNoLCAibnB1IikgYW5kIHRvcmNoLm5wdS5pc19hdmFpbGFibGUoKSkKKyAgICBleGNlcHQgRXhjZXB0aW9uOgorICAgICAgICByZXR1cm4gRmFsc2UKKworCiBAY29udGV4dG1hbmFnZXIKIGRlZiBkaXNhYmxlZF9hdXRvY2FzdCgpOgogICAgICIiIkZvcmNlIEZQMzIgaW5zaWRlIHRoZSBibG9jayBvbiBldmVyeSBhY2NlbGVyYXRvciB0aGF0IGNhbiBhdXRvY2FzdC4KIAogICAgIFJlZ2lvbnMgdGhhdCBtdXN0IHN0YXkgRlAzMiBoaXN0b3JpY2FsbHkgZ3VhcmRlZCBvbmx5IENVREEgYXV0b2Nhc3QuIFRoZQogICAgIEFwcGxlIE1QUyBiYWNrZW5kIGtlZXBzIGEgc2VwYXJhdGUgYXV0b2Nhc3Qgc3RhdGUsIHNvIGEgQ1VEQS1vbmx5IGd1YXJkCi0gICAgc2lsZW50bHkgbGV0cyBCRjE2IHRocm91Z2ggdGhlcmUuCisgICAgc2lsZW50bHkgbGV0cyBCRjE2IHRocm91Z2ggdGhlcmUuICBBc2NlbmQgTlBVICh0b3JjaF9ucHUpIGxpa2V3aXNlIGtlZXBzIGEKKyAgICBzZXBhcmF0ZSBhdXRvY2FzdCBzdGF0ZS4KICAgICAiIiIKICAgICB3aXRoIEV4aXRTdGFjaygpIGFzIHN0YWNrOgogICAgICAgICBzdGFjay5lbnRlcl9jb250ZXh0KHRvcmNoLmFtcC5hdXRvY2FzdCgiY3VkYSIsIGVuYWJsZWQ9RmFsc2UpKQogICAgICAgICBpZiBfbXBzX2F1dG9jYXN0X2F2YWlsYWJsZSgpOgogICAgICAgICAgICAgc3RhY2suZW50ZXJfY29udGV4dCh0b3JjaC5hbXAuYXV0b2Nhc3QoIm1wcyIsIGVuYWJsZWQ9RmFsc2UpKQorICAgICAgICBpZiBfbnB1X2F1dG9jYXN0X2F2YWlsYWJsZSgpOgorICAgICAgICAgICAgdHJ5OgorICAgICAgICAgICAgICAgIHN0YWNrLmVudGVyX2NvbnRleHQodG9yY2guYW1wLmF1dG9jYXN0KCJucHUiLCBlbmFibGVkPUZhbHNlKSkKKyAgICAgICAgICAgIGV4Y2VwdCBFeGNlcHRpb246CisgICAgICAgICAgICAgICAgcGFzcwogICAgICAgICB5aWVsZAogCiAKZGlmZiAtLWdpdCBhL3J1bm5lci9pbmZlcmVuY2UucHkgYi9ydW5uZXIvaW5mZXJlbmNlLnB5CmluZGV4IDhhMTYyOTEuLjc1MGRhMmQgMTAwNjQ0Ci0tLSBhL3J1bm5lci9pbmZlcmVuY2UucHkKKysrIGIvcnVubmVyL2luZmVyZW5jZS5weQpAQCAtMTYsNiArMTYsMTUgQEAgZnJvbSBvcy5wYXRoIGltcG9ydCBleGlzdHMgYXMgb3BleGlzdHMKIGZyb20gb3MucGF0aCBpbXBvcnQgam9pbiBhcyBvcGpvaW4KIGZyb20gdHlwaW5nIGltcG9ydCBBbnksIGNhc3QKIAorIyBJbXBvcnQgUkRLaXQgYmVmb3JlIHRvcmNoLiBPbiBBc2NlbmQgTlBVIGhvc3RzIGBpbXBvcnQgdG9yY2hgIGF1dG8tbG9hZHMKKyMgdG9yY2hfbnB1IChDQU5OIGVudiksIGFuZCByZGtpdCdzIGJ1bmRsZWQgbGliUkRLaXQqLnNvIGNyYXNoIHdpdGggU0lHU0VHViBpbgorIyB0aGVpciBzdGF0aWMgaW5pdGlhbGl6ZXJzIHdoZW4gZGxvcGVuZWQgYWZ0ZXIgdG9yY2hfbnB1IChvYnNlcnZlZCBvbiA5MTBDLAorIyBkZXRlcm1pbmlzdGljKS4gUHJlbG9hZGluZyByZGtpdCBmaXJzdCBpcyBhIG5vLW9wIG9uIG90aGVyIHBsYXRmb3Jtcy4KK3RyeTogICMgc29mdCBmYWlsdXJlOiByZGtpdCBsb2FkcyBhZ2FpbiBsYXRlciB2aWEgb3BlbmRkZS5kYXRhLmNvcmUuY2NkIGFueXdheQorICAgIGZyb20gcmRraXQuQ2hlbSBpbXBvcnQgQWxsQ2hlbSBhcyBfYWxsY2hlbV9wcmVsb2FkICAjIG5vcWE6IEY0MDEKK2V4Y2VwdCBFeGNlcHRpb246CisgICAgcGFzcworCiBpbXBvcnQgdG9yY2gKIGltcG9ydCB0b3JjaC5kaXN0cmlidXRlZCBhcyBkaXN0CiAKQEAgLTEzODgsNyArMTM5NywxMCBAQCBjbGFzcyBJbmZlcmVuY2VSdW5uZXIob2JqZWN0KToKICAgICAgICAgICAgICJiZjE2IjogdG9yY2guYmZsb2F0MTYsCiAgICAgICAgIH1bc2VsZi5jb25maWdzLmR0eXBlXQogCi0gICAgICAgIGlmIGV2YWxfcHJlY2lzaW9uID09IHRvcmNoLmZsb2F0MzIgb3Igc2VsZi5kZXZpY2UudHlwZSBub3QgaW4geyJjdWRhIiwgIm1wcyJ9OgorICAgICAgICBpZiAoCisgICAgICAgICAgICBldmFsX3ByZWNpc2lvbiA9PSB0b3JjaC5mbG9hdDMyCisgICAgICAgICAgICBvciBzZWxmLmRldmljZS50eXBlIG5vdCBpbiB7ImN1ZGEiLCAibXBzIiwgIm5wdSJ9CisgICAgICAgICk6CiAgICAgICAgICAgICBlbmFibGVfYW1wID0gbnVsbGNvbnRleHQoKQogICAgICAgICBlbHNlOgogICAgICAgICAgICAgZW5hYmxlX2FtcCA9IHRvcmNoLmF1dG9jYXN0KAo="
+    ),
+    "OpenDDE-Harness": (
+        "ZGlmZiAtLWdpdCBhL29wZW5kZGVfaGFybmVzcy9jbGkvY29tcHV0ZV9lbnZpcm9ubWVudC5weSBiL29wZW5kZGVfaGFybmVzcy9jbGkvY29tcHV0ZV9lbnZpcm9ubWVudC5weQppbmRleCA0ZGRkZTY2Li5hYzhkY2ZhIDEwMDY0NAotLS0gYS9vcGVuZGRlX2hhcm5lc3MvY2xpL2NvbXB1dGVfZW52aXJvbm1lbnQucHkKKysrIGIvb3BlbmRkZV9oYXJuZXNzL2NsaS9jb21wdXRlX2Vudmlyb25tZW50LnB5CkBAIC0zMywyNiArMzMsNDcgQEAgZGVmIGNvbXB1dGVfaW1hZ2UoKSAtPiBzdHI6CiAKIAogZGVmIGNoZWNrX2xvY2FsX3BsYXRmb3JtKCkgLT4gTm9uZToKLSAgICBpZiBwbGF0Zm9ybS5zeXN0ZW0oKSAhPSAiTGludXgiIG9yIHBsYXRmb3JtLm1hY2hpbmUoKS5sb3dlcigpICE9ICJ4ODZfNjQiOgotICAgICAgICByYWlzZSBWYWx1ZUVycm9yKCJMb2NhbCBjb21wdXRlIGlzIHN1cHBvcnRlZCBvbiBMaW51eCB4ODYtNjQgb25seS4gVXNlIGEgY29uZmlndXJlZCBMaW51eCBjb21wdXRlIHNlcnZpY2UuIikKKyAgICBpZiBwbGF0Zm9ybS5zeXN0ZW0oKSAhPSAiTGludXgiIG9yIHBsYXRmb3JtLm1hY2hpbmUoKS5sb3dlcigpIG5vdCBpbiAoIng4Nl82NCIsICJhYXJjaDY0Iik6CisgICAgICAgIHJhaXNlIFZhbHVlRXJyb3IoIkxvY2FsIGNvbXB1dGUgaXMgc3VwcG9ydGVkIG9uIExpbnV4IHg4Ni02NC9hYXJjaDY0IG9ubHkuIFVzZSBhIGNvbmZpZ3VyZWQgTGludXggY29tcHV0ZSBzZXJ2aWNlLiIpCiAKIAogZGVmIHJlc29sdmVfZGV2aWNlKHJlcXVlc3RlZDogc3RyIHwgTm9uZSA9IE5vbmUpIC0+IHN0cjoKICAgICBkZXZpY2UgPSBzdHIocmVxdWVzdGVkIG9yIG9zLmVudmlyb24uZ2V0KCJPUEVORERFX0hBUk5FU1NfQ09NUFVURV9ERVZJQ0UiLCAiYXV0byIpKS5zdHJpcCgpLmxvd2VyKCkKICAgICBpZiBkZXZpY2UgPT0gImNwdSI6CiAgICAgICAgIHJldHVybiBkZXZpY2UKLSAgICBpZiBkZXZpY2UgIT0gImF1dG8iIGFuZCBub3QgcmUuZnVsbG1hdGNoKHIiY3VkYSg/OjpcZCspPyIsIGRldmljZSk6Ci0gICAgICAgIHJhaXNlIFZhbHVlRXJyb3IoIkNvbXB1dGUgZGV2aWNlIG11c3QgYmUgYXV0bywgY3B1LCBjdWRhLCBvciBjdWRhOk47IHRoaXMgcnVudGltZSBzdXBwb3J0cyBMaW51eCBDUFUvQ1VEQS4iKQorICAgIGlmIGRldmljZSAhPSAiYXV0byIgYW5kIG5vdCByZS5mdWxsbWF0Y2gociIoPzpjdWRhfG5wdSkoPzo6XGQrKT8iLCBkZXZpY2UpOgorICAgICAgICByYWlzZSBWYWx1ZUVycm9yKCJDb21wdXRlIGRldmljZSBtdXN0IGJlIGF1dG8sIGNwdSwgY3VkYSwgY3VkYTpOLCBucHUsIG9yIG5wdTpOOyBBc2NlbmQgTlBVIGlzIHN1cHBvcnRlZC4iKQogICAgIGltcG9ydCB0b3JjaAogCisgICAgZGVmIF9ucHVfY291bnQoKSAtPiBpbnQ6CisgICAgICAgIHRyeToKKyAgICAgICAgICAgIGlmIGhhc2F0dHIodG9yY2gsICJucHUiKSBhbmQgdG9yY2gubnB1LmlzX2F2YWlsYWJsZSgpOgorICAgICAgICAgICAgICAgIHJldHVybiBpbnQodG9yY2gubnB1LmRldmljZV9jb3VudCgpKQorICAgICAgICBleGNlcHQgRXhjZXB0aW9uOgorICAgICAgICAgICAgcGFzcworICAgICAgICByZXR1cm4gMAorCiAgICAgaWYgZGV2aWNlID09ICJhdXRvIjoKLSAgICAgICAgcmV0dXJuICJjdWRhIiBpZiB0b3JjaC5jdWRhLmlzX2F2YWlsYWJsZSgpIGVsc2UgImNwdSIKLSAgICBpZiBub3QgdG9yY2guY3VkYS5pc19hdmFpbGFibGUoKToKKyAgICAgICAgaWYgdG9yY2guY3VkYS5pc19hdmFpbGFibGUoKToKKyAgICAgICAgICAgIHJldHVybiAiY3VkYSIKKyAgICAgICAgaWYgX25wdV9jb3VudCgpID4gMDoKKyAgICAgICAgICAgIHJldHVybiAibnB1IgorICAgICAgICByZXR1cm4gImNwdSIKKyAgICBpZiBkZXZpY2Uuc3RhcnRzd2l0aCgiY3VkYSIpOgorICAgICAgICBpZiBub3QgdG9yY2guY3VkYS5pc19hdmFpbGFibGUoKToKKyAgICAgICAgICAgIHJhaXNlIFZhbHVlRXJyb3IoCisgICAgICAgICAgICAgICAgIkNVREEgd2FzIHJlcXVlc3RlZCBidXQgaXMgdW5hdmFpbGFibGUgaW4gdGhlIGNvbXB1dGUgZW52aXJvbm1lbnQuIFNlbGVjdCBDUFUgb3IgZml4IEdQVSBhY2Nlc3MuIgorICAgICAgICAgICAgKQorICAgICAgICBpZiAiOiIgaW4gZGV2aWNlIGFuZCBpbnQoZGV2aWNlLnNwbGl0KCI6IiwgMSlbMV0pID49IHRvcmNoLmN1ZGEuZGV2aWNlX2NvdW50KCk6CisgICAgICAgICAgICByYWlzZSBWYWx1ZUVycm9yKGYiQ1VEQSBkZXZpY2UgaXMgdW5hdmFpbGFibGU6IHtkZXZpY2V9IikKKyAgICAgICAgcmV0dXJuIGRldmljZQorICAgIG5wdV9jb3VudCA9IF9ucHVfY291bnQoKQorICAgIGlmIG5wdV9jb3VudCA9PSAwOgogICAgICAgICByYWlzZSBWYWx1ZUVycm9yKAotICAgICAgICAgICAgIkNVREEgd2FzIHJlcXVlc3RlZCBidXQgaXMgdW5hdmFpbGFibGUgaW4gdGhlIGNvbXB1dGUgZW52aXJvbm1lbnQuIFNlbGVjdCBDUFUgb3IgZml4IEdQVSBhY2Nlc3MuIgorICAgICAgICAgICAgIk5QVSB3YXMgcmVxdWVzdGVkIGJ1dCB0b3JjaC5ucHUgcmVwb3J0cyBubyBkZXZpY2VzLiBTb3VyY2UgdGhlIENBTk4gc2V0X2Vudi5zaCBzY3JpcHQgb3Igc2VsZWN0IENQVS4iCiAgICAgICAgICkKLSAgICBpZiAiOiIgaW4gZGV2aWNlIGFuZCBpbnQoZGV2aWNlLnNwbGl0KCI6IiwgMSlbMV0pID49IHRvcmNoLmN1ZGEuZGV2aWNlX2NvdW50KCk6Ci0gICAgICAgIHJhaXNlIFZhbHVlRXJyb3IoZiJDVURBIGRldmljZSBpcyB1bmF2YWlsYWJsZToge2RldmljZX0iKQorICAgIGlmICI6IiBpbiBkZXZpY2UgYW5kIGludChkZXZpY2Uuc3BsaXQoIjoiLCAxKVsxXSkgPj0gbnB1X2NvdW50OgorICAgICAgICByYWlzZSBWYWx1ZUVycm9yKGYiTlBVIGRldmljZSBpcyB1bmF2YWlsYWJsZToge2RldmljZX0iKQogICAgIHJldHVybiBkZXZpY2UKIAogCmRpZmYgLS1naXQgYS9vcGVuZGRlX2hhcm5lc3MvY29uZmlnL3VwZGF0ZV9wcm92aWRlcnMucHkgYi9vcGVuZGRlX2hhcm5lc3MvY29uZmlnL3VwZGF0ZV9wcm92aWRlcnMucHkKaW5kZXggMWNjZmM0Mi4uN2VjYjAzYyAxMDA2NDQKLS0tIGEvb3BlbmRkZV9oYXJuZXNzL2NvbmZpZy91cGRhdGVfcHJvdmlkZXJzLnB5CisrKyBiL29wZW5kZGVfaGFybmVzcy9jb25maWcvdXBkYXRlX3Byb3ZpZGVycy5weQpAQCAtNjkwLDYgKzY5MCwxNyBAQCBhc3luYyBkZWYgX2NoZWNrX3Rocm91Z2hfdGhlX3NlcnZpY2UocHJvdmlkZXI6IHN0ciwgY29uZmlnOiBBbnksIHN0YXJ0OiBmbG9hdCwgdAogCiAgICAgY29udGV4dCA9IHsibWVzc2FnZXMiOiBbeyJyb2xlIjogInVzZXIiLCAiY29udGVudCI6IF9URVNUX1BST01QVCwgInRpbWVzdGFtcCI6IDB9XX0KICAgICBvcHRpb25zID0geyJtYXhUb2tlbnMiOiBfVEVTVF9NQVhfVE9LRU5TfQorICAgICMgQSBtb2RlbCB0aGF0IGFsd2F5cyB0aGlua3MgKGdsbS01LjMgYmVoaW5kIHRoZSB2b2xjZSBnYXRld2F5IHJlZnVzZXMgYQorICAgICMgcmVxdWVzdCB3aXRoIHRoaW5raW5nIG9mZikgbmVlZHMgdGhlIHByb2JlIHRvIGNhcnJ5IHRoZSByb3cncyBkZWNsYXJlZAorICAgICMgbGV2ZWwgdGhlIHdheSBhIHR1cm4ncyBlZmZvcnRfZm9yIHdvdWxkLCBhbmQgaGVhZHJvb20gZm9yIHRoZSB0aGlua2luZworICAgICMgYnVkZ2V0IHRvIGZpdCB1bmRlciBtYXhUb2tlbnMuCisgICAgZnJvbSBvcGVuZGRlX2hhcm5lc3MucHJvdmlkZXJzIGltcG9ydCBtb2RlbF9pZAorCisgICAgcm93ID0gbW9kZWxfaWQucm93X2Zvcihjb25maWcucHJvdmlkZXJzLCBtb2RlbF9pZC5qb2luKHByb3ZpZGVyLCBtb2RlbCkpCisgICAgZWZmb3J0ID0gZ2V0YXR0cihyb3csICJyZWFzb25pbmdfZWZmb3J0IiwgTm9uZSkKKyAgICBpZiBlZmZvcnQgaW4geyJtaW5pbWFsIiwgImxvdyIsICJtZWRpdW0iLCAiaGlnaCIsICJ4aGlnaCIsICJtYXgifToKKyAgICAgICAgb3B0aW9uc1sicmVhc29uaW5nIl0gPSBlZmZvcnQKKyAgICAgICAgb3B0aW9uc1sibWF4VG9rZW5zIl0gPSBtYXgoX1RFU1RfTUFYX1RPS0VOUywgNTEyKQogICAgIGV2ZW50cyA9IHNlcnZpY2Uuc3RyZWFtKHByb3ZpZGVyLCBtb2RlbCwgY29udGV4dCwgb3B0aW9ucykKICAgICB0cnk6CiAgICAgICAgIGFzeW5jIHdpdGggYXN5bmNpby50aW1lb3V0KHRpbWVvdXRfcyk6CmRpZmYgLS1naXQgYS9vcGVuZGRlX2hhcm5lc3MvcGx1Z2luL3Byb3RlaW5fZGVzaWduL3NlcnZlcnMvYXBpLnB5IGIvb3BlbmRkZV9oYXJuZXNzL3BsdWdpbi9wcm90ZWluX2Rlc2lnbi9zZXJ2ZXJzL2FwaS5weQppbmRleCA5YTIxNmIyLi4zZWY1MjVlIDEwMDY0NAotLS0gYS9vcGVuZGRlX2hhcm5lc3MvcGx1Z2luL3Byb3RlaW5fZGVzaWduL3NlcnZlcnMvYXBpLnB5CisrKyBiL29wZW5kZGVfaGFybmVzcy9wbHVnaW4vcHJvdGVpbl9kZXNpZ24vc2VydmVycy9hcGkucHkKQEAgLTczLDkgKzczLDEzIEBAIGRlZiB2aXNpYmxlX2N1ZGFfZGV2aWNlcygpIC0+IGxpc3RbaW50XToKICAgICBleGNlcHQgSW1wb3J0RXJyb3I6CiAgICAgICAgIHJldHVybiBbXQogICAgIHRyeToKLSAgICAgICAgaWYgbm90IHRvcmNoLmN1ZGEuaXNfYXZhaWxhYmxlKCk6Ci0gICAgICAgICAgICByZXR1cm4gW10KLSAgICAgICAgcmV0dXJuIGxpc3QocmFuZ2UodG9yY2guY3VkYS5kZXZpY2VfY291bnQoKSkpCisgICAgICAgIGlmIHRvcmNoLmN1ZGEuaXNfYXZhaWxhYmxlKCk6CisgICAgICAgICAgICByZXR1cm4gbGlzdChyYW5nZSh0b3JjaC5jdWRhLmRldmljZV9jb3VudCgpKSkKKyAgICAgICAgIyBBc2NlbmQgTlBVIGhvc3Q6IGV4cG9zZSBkaWUgMCBmb3IgdGhlIGxlYXNlIHRhYmxlOyBkZXZpY2Ugc3RyaW5ncworICAgICAgICAjIGJlY29tZSBucHU6TiBpbiB3aXRoX2xlYXNlZF9kZXZpY2VzIG9uIHRoaXMgcnVudGltZS4KKyAgICAgICAgaWYgaGFzYXR0cih0b3JjaCwgIm5wdSIpIGFuZCB0b3JjaC5ucHUuaXNfYXZhaWxhYmxlKCk6CisgICAgICAgICAgICByZXR1cm4gWzBdCisgICAgICAgIHJldHVybiBbXQogICAgIGV4Y2VwdCAoQXNzZXJ0aW9uRXJyb3IsIFJ1bnRpbWVFcnJvcik6CiAgICAgICAgIHJldHVybiBbXQogCkBAIC05MCw3ICs5NCwxMiBAQCBkZWYgd2l0aF9sZWFzZWRfZGV2aWNlcyhvcGVyYXRpb246IHN0ciwgcGF5bG9hZDogZGljdFtzdHIsIEFueV0sIGRldmljZXM6IFNlcXVlbgogICAgIGlmIG5vdCBkZXZpY2VzOgogICAgICAgICByZXR1cm4gcGF5bG9hZAogICAgIHBheWxvYWQgPSBkaWN0KHBheWxvYWQpCi0gICAgcHJpbWFyeSA9IGYiY3VkYTp7ZGV2aWNlc1swXX0iCisgICAgdHJ5OgorICAgICAgICBpbXBvcnQgdG9yY2gKKyAgICAgICAgX25wdSA9IGhhc2F0dHIodG9yY2gsICJucHUiKSBhbmQgdG9yY2gubnB1LmlzX2F2YWlsYWJsZSgpCisgICAgZXhjZXB0IEV4Y2VwdGlvbjoKKyAgICAgICAgX25wdSA9IEZhbHNlCisgICAgcHJpbWFyeSA9IGYibnB1OntkZXZpY2VzWzBdfSIgaWYgX25wdSBlbHNlIGYiY3VkYTp7ZGV2aWNlc1swXX0iCiAgICAgaWYgb3BlcmF0aW9uID09ICJmb2xkIjoKICAgICAgICAgb3B0aW9ucyA9IGRpY3QocGF5bG9hZC5nZXQoIm9wdGlvbnMiKSBvciB7fSkKICAgICAgICAgb3B0aW9uc1siZ3B1cyJdID0gIiwiLmpvaW4oc3RyKGluZGV4KSBmb3IgaW5kZXggaW4gZGV2aWNlcykKZGlmZiAtLWdpdCBhL29wZW5kZGVfaGFybmVzcy9wbHVnaW4vcHJvdGVpbl9kZXNpZ24vc2VydmVycy9iYWNrZW5kcy9zb2x1YmxlX21wbm4ucHkgYi9vcGVuZGRlX2hhcm5lc3MvcGx1Z2luL3Byb3RlaW5fZGVzaWduL3NlcnZlcnMvYmFja2VuZHMvc29sdWJsZV9tcG5uLnB5CmluZGV4IDU3ZWQ4OWYuLmE1YTJlOTMgMTAwNjQ0Ci0tLSBhL29wZW5kZGVfaGFybmVzcy9wbHVnaW4vcHJvdGVpbl9kZXNpZ24vc2VydmVycy9iYWNrZW5kcy9zb2x1YmxlX21wbm4ucHkKKysrIGIvb3BlbmRkZV9oYXJuZXNzL3BsdWdpbi9wcm90ZWluX2Rlc2lnbi9zZXJ2ZXJzL2JhY2tlbmRzL3NvbHVibGVfbXBubi5weQpAQCAtMjQxLDE0ICsyNDEsMjQgQEAgY2xhc3MgU29sdWJsZU1QTk5DbGllbnQ6CiAgICAgICAgICAgICBpZiBzZWxmLmRldmljZS50eXBlID09ICJjdWRhIgogICAgICAgICAgICAgZWxzZSBbXQogICAgICAgICApCisgICAgICAgIG5wdV9kZXZpY2VzID0gKAorICAgICAgICAgICAgW3NlbGYuZGV2aWNlLmluZGV4IGlmIHNlbGYuZGV2aWNlLmluZGV4IGlzIG5vdCBOb25lIGVsc2UgaW50KHRvcmNoLm5wdS5jdXJyZW50X2RldmljZSgpKV0KKyAgICAgICAgICAgIGlmIHNlbGYuZGV2aWNlLnR5cGUgPT0gIm5wdSIgYW5kIGhhc2F0dHIodG9yY2gsICJucHUiKQorICAgICAgICAgICAgZWxzZSBbXQorICAgICAgICApCiAgICAgICAgICMgU2FtcGxpbmcgYW5kIGJhY2tib25lIG5vaXNlIHVzZSB1cHN0cmVhbSBnbG9iYWwgUk5HczsgaXNvbGF0ZSBjb25jdXJyZW50IHJlcXVlc3RzLgotICAgICAgICB3aXRoIF9TQU1QTElOR19MT0NLLCB0b3JjaC5yYW5kb20uZm9ya19ybmcoZGV2aWNlcz1jdWRhX2RldmljZXMpLCB0b3JjaC5pbmZlcmVuY2VfbW9kZSgpOgorICAgICAgICB3aXRoIF9TQU1QTElOR19MT0NLLCB0b3JjaC5yYW5kb20uZm9ya19ybmcoZGV2aWNlcz1jdWRhX2RldmljZXMgKyBucHVfZGV2aWNlcyksIHRvcmNoLmluZmVyZW5jZV9tb2RlKCk6CiAgICAgICAgICAgICBzYW1wbGluZ19zZWVkID0gc2VlZCBpZiBzZWVkIGlzIG5vdCBOb25lIGVsc2Ugc2VsZi5zZWVkCiAgICAgICAgICAgICBpZiBzYW1wbGluZ19zZWVkIGlzIE5vbmU6CiAgICAgICAgICAgICAgICAgc2FtcGxpbmdfc2VlZCA9IHNlY3JldHMucmFuZGJpdHMoMzIpCiAgICAgICAgICAgICB0b3JjaC5yYW5kb20uZGVmYXVsdF9nZW5lcmF0b3IubWFudWFsX3NlZWQoc2FtcGxpbmdfc2VlZCkKICAgICAgICAgICAgIGZvciBkZXZpY2VfaW5kZXggaW4gY3VkYV9kZXZpY2VzOgogICAgICAgICAgICAgICAgIHRvcmNoLmN1ZGEuZGVmYXVsdF9nZW5lcmF0b3JzW2RldmljZV9pbmRleF0ubWFudWFsX3NlZWQoc2FtcGxpbmdfc2VlZCkKKyAgICAgICAgICAgIGlmIG5wdV9kZXZpY2VzOgorICAgICAgICAgICAgICAgIHRyeToKKyAgICAgICAgICAgICAgICAgICAgdG9yY2gubnB1Lm1hbnVhbF9zZWVkKHNhbXBsaW5nX3NlZWQpCisgICAgICAgICAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbjoKKyAgICAgICAgICAgICAgICAgICAgcGFzcwogICAgICAgICAgICAgZmVhdHVyZXNbInJhbmRuIl0gPSB0b3JjaC5yYW5kbigobnVtX3NlcXVlbmNlcywgbGVuZ3RoKSwgZGV2aWNlPXNlbGYuZGV2aWNlKQogICAgICAgICAgICAgcmVzdWx0ID0gc2VsZi5tb2RlbC5zYW1wbGUoZmVhdHVyZXMpCiAgICAgICAgICAgICBtYXNrID0gZmVhdHVyZXNbIm1hc2siXSAqIGZlYXR1cmVzWyJjaGFpbl9tYXNrIl0KZGlmZiAtLWdpdCBhL3B5cHJvamVjdC50b21sIGIvcHlwcm9qZWN0LnRvbWwKaW5kZXggNjJiMzJkNC4uODQ0Yzc3NiAxMDA2NDQKLS0tIGEvcHlwcm9qZWN0LnRvbWwKKysrIGIvcHlwcm9qZWN0LnRvbWwKQEAgLTMsNyArMyw3IEBAIG5hbWUgPSAib3BlbmRkZS1oYXJuZXNzIgogdmVyc2lvbiA9ICIwLjAuNSIKIHJlYWRtZSA9ICJSRUFETUUubWQiCiBkZXNjcmlwdGlvbiA9ICJPcGVuRERFIEhhcm5lc3MgLSBhbnRpYm9keSBkZXNpZ24gaGFybmVzczogYWdlbnQgcnVudGltZSwgcHJvdGVpbi1kZXNpZ24gcGx1Z2luLCBhbmQgY29tcHV0ZSBzZXJ2aWNlIgotcmVxdWlyZXMtcHl0aG9uID0gIj49My4xMiIKK3JlcXVpcmVzLXB5dGhvbiA9ICI+PTMuMTEiCiBsaWNlbnNlID0gICJBcGFjaGUtMi4wIgogbGljZW5zZS1maWxlcyA9IFsiTElDRU5TRSIsICJMSUNFTlNFUy8qLnR4dCJdCiBhdXRob3JzID0gWwo="
+    ),
+    "LigandMPNN": (
+        "ZGlmZiAtLWdpdCBhL29wZW5mb2xkL2RhdGEvdGVtcGxhdGVzLnB5IGIvb3BlbmZvbGQvZGF0YS90ZW1wbGF0ZXMucHkKaW5kZXggMjYwZjM2ZS4uZmRiYTE5YSAxMDA2NDQKLS0tIGEvb3BlbmZvbGQvZGF0YS90ZW1wbGF0ZXMucHkKKysrIGIvb3BlbmZvbGQvZGF0YS90ZW1wbGF0ZXMucHkKQEAgLTg1LDggKzg1LDggQEAgVEVNUExBVEVfRkVBVFVSRVMgPSB7CiAgICAgInRlbXBsYXRlX2FhdHlwZSI6IG5wLmludDY0LAogICAgICJ0ZW1wbGF0ZV9hbGxfYXRvbV9tYXNrIjogbnAuZmxvYXQzMiwKICAgICAidGVtcGxhdGVfYWxsX2F0b21fcG9zaXRpb25zIjogbnAuZmxvYXQzMiwKLSAgICAidGVtcGxhdGVfZG9tYWluX25hbWVzIjogbnAub2JqZWN0LAotICAgICJ0ZW1wbGF0ZV9zZXF1ZW5jZSI6IG5wLm9iamVjdCwKKyAgICAidGVtcGxhdGVfZG9tYWluX25hbWVzIjogb2JqZWN0LAorICAgICJ0ZW1wbGF0ZV9zZXF1ZW5jZSI6IG9iamVjdCwKICAgICAidGVtcGxhdGVfc3VtX3Byb2JzIjogbnAuZmxvYXQzMiwKIH0KIApkaWZmIC0tZ2l0IGEvb3BlbmZvbGQvbnAvcmVsYXgvdXRpbHMucHkgYi9vcGVuZm9sZC9ucC9yZWxheC91dGlscy5weQppbmRleCBmNDUzZDE2Li4wZjFkZDg1IDEwMDY0NAotLS0gYS9vcGVuZm9sZC9ucC9yZWxheC91dGlscy5weQorKysgYi9vcGVuZm9sZC9ucC9yZWxheC91dGlscy5weQpAQCAtNzksNyArNzksNyBAQCBkZWYgYXNzZXJ0X2VxdWFsX25vbnRlcm1pbmFsX2F0b21fdHlwZXMoCiAgICAgIiIiQ2hlY2tzIHRoYXQgcHJlLSBhbmQgcG9zdC1taW5pbWl6ZWQgcHJvdGVpbnMgaGF2ZSBzYW1lIGF0b20gc2V0LiIiIgogICAgICMgSWdub3JlIGFueSB0ZXJtaW5hbCBPWFQgYXRvbXMgd2hpY2ggbWF5IGhhdmUgYmVlbiBhZGRlZCBieSBtaW5pbWl6YXRpb24uCiAgICAgb3h0ID0gcmVzaWR1ZV9jb25zdGFudHMuYXRvbV9vcmRlclsiT1hUIl0KLSAgICBub19veHRfbWFzayA9IG5wLm9uZXMoc2hhcGU9YXRvbV9tYXNrLnNoYXBlLCBkdHlwZT1ucC5ib29sKQorICAgIG5vX294dF9tYXNrID0gbnAub25lcyhzaGFwZT1hdG9tX21hc2suc2hhcGUsIGR0eXBlPWJvb2wpCiAgICAgbm9fb3h0X21hc2tbLi4uLCBveHRdID0gRmFsc2UKICAgICBucC50ZXN0aW5nLmFzc2VydF9hbG1vc3RfZXF1YWwoCiAgICAgICAgIHJlZl9hdG9tX21hc2tbbm9fb3h0X21hc2tdLCBhdG9tX21hc2tbbm9fb3h0X21hc2tdCmRpZmYgLS1naXQgYS9vcGVuZm9sZC9ucC9yZXNpZHVlX2NvbnN0YW50cy5weSBiL29wZW5mb2xkL25wL3Jlc2lkdWVfY29uc3RhbnRzLnB5CmluZGV4IDI4NTZlMDAuLmJhMWEwMmYgMTAwNjQ0Ci0tLSBhL29wZW5mb2xkL25wL3Jlc2lkdWVfY29uc3RhbnRzLnB5CisrKyBiL29wZW5mb2xkL25wL3Jlc2lkdWVfY29uc3RhbnRzLnB5CkBAIC0xMTIxLDEwICsxMTIxLDEwIEBAIGRlZiBfbWFrZV9yaWdpZF90cmFuc2Zvcm1hdGlvbl80eDQoZXgsIGV5LCB0cmFuc2xhdGlvbik6CiAjIGFuZCBhbiBhcnJheSB3aXRoIChyZXN0eXBlLCBhdG9tdHlwZSwgY29vcmQpIGZvciB0aGUgYXRvbSBwb3NpdGlvbnMKICMgYW5kIGNvbXB1dGUgYWZmaW5lIHRyYW5zZm9ybWF0aW9uIG1hdHJpY2VzICg0LDQpIGZyb20gb25lIHJpZ2lkIGdyb3VwIHRvIHRoZQogIyBwcmV2aW91cyBncm91cAotcmVzdHlwZV9hdG9tMzdfdG9fcmlnaWRfZ3JvdXAgPSBucC56ZXJvcyhbMjEsIDM3XSwgZHR5cGU9bnAuaW50KQorcmVzdHlwZV9hdG9tMzdfdG9fcmlnaWRfZ3JvdXAgPSBucC56ZXJvcyhbMjEsIDM3XSwgZHR5cGU9aW50KQogcmVzdHlwZV9hdG9tMzdfbWFzayA9IG5wLnplcm9zKFsyMSwgMzddLCBkdHlwZT1ucC5mbG9hdDMyKQogcmVzdHlwZV9hdG9tMzdfcmlnaWRfZ3JvdXBfcG9zaXRpb25zID0gbnAuemVyb3MoWzIxLCAzNywgM10sIGR0eXBlPW5wLmZsb2F0MzIpCi1yZXN0eXBlX2F0b20xNF90b19yaWdpZF9ncm91cCA9IG5wLnplcm9zKFsyMSwgMTRdLCBkdHlwZT1ucC5pbnQpCityZXN0eXBlX2F0b20xNF90b19yaWdpZF9ncm91cCA9IG5wLnplcm9zKFsyMSwgMTRdLCBkdHlwZT1pbnQpCiByZXN0eXBlX2F0b20xNF9tYXNrID0gbnAuemVyb3MoWzIxLCAxNF0sIGR0eXBlPW5wLmZsb2F0MzIpCiByZXN0eXBlX2F0b20xNF9yaWdpZF9ncm91cF9wb3NpdGlvbnMgPSBucC56ZXJvcyhbMjEsIDE0LCAzXSwgZHR5cGU9bnAuZmxvYXQzMikKIHJlc3R5cGVfcmlnaWRfZ3JvdXBfZGVmYXVsdF9mcmFtZSA9IG5wLnplcm9zKFsyMSwgOCwgNCwgNF0sIGR0eXBlPW5wLmZsb2F0MzIpCkBAIC0xMjgwLDcgKzEyODAsNyBAQCBkZWYgbWFrZV9hdG9tMTRfZGlzdHNfYm91bmRzKAogCiByZXN0eXBlX2F0b20xNF9hbWJpZ3VvdXNfYXRvbXMgPSBucC56ZXJvcygoMjEsIDE0KSwgZHR5cGU9bnAuZmxvYXQzMikKIHJlc3R5cGVfYXRvbTE0X2FtYmlndW91c19hdG9tc19zd2FwX2lkeCA9IG5wLnRpbGUoCi0gICAgbnAuYXJhbmdlKDE0LCBkdHlwZT1ucC5pbnQpLCAoMjEsIDEpCisgICAgbnAuYXJhbmdlKDE0LCBkdHlwZT1pbnQpLCAoMjEsIDEpCiApCiAKIAo="
+    ),
+}
+# Only the NPU driver stays outside automatic install: it is system-level.
+CODE_REASON = {
+    "npu": "the NPU driver and CANN toolkit are system-level; they are not installed by a search",
+}
+INSTALLABLE = set(PIP_REQUIREMENTS) | {"esm_weights", "soluble_weights", "fold_checkpoint"} | set(CODE_SOURCES)
+
+_PROBE_CHILD = r'''
+import json, os, sys
+paths = json.loads(sys.stdin.read())
+checks = {}
+
+
+def check(name, probe):
+    try:
+        checks[name] = {"ok": True, "detail": str(probe() or "")}
+    except Exception as error:
+        lines = str(error).strip().splitlines() or [type(error).__name__]
+        checks[name] = {"ok": False, "detail": lines[-1][:300]}
+
+
+def present(path):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"nothing at {path}")
+    return path
+
+
+def npu():
+    import rdkit.Chem  # the fold imports rdkit before torch_npu on 910C
+    import torch
+    import torch_npu  # noqa: F401
+    count = torch.npu.device_count()
+    if count < 1:
+        raise RuntimeError("torch_npu sees no NPU device")
+    return f"{count} device(s)"
+
+
+def rdkit_module():
+    import rdkit.Chem  # noqa: F401
+    return "rdkit.Chem"
+
+
+def biotite_module():
+    import biotite
+    return biotite.__file__
+
+
+def esm_module():
+    import esm
+    return esm.__file__
+
+
+def esm_weights():
+    for name in ("config.json", "model.safetensors"):
+        present(os.path.join(paths["esm"], name))
+    return paths["esm"]
+
+
+def harness_modules():
+    sys.path.insert(0, paths["harness"])
+    import opendde_harness.plugin.protein_design.servers.backends.esm_backend  # noqa: F401
+    import opendde_harness.plugin.protein_design.servers.backends.soluble_mpnn  # noqa: F401
+    return paths["harness"]
+
+
+check("npu", npu)
+check("rdkit", rdkit_module)
+check("biotite", biotite_module)
+check("fold_code", lambda: present(paths["fold_code"]))
+check("fold_checkpoint", lambda: present(paths["fold_checkpoint"]))
+check("esm_module", esm_module)
+check("esm_weights", esm_weights)
+check("harness_modules", harness_modules)
+check("soluble_weights", lambda: present(paths["soluble_weights"]))
+check("ligand_code", lambda: present(os.path.join(paths["ligand"], "model_utils.py")))
+print(json.dumps(checks), flush=True)
+'''
+
+
+def _location(name: str, default: str, marker: str, deps_rel: str) -> str:
+    """Where one component is: the variable, else the colleague's copy, else the sibling install."""
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    if os.path.exists(os.path.join(default, marker) if marker else default):
+        return default
+    return os.path.join(DEPS_DIR, deps_rel)
+
+
+def _paths() -> dict:
+    return {
+        "fold_code": _location("OPENDDE_CODE_DIR", "/data1/gs_agent/opendde/OpenDDE", "", "code/OpenDDE"),
+        "fold_checkpoint": _location(
+            "OPENDDE_CHECKPOINT",
+            "/data1/gs_agent/opendde/weights/checkpoint/opendde_abag.pt",
+            "",
+            "weights/checkpoint/opendde_abag.pt",
+        ),
+        "harness": _location(
+            "OPENDDE_HARNESS_DIR", "/data1/gs_agent/opendde/OpenDDE-Harness", "opendde_harness", "code/OpenDDE-Harness",
+        ),
+        "esm": _location("ESM_MODEL_NAME", "/data1/gs_agent/opendde/weights/esm2", "model.safetensors", "weights/esm2"),
+        "soluble_weights": _location(
+            "SOLUBLE_MPNN_WEIGHTS",
+            "/data1/gs_agent/opendde/weights/soluble_mpnn/solublempnn_v_48_020.pt",
+            "",
+            "weights/soluble_mpnn/solublempnn_v_48_020.pt",
+        ),
+        "ligand": _location("LIGANDMPNN_DIR", "/data1/gs_agent/opendde/LigandMPNN", "model_utils.py", "code/LigandMPNN"),
+    }
+
+
+def _child_env() -> dict:
+    """The environment for every OpenDDE child: resolved locations, and DEPS_DIR/pylib on PYTHONPATH."""
+    env = os.environ.copy()
+    paths = _paths()
+    env["ESM_MODEL_NAME"] = paths["esm"]
+    env["SOLUBLE_MPNN_WEIGHTS"] = paths["soluble_weights"]
+    env["LIGANDMPNN_DIR"] = paths["ligand"]
+    env["OPENDDE_HARNESS_DIR"] = paths["harness"]
+    pylib = os.path.join(DEPS_DIR, "pylib")
+    if os.path.isdir(pylib):
+        env["PYTHONPATH"] = pylib + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    return env
+
+
+def _probe_checks(python: str) -> dict:
+    completed = subprocess.run(
+        [python, "-c", _PROBE_CHILD],
+        input=json.dumps(_paths()),
+        capture_output=True,
+        text=True,
+        env=_child_env(),
+        timeout=900,
     )
+    line = next((item for item in reversed(completed.stdout.splitlines()) if item.strip()), "")
+    try:
+        loaded = json.loads(line)
+    except json.JSONDecodeError:
+        tail = (completed.stderr or completed.stdout or "the probe printed nothing").strip().splitlines()
+        reason = (tail[-1] if tail else "no output")[:300]
+        return {name: {"ok": False, "detail": f"probe did not finish: {reason}"} for name in PROBE_CHECKS}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _open(url: str):
+    """Open a URL, waiting out the mirror's rate limit (429) and server errors; other errors fail at once."""
+    for attempt in range(4):
+        try:
+            # The mirror refuses the default Python-urllib agent on some paths; curl's agent is served.
+            request = urllib.request.Request(url, headers={"User-Agent": "curl/8.5.0"})
+            return urllib.request.urlopen(request, timeout=120)
+        except urllib.error.HTTPError as error:
+            if error.code not in (429, 500, 502, 503, 504) or attempt == 3:
+                raise
+        except urllib.error.URLError:
+            if attempt == 3:
+                raise
+        time.sleep(30 * (attempt + 1))
+    raise RuntimeError("unreachable")
+
+
+def _download(url: str, dest: str, *, sha256: str = "", size: int = 0, magic: bytes = b"") -> None:
+    """Fetch one file to a .part name, check its size, digest, or header, then move it into place."""
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    partial = dest + ".part"
+    digest = hashlib.sha256()
+    received = 0
+    head = b""
+    with _open(url) as response, open(partial, "wb") as out:
+        while True:
+            block = response.read(1 << 20)
+            if not block:
+                break
+            if not head:
+                head = block[:4]
+            out.write(block)
+            digest.update(block)
+            received += len(block)
+    problem = ""
+    if size and received != size:
+        problem = f"expected {size} bytes, got {received}"
+    elif sha256 and digest.hexdigest() != sha256:
+        problem = "the sha256 does not match the pinned digest"
+    elif magic and not head.startswith(magic):
+        problem = "the file is not the expected format"
+    if problem:
+        os.remove(partial)
+        raise RuntimeError(f"{os.path.basename(dest)}: {problem}")
+    os.replace(partial, dest)
+
+
+def _pip_install(python: str, requirement: str) -> str:
+    """Install one pinned package with --no-deps into DEPS_DIR/pylib. The dependencies are already in the venv."""
+    target = os.path.join(DEPS_DIR, "pylib")
+    os.makedirs(target, exist_ok=True)
+    completed = subprocess.run(
+        [python, "-m", "pip", "install", "--no-deps", "--target", target, requirement],
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    # pip ends a failure with a "[notice]" line about upgrading pip; the reason is the ERROR line.
+    lines = [
+        line.strip()
+        for line in (completed.stderr + "\n" + completed.stdout).splitlines()
+        if line.strip() and not line.lstrip().startswith("[notice]")
+    ]
+    if completed.returncode != 0:
+        errors = [line for line in lines if "ERROR" in line]
+        raise RuntimeError((errors or lines or ["pip failed"])[-1])
+    return f"installed {requirement}"
+
+
+def _git(args: list) -> None:
+    completed = subprocess.run(["git", *args], capture_output=True, text=True, timeout=900)
+    if completed.returncode != 0:
+        lines = (completed.stderr or completed.stdout or "git failed").strip().splitlines()
+        raise RuntimeError((lines or ["git failed"])[-1][:300])
+
+
+def _tree_digest(path: str) -> str:
+    diff = subprocess.run(["git", "-C", path, "diff", "--binary", "HEAD"], capture_output=True, timeout=900).stdout
+    return hashlib.sha256(diff).hexdigest()[:20]
+
+
+def _fetch_code(name: str) -> str:
+    """Clone the pinned upstream commit, apply the colleague's local changes, and check the result matches."""
+    source = CODE_SOURCES[name]
+    dest = os.path.join(DEPS_DIR, source["dir"])
+    if os.path.isdir(os.path.join(dest, ".git")) and _tree_digest(dest) == source["tree"]:
+        return dest
+    shutil.rmtree(dest, ignore_errors=True)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    _git(["clone", "-q", source["url"], dest])
+    _git(["-C", dest, "checkout", "-q", source["commit"]])
+    patch_dir = os.path.join(DEPS_DIR, "patches")
+    os.makedirs(patch_dir, exist_ok=True)
+    patch = os.path.join(patch_dir, source["name"] + ".patch")
+    Path(patch).write_bytes(base64.b64decode(CODE_PATCHES[source["name"]]))
+    _git(["-C", dest, "apply", "--binary", patch])
+    digest = _tree_digest(dest)
+    if digest != source["tree"]:
+        raise RuntimeError(f"{source['name']}: the reproduced tree differs from the colleague's (digest {digest})")
+    return dest
+
+
+def _fetch_esm_weights() -> str:
+    target = os.path.join(DEPS_DIR, "weights", "esm2")
+    for name, size in ESM_FILES.items():
+        dest = os.path.join(target, name)
+        if os.path.exists(dest) and (not size or os.path.getsize(dest) == size):
+            continue
+        _download(f"https://hf-mirror.com/{ESM_REPO}/resolve/{ESM_REVISION}/{name}", dest, size=size)
+    return target
+
+
+def _fetch_soluble_weights() -> str:
+    dest = os.path.join(DEPS_DIR, "weights", "soluble_mpnn", "solublempnn_v_48_020.pt")
+    _download(SOLUBLE_URL, dest, magic=b"PK")
+    return dest
+
+
+def _fetch_checkpoint() -> str:
+    dest = os.path.join(DEPS_DIR, "weights", "checkpoint", "opendde_abag.pt")
+    _download(CHECKPOINT_URL, dest, sha256=CHECKPOINT_SHA256, size=CHECKPOINT_SIZE, magic=b"PK")
+    return dest
+
+
+def _install_component(name: str, python: str) -> dict:
+    """Try to make one missing component present. Never raises: the report carries the reason."""
+    try:
+        if name in PIP_REQUIREMENTS:
+            detail = _pip_install(python, PIP_REQUIREMENTS[name])
+        elif name == "esm_weights":
+            detail = _fetch_esm_weights()
+        elif name == "soluble_weights":
+            detail = _fetch_soluble_weights()
+        elif name == "fold_checkpoint":
+            detail = _fetch_checkpoint()
+        elif name in CODE_SOURCES:
+            detail = _fetch_code(name)
+        else:
+            return {"component": name, "ok": False, "detail": CODE_REASON.get(name, "no automatic source")}
+        return {"component": name, "ok": True, "detail": detail}
+    except Exception as error:
+        lines = str(error).strip().splitlines() or [type(error).__name__]
+        return {"component": name, "ok": False, "detail": lines[-1][:300]}
+
+
+def environment_report() -> dict:
+    """What this host can run, component by component. Missing parts are installed or explained."""
+    try:
+        python = _model_python()
+        checks = _probe_checks(python)
+        installs = []
+        for name in PROBE_CHECKS:
+            if (checks.get(name) or {}).get("ok") or name not in INSTALLABLE:
+                continue
+            installs.append(_install_component(name, python))
+        if any(item["ok"] for item in installs):
+            checks = _probe_checks(python)
+        for name in PROBE_CHECKS:
+            entry = checks.get(name) or {}
+            if not entry.get("ok") and name in CODE_REASON:
+                detail = entry.get("detail") or "not reported by the probe"
+                checks[name] = {"ok": False, "detail": f"{detail}; not installed automatically: {CODE_REASON[name]}"}
+        return {"ran": True, "device": "npu", "checks": checks, "installs": installs}
+    except Exception as error:
+        message = (str(error).strip().splitlines() or [type(error).__name__])[-1]
+        return {"ran": True, "device": "npu", "checks": {}, "error": message[:300]}
+
+
+def predict(candidate: dict) -> dict:
+    paths = _paths()
+    code = paths["fold_code"]
+    checkpoint = paths["fold_checkpoint"]
     python = configured("OPENDDE_PYTHON", "/data1/gs_agent/opendde/venv_pd/bin/python") or sys.executable
-    if not code or not checkpoint:
+    if not os.path.exists(code) or not os.path.exists(checkpoint):
         raise RuntimeError("OPENDDE_CODE_DIR and OPENDDE_CHECKPOINT are required")
     with tempfile.TemporaryDirectory(prefix="cdr-opendde-") as work:
         root = Path(work)
         request = root / "input.json"
         request.write_text(json.dumps(input_document(candidate)), encoding="utf-8")
         output = root / "out"
-        env = os.environ.copy()
+        env = _child_env()
         env["PYTHONPATH"] = code + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         env.setdefault("LAYERNORM_TYPE", "torch")
         # common/components.cif sits beside the checkpoint directory. Without
@@ -986,6 +1373,9 @@ def main() -> None:
     candidate = globals().get("_EVOLVE_CANDIDATE")
     if not isinstance(candidate, dict):
         emit({"device": "npu", "error": "the candidate is not a JSON object", "ran": False})
+        return
+    if candidate.get("probe") is True:
+        emit(environment_report())
         return
     sequence = candidate.get("sequence")
     if not isinstance(sequence, str) or not amino_acid(sequence):

@@ -30,6 +30,9 @@ from sciencediscovery_evolve.cdr_engine import (
     _Member,
     _draw_skill,
     _measure_reading,
+    _quality_verdicts,
+    _reflection_interval,
+    _retain,
     _select,
     _temperature,
     positive_llr_substitutions,
@@ -544,7 +547,7 @@ def test_the_design_prompt_carries_the_fold_metrics_the_gate_and_what_was_tried(
 
     events = []
     CdrEngine(measure=measure, complete=complete).run(
-        spec(expansions=4, baseline_code=baseline()),
+        spec(expansions=4, baseline_code=json.dumps({**json.loads(baseline()), "reflection_interval": 1})),
         events.append,
         lambda: False,
     )
@@ -556,7 +559,7 @@ def test_the_design_prompt_carries_the_fold_metrics_the_gate_and_what_was_tried(
     assert "the loop tip drives contact" in prompts[0]
     assert "ALREADY MEASURED" not in prompts[0]
     assert "D2CW -> score -1.0 gate: cdr_fraction 0.31 below 0.5" in prompts[1]
-    assert "REFLECTION ON THE LAST CYCLE" in prompts[1]
+    assert "REFLECTION (latest reflected cycle)" in prompts[1]
 
 
 def test_a_chat_cycle_after_a_proposed_batch_reflects_on_the_batch():
@@ -588,7 +591,7 @@ def test_a_chat_cycle_after_a_proposed_batch_reflects_on_the_batch():
 
     events = []
     CdrEngine(measure=measure, complete=complete).run(
-        spec(expansions=4, baseline_code=baseline()),
+        spec(expansions=4, baseline_code=json.dumps({**json.loads(baseline()), "reflection_interval": 1})),
         events.append,
         lambda: False,
     )
@@ -596,6 +599,59 @@ def test_a_chat_cycle_after_a_proposed_batch_reflects_on_the_batch():
     assert reflections, "the cycle after the proposed batch never reflected"
     assert "`esm2-guided-mutation`" in reflections[0]
     assert "D2CW -> score -1.2" in reflections[0]
+
+
+def test_a_refused_design_retries_the_cycle_instead_of_spending_an_expansion():
+    answers = iter(["not json", "still not json", json.dumps({"mutations": [[["D", 2, "W"]]]})])
+
+    def measure(payload):
+        return {
+            "ok": True, "score": -1.0, "error": "",
+            "sequence": payload["sequence"], "mutations": payload.get("mutations") or [],
+        }
+
+    def complete(prompt: str) -> str:
+        if prompt.startswith("Return plain text"):
+            return "a note"
+        if "ROUTER-ALLOWED" in prompt:
+            return json.dumps({"skill_id": POINT_SKILL, "selection_reason": "refine"})
+        return next(answers)
+
+    events = []
+    CdrEngine(measure=measure, complete=complete).run(
+        spec(expansions=1, baseline_code=baseline()),
+        events.append,
+        lambda: False,
+    )
+    expanded = [event for event in events if event["type"] == "expanded"]
+    assert [event["changeSummary"] for event in expanded] == ["D2CW"]
+    assert events[-1]["candidates"] == 1
+    retries = [event for event in events if event["type"] == "log" and "retry" in event["message"]]
+    assert len(retries) == 2
+
+
+def test_a_cycle_that_keeps_refusing_finally_spends_one_expansion():
+    def measure(payload):
+        return {"ok": True, "score": -1.0, "error": "", "sequence": payload["sequence"]}
+
+    def complete(prompt: str) -> str:
+        if prompt.startswith("Return plain text"):
+            return "a note"
+        if "ROUTER-ALLOWED" in prompt:
+            return json.dumps({"skill_id": POINT_SKILL, "selection_reason": "refine"})
+        return "never json"
+
+    events = []
+    CdrEngine(measure=measure, complete=complete).run(
+        spec(expansions=2, baseline_code=baseline()),
+        events.append,
+        lambda: False,
+    )
+    expanded = [event for event in events if event["type"] == "expanded"]
+    assert len(expanded) == 2, "two cycles each charge one expansion after their retries"
+    assert all(event["valid"] is False for event in expanded)
+    retries = [event for event in events if event["type"] == "log" and "retry" in event["message"]]
+    assert len(retries) == 4, "two retries per charged cycle"
 
 
 def test_a_measurement_keeps_the_metrics_behind_its_score():
@@ -624,3 +680,221 @@ def test_a_starting_point_without_cdr_ranges_fails_before_a_model_call():
     )
     assert called is False
     assert events[-1]["status"] == "failed"
+
+
+def _member(index: int, sequence: str, score: float) -> _Member:
+    return _Member(index=index, sequence=sequence, score=score, mutations=[], backbone=None, visits=0)
+
+
+def test_the_constrained_elite_drops_duplicates_and_keeps_the_best_under_capacity():
+    config = {"cdr_regions": [[1, 3]], "population_size": 1}
+    kept, actions = _retain(
+        [_member(0, "AAE", -1.0), _member(1, "BAE", -1.1)], config, ["AAA"],
+    )
+    assert kept == {0}
+    assert actions[1] == "capacity_not_retained"
+
+    config = {"cdr_regions": [[1, 3]], "population_size": 20}
+    kept, actions = _retain(
+        [_member(0, "AAE", -1.0), _member(1, "AAE", -0.9), _member(2, "AAEW", -1.2)],
+        config, ["AAA"],
+    )
+    assert kept == {1}
+    assert actions[0] == "duplicate_not_retained"
+    assert actions[2] == "cdr_distance_not_retained"
+
+
+def test_the_constrained_elite_caps_how_often_one_mutation_is_reused():
+    # population_size 4: a mutation may be used at most ceil(4 * 0.30) = 2 times.
+    config = {"cdr_regions": [[1, 3]], "population_size": 4}
+    kept, actions = _retain(
+        [_member(0, "ACE", -1.0), _member(1, "BCE", -1.1), _member(2, "GCE", -1.2)],
+        config, ["ACD"],
+    )
+    assert kept == {0, 1}
+    assert actions[2] == "mutation_reuse_not_retained"
+
+
+def test_the_quality_check_admits_only_the_candidates_it_passes_above_the_threshold():
+    readings = [
+        {"ok": True, "score": -1.0, "sequence": "AWDE", "metrics": {"iptm": 0.8}},
+        {"ok": True, "score": -1.1, "sequence": "AYDE", "metrics": {"iptm": 0.6}},
+        {"ok": True, "score": -1.2, "sequence": "AZDE", "metrics": {"iptm": 0.9}},
+    ]
+    prompts = []
+
+    def complete(prompt: str) -> str:
+        prompts.append(prompt)
+        return json.dumps({"results": {
+            "c0": {"pass_check": True, "reasoning": "ok"},
+            "c2": {"pass_check": False, "reasoning": "bad"},
+        }})
+
+    verdicts, error = _quality_verdicts(complete, "analysis", readings, exempt=False)
+    assert verdicts == [True, None, False]
+    assert error == ""
+    assert len(prompts) == 1
+    assert '"candidate_id":"c0"' in prompts[0]
+    assert '"candidate_id":"c1"' not in prompts[0]
+    # The objective block is the harness's unavailable developability result, per candidate.
+    assert prompts[0].startswith("You are the Antibody Quality Agent.")
+    assert "<objective_developability_evidence>" in prompts[0]
+    assert (
+        '{"results":{"c0":{"available":false},"c2":{"available":false}},'
+        '"summary":{"c0":{"available":false},"c2":{"available":false}}}'
+    ) in prompts[0]
+
+    verdicts, _error = _quality_verdicts(complete, "analysis", readings, exempt=True)
+    assert verdicts == [None, None, None]
+    assert len(prompts) == 1
+
+
+def test_a_failed_quality_check_admits_nothing_from_its_batch():
+    readings = [{"ok": True, "score": -1.0, "sequence": "AWDE", "metrics": {"iptm": 0.9}}]
+
+    def broken(_prompt: str) -> str:
+        raise RuntimeError("model down")
+
+    verdicts, error = _quality_verdicts(broken, "analysis", readings, exempt=False)
+    assert verdicts == [False]
+    assert "model down" in error
+
+
+def test_a_candidate_the_quality_check_refuses_is_not_admitted_to_the_population():
+    seen = []
+
+    def measure(payload):
+        seen.append(payload)
+        if payload.get("sequence") == "ACDE":
+            return {"ok": True, "score": -1.0, "error": "", "backbone_pdb": "BACK",
+                    "sequence": "ACDE", "mutations": [], "metrics": {"iptm": 0.9}}
+        if payload["sequence"] == "AWDE":
+            return {"ok": True, "score": -0.5, "error": "", "backbone_pdb": "C1",
+                    "sequence": "AWDE", "mutations": [["D", 2, "W"]], "metrics": {"iptm": 0.9}}
+        return {"ok": True, "score": -0.6, "error": "", "backbone_pdb": "C2",
+                "sequence": "YCDE", "mutations": [["D", 1, "Y"]], "metrics": {"iptm": 0.9}}
+
+    def complete(prompt: str) -> str:
+        if prompt.startswith("Return plain text"):
+            return "the loop tip drives contact"
+        if "Assess the supplied antibody candidates" in prompt:
+                return json.dumps({"results": {
+                    "c0": {"pass_check": False, "reasoning": "bad"},
+                    "c1": {"pass_check": True, "reasoning": "ok"},
+                }})
+        return json.dumps({"mutations": [[["D", 2, "W"]], [["D", 1, "Y"]]]})
+
+    starting = json.loads(baseline())
+    starting["skill_weights"] = {POINT_SKILL: 1.0}
+    starting["router_selection_strategy"] = "weighted"
+    events = []
+    CdrEngine(measure=measure, complete=complete).run(
+        spec(expansions=2, baseline_code=json.dumps(starting)),
+        events.append,
+        lambda: False,
+    )
+    merged = [event for event in events if event["type"] == "merged"]
+    assert [event["accepted"] for event in merged] == [False, True]
+    assert events[-1]["bestNodeIndex"] == 2
+
+
+def test_a_gate_refused_candidate_with_more_cdr_contact_becomes_the_parent_when_nothing_passed():
+    seen = []
+
+    def measure(payload):
+        seen.append(payload)
+        if payload["sequence"] == "ACDE":
+            return {"ok": True, "score": -1.5, "error": "gate", "backbone_pdb": "BACK",
+                    "sequence": "ACDE", "mutations": [], "metrics": {"cdr_contact_fraction": 0.2}}
+        return {"ok": True, "score": -1.1, "error": "gate", "backbone_pdb": "C1",
+                "sequence": payload["sequence"], "mutations": payload.get("mutations") or [],
+                "metrics": {"cdr_contact_fraction": 0.4}}
+
+    def complete(prompt: str) -> str:
+        if prompt.startswith("Return plain text"):
+            return "the loop tip drives contact"
+        if "Assess the supplied antibody candidates" in prompt:
+            return json.dumps({"results": {}})
+        return json.dumps({"mutations": [[["D", 2, "W"]]] if len(seen) < 2 else [[["D", 1, "Y"]]]})
+
+    starting = json.loads(baseline())
+    starting["skill_weights"] = {POINT_SKILL: 1.0}
+    starting["router_selection_strategy"] = "weighted"
+    CdrEngine(measure=measure, complete=complete).run(
+        spec(expansions=2, baseline_code=json.dumps(starting)),
+        lambda _event: None,
+        lambda: False,
+    )
+    assert [item["sequence"] for item in seen] == ["ACDE", "AWDE", "YWDE"]
+
+
+def test_the_analyze_and_design_prompts_carry_the_harness_rules_and_the_target():
+    prompts = []
+
+    def complete(prompt: str) -> str:
+        prompts.append(prompt)
+        if prompt.startswith("Return plain text"):
+            return "the loop tip drives contact"
+        return json.dumps({"mutations": [[["D", 2, "W"]]]})
+
+    starting = json.loads(baseline())
+    starting["skill_weights"] = {POINT_SKILL: 1.0}
+    starting["router_selection_strategy"] = "weighted"
+    CdrEngine(measure=lambda payload: {
+        "ok": True, "score": -1.0, "error": "gate", "backbone_pdb": "BACK",
+        "sequence": payload["sequence"], "mutations": payload.get("mutations") or [],
+    }, complete=complete).run(
+        spec(expansions=1, baseline_code=json.dumps(starting)), lambda _event: None, lambda: False,
+    )
+    analyze = next(p for p in prompts if p.startswith("Return plain text under 120 words"))
+    design = next(p for p in prompts if "Return JSON only" in p)
+    assert "Never invent residue-residue contacts" in analyze
+    assert "which residues are most likely to drive interface contact" not in analyze
+    assert "=== TARGET ===" in design
+    assert "- Chain A sequence: GG" in design
+
+
+def _reflections_in_four_cycles(extra: dict) -> int:
+    reflections = []
+    groups = [[["D", 2, "W"]], [["D", 1, "Y"]], [["D", 3, "A"]], [["D", 2, "Y"]]]
+    calls = iter(range(100))
+
+    def measure(payload):
+        return {"ok": True, "score": -1.0, "error": "", "backbone_pdb": "BACK",
+                "sequence": payload["sequence"], "mutations": payload.get("mutations") or []}
+
+    def complete(prompt: str) -> str:
+        if prompt.startswith("Return plain text under 80 words"):
+            reflections.append(prompt)
+            return "the loop tip drives contact"
+        if prompt.startswith("Return plain text"):
+            return "the loop tip drives contact"
+        return json.dumps({"mutations": [groups[next(calls) % len(groups)]]})
+
+    starting = json.loads(baseline())
+    starting["skill_weights"] = {POINT_SKILL: 1.0}
+    starting["router_selection_strategy"] = "weighted"
+    starting.update(extra)
+    CdrEngine(measure=measure, complete=complete).run(
+        spec(expansions=4, baseline_code=json.dumps(starting)),
+        lambda _event: None,
+        lambda: False,
+    )
+    return len(reflections)
+
+
+def test_reflection_follows_the_harness_interval_and_defaults_to_twenty():
+    # Folded cycles 0..3. A reflection runs at the start of the next cycle,
+    # so interval 1 reflects after cycles 0, 1 and 2; interval 2 only after cycle 1.
+    assert _reflections_in_four_cycles({"reflection_interval": 1}) == 3
+    assert _reflections_in_four_cycles({"reflection_interval": 2}) == 1
+    assert _reflections_in_four_cycles({}) == 0
+
+
+def test_reflection_interval_is_an_integer_of_at_least_one():
+    assert _reflection_interval(None) == 20
+    assert _reflection_interval(True) == 20
+    assert _reflection_interval("bad") == 20
+    assert _reflection_interval(0) == 1
+    assert _reflection_interval("1") == 1
+    assert _reflection_interval(5) == 5

@@ -1,0 +1,161 @@
+diff --git a/opendde_harness/cli/compute_environment.py b/opendde_harness/cli/compute_environment.py
+index 4ddde66..ac8dcfa 100644
+--- a/opendde_harness/cli/compute_environment.py
++++ b/opendde_harness/cli/compute_environment.py
+@@ -33,26 +33,47 @@ def compute_image() -> str:
+ 
+ 
+ def check_local_platform() -> None:
+-    if platform.system() != "Linux" or platform.machine().lower() != "x86_64":
+-        raise ValueError("Local compute is supported on Linux x86-64 only. Use a configured Linux compute service.")
++    if platform.system() != "Linux" or platform.machine().lower() not in ("x86_64", "aarch64"):
++        raise ValueError("Local compute is supported on Linux x86-64/aarch64 only. Use a configured Linux compute service.")
+ 
+ 
+ def resolve_device(requested: str | None = None) -> str:
+     device = str(requested or os.environ.get("OPENDDE_HARNESS_COMPUTE_DEVICE", "auto")).strip().lower()
+     if device == "cpu":
+         return device
+-    if device != "auto" and not re.fullmatch(r"cuda(?::\d+)?", device):
+-        raise ValueError("Compute device must be auto, cpu, cuda, or cuda:N; this runtime supports Linux CPU/CUDA.")
++    if device != "auto" and not re.fullmatch(r"(?:cuda|npu)(?::\d+)?", device):
++        raise ValueError("Compute device must be auto, cpu, cuda, cuda:N, npu, or npu:N; Ascend NPU is supported.")
+     import torch
+ 
++    def _npu_count() -> int:
++        try:
++            if hasattr(torch, "npu") and torch.npu.is_available():
++                return int(torch.npu.device_count())
++        except Exception:
++            pass
++        return 0
++
+     if device == "auto":
+-        return "cuda" if torch.cuda.is_available() else "cpu"
+-    if not torch.cuda.is_available():
++        if torch.cuda.is_available():
++            return "cuda"
++        if _npu_count() > 0:
++            return "npu"
++        return "cpu"
++    if device.startswith("cuda"):
++        if not torch.cuda.is_available():
++            raise ValueError(
++                "CUDA was requested but is unavailable in the compute environment. Select CPU or fix GPU access."
++            )
++        if ":" in device and int(device.split(":", 1)[1]) >= torch.cuda.device_count():
++            raise ValueError(f"CUDA device is unavailable: {device}")
++        return device
++    npu_count = _npu_count()
++    if npu_count == 0:
+         raise ValueError(
+-            "CUDA was requested but is unavailable in the compute environment. Select CPU or fix GPU access."
++            "NPU was requested but torch.npu reports no devices. Source the CANN set_env.sh script or select CPU."
+         )
+-    if ":" in device and int(device.split(":", 1)[1]) >= torch.cuda.device_count():
+-        raise ValueError(f"CUDA device is unavailable: {device}")
++    if ":" in device and int(device.split(":", 1)[1]) >= npu_count:
++        raise ValueError(f"NPU device is unavailable: {device}")
+     return device
+ 
+ 
+diff --git a/opendde_harness/config/update_providers.py b/opendde_harness/config/update_providers.py
+index 1ccfc42..7ecb03c 100644
+--- a/opendde_harness/config/update_providers.py
++++ b/opendde_harness/config/update_providers.py
+@@ -690,6 +690,17 @@ async def _check_through_the_service(provider: str, config: Any, start: float, t
+ 
+     context = {"messages": [{"role": "user", "content": _TEST_PROMPT, "timestamp": 0}]}
+     options = {"maxTokens": _TEST_MAX_TOKENS}
++    # A model that always thinks (glm-5.3 behind the volce gateway refuses a
++    # request with thinking off) needs the probe to carry the row's declared
++    # level the way a turn's effort_for would, and headroom for the thinking
++    # budget to fit under maxTokens.
++    from opendde_harness.providers import model_id
++
++    row = model_id.row_for(config.providers, model_id.join(provider, model))
++    effort = getattr(row, "reasoning_effort", None)
++    if effort in {"minimal", "low", "medium", "high", "xhigh", "max"}:
++        options["reasoning"] = effort
++        options["maxTokens"] = max(_TEST_MAX_TOKENS, 512)
+     events = service.stream(provider, model, context, options)
+     try:
+         async with asyncio.timeout(timeout_s):
+diff --git a/opendde_harness/plugin/protein_design/servers/api.py b/opendde_harness/plugin/protein_design/servers/api.py
+index 9a216b2..3ef525e 100644
+--- a/opendde_harness/plugin/protein_design/servers/api.py
++++ b/opendde_harness/plugin/protein_design/servers/api.py
+@@ -73,9 +73,13 @@ def visible_cuda_devices() -> list[int]:
+     except ImportError:
+         return []
+     try:
+-        if not torch.cuda.is_available():
+-            return []
+-        return list(range(torch.cuda.device_count()))
++        if torch.cuda.is_available():
++            return list(range(torch.cuda.device_count()))
++        # Ascend NPU host: expose die 0 for the lease table; device strings
++        # become npu:N in with_leased_devices on this runtime.
++        if hasattr(torch, "npu") and torch.npu.is_available():
++            return [0]
++        return []
+     except (AssertionError, RuntimeError):
+         return []
+ 
+@@ -90,7 +94,12 @@ def with_leased_devices(operation: str, payload: dict[str, Any], devices: Sequen
+     if not devices:
+         return payload
+     payload = dict(payload)
+-    primary = f"cuda:{devices[0]}"
++    try:
++        import torch
++        _npu = hasattr(torch, "npu") and torch.npu.is_available()
++    except Exception:
++        _npu = False
++    primary = f"npu:{devices[0]}" if _npu else f"cuda:{devices[0]}"
+     if operation == "fold":
+         options = dict(payload.get("options") or {})
+         options["gpus"] = ",".join(str(index) for index in devices)
+diff --git a/opendde_harness/plugin/protein_design/servers/backends/soluble_mpnn.py b/opendde_harness/plugin/protein_design/servers/backends/soluble_mpnn.py
+index 57ed89f..a5a2e93 100644
+--- a/opendde_harness/plugin/protein_design/servers/backends/soluble_mpnn.py
++++ b/opendde_harness/plugin/protein_design/servers/backends/soluble_mpnn.py
+@@ -241,14 +241,24 @@ class SolubleMPNNClient:
+             if self.device.type == "cuda"
+             else []
+         )
++        npu_devices = (
++            [self.device.index if self.device.index is not None else int(torch.npu.current_device())]
++            if self.device.type == "npu" and hasattr(torch, "npu")
++            else []
++        )
+         # Sampling and backbone noise use upstream global RNGs; isolate concurrent requests.
+-        with _SAMPLING_LOCK, torch.random.fork_rng(devices=cuda_devices), torch.inference_mode():
++        with _SAMPLING_LOCK, torch.random.fork_rng(devices=cuda_devices + npu_devices), torch.inference_mode():
+             sampling_seed = seed if seed is not None else self.seed
+             if sampling_seed is None:
+                 sampling_seed = secrets.randbits(32)
+             torch.random.default_generator.manual_seed(sampling_seed)
+             for device_index in cuda_devices:
+                 torch.cuda.default_generators[device_index].manual_seed(sampling_seed)
++            if npu_devices:
++                try:
++                    torch.npu.manual_seed(sampling_seed)
++                except Exception:
++                    pass
+             features["randn"] = torch.randn((num_sequences, length), device=self.device)
+             result = self.model.sample(features)
+             mask = features["mask"] * features["chain_mask"]
+diff --git a/pyproject.toml b/pyproject.toml
+index 62b32d4..844c776 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -3,7 +3,7 @@ name = "opendde-harness"
+ version = "0.0.5"
+ readme = "README.md"
+ description = "OpenDDE Harness - antibody design harness: agent runtime, protein-design plugin, and compute service"
+-requires-python = ">=3.12"
++requires-python = ">=3.11"
+ license =  "Apache-2.0"
+ license-files = ["LICENSE", "LICENSES/*.txt"]
+ authors = [

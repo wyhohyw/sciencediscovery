@@ -1,0 +1,54 @@
+diff --git a/openfold/data/templates.py b/openfold/data/templates.py
+index 260f36e..fdba19a 100644
+--- a/openfold/data/templates.py
++++ b/openfold/data/templates.py
+@@ -85,8 +85,8 @@ TEMPLATE_FEATURES = {
+     "template_aatype": np.int64,
+     "template_all_atom_mask": np.float32,
+     "template_all_atom_positions": np.float32,
+-    "template_domain_names": np.object,
+-    "template_sequence": np.object,
++    "template_domain_names": object,
++    "template_sequence": object,
+     "template_sum_probs": np.float32,
+ }
+ 
+diff --git a/openfold/np/relax/utils.py b/openfold/np/relax/utils.py
+index f453d16..0f1dd85 100644
+--- a/openfold/np/relax/utils.py
++++ b/openfold/np/relax/utils.py
+@@ -79,7 +79,7 @@ def assert_equal_nonterminal_atom_types(
+     """Checks that pre- and post-minimized proteins have same atom set."""
+     # Ignore any terminal OXT atoms which may have been added by minimization.
+     oxt = residue_constants.atom_order["OXT"]
+-    no_oxt_mask = np.ones(shape=atom_mask.shape, dtype=np.bool)
++    no_oxt_mask = np.ones(shape=atom_mask.shape, dtype=bool)
+     no_oxt_mask[..., oxt] = False
+     np.testing.assert_almost_equal(
+         ref_atom_mask[no_oxt_mask], atom_mask[no_oxt_mask]
+diff --git a/openfold/np/residue_constants.py b/openfold/np/residue_constants.py
+index 2856e00..ba1a02f 100644
+--- a/openfold/np/residue_constants.py
++++ b/openfold/np/residue_constants.py
+@@ -1121,10 +1121,10 @@ def _make_rigid_transformation_4x4(ex, ey, translation):
+ # and an array with (restype, atomtype, coord) for the atom positions
+ # and compute affine transformation matrices (4,4) from one rigid group to the
+ # previous group
+-restype_atom37_to_rigid_group = np.zeros([21, 37], dtype=np.int)
++restype_atom37_to_rigid_group = np.zeros([21, 37], dtype=int)
+ restype_atom37_mask = np.zeros([21, 37], dtype=np.float32)
+ restype_atom37_rigid_group_positions = np.zeros([21, 37, 3], dtype=np.float32)
+-restype_atom14_to_rigid_group = np.zeros([21, 14], dtype=np.int)
++restype_atom14_to_rigid_group = np.zeros([21, 14], dtype=int)
+ restype_atom14_mask = np.zeros([21, 14], dtype=np.float32)
+ restype_atom14_rigid_group_positions = np.zeros([21, 14, 3], dtype=np.float32)
+ restype_rigid_group_default_frame = np.zeros([21, 8, 4, 4], dtype=np.float32)
+@@ -1280,7 +1280,7 @@ def make_atom14_dists_bounds(
+ 
+ restype_atom14_ambiguous_atoms = np.zeros((21, 14), dtype=np.float32)
+ restype_atom14_ambiguous_atoms_swap_idx = np.tile(
+-    np.arange(14, dtype=np.int), (21, 1)
++    np.arange(14, dtype=int), (21, 1)
+ )
+ 
+ 

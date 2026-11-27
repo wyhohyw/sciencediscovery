@@ -1,0 +1,150 @@
+diff --git a/opendde/config/schema.py b/opendde/config/schema.py
+index ffbe516..6672f56 100644
+--- a/opendde/config/schema.py
++++ b/opendde/config/schema.py
+@@ -18,12 +18,13 @@ from pydantic import BaseModel, ConfigDict
+ 
+ InferenceDtype = Literal["bf16", "fp32"]
+ INFERENCE_DTYPE_CHOICES: tuple[InferenceDtype, ...] = ("bf16", "fp32")
+-InferenceDevice = Literal["auto", "cpu", "cuda", "mps"]
++InferenceDevice = Literal["auto", "cpu", "cuda", "mps", "npu"]
+ INFERENCE_DEVICE_CHOICES: tuple[InferenceDevice, ...] = (
+     "auto",
+     "cpu",
+     "cuda",
+     "mps",
++    "npu",
+ )
+ TriangleKernel = Literal["auto", "cuequivariance", "torch"]
+ 
+diff --git a/opendde/model/sample_confidence.py b/opendde/model/sample_confidence.py
+index dffc246..9357e14 100644
+--- a/opendde/model/sample_confidence.py
++++ b/opendde/model/sample_confidence.py
+@@ -733,7 +733,12 @@ def calculate_chain_based_plddt(
+         atom_mask = token_mask[atom_to_token_idx]
+         sub_plddt = atom_plddt[:, atom_mask]
+         # MPS has no float64; fall back to float32 accumulation there.
+-        accum_dtype = torch.float32 if sub_plddt.device.type == "mps" else torch.float64
++        # Ascend NPU likewise has no native float64 support.
++        accum_dtype = (
++            torch.float32
++            if sub_plddt.device.type in ("mps", "npu")
++            else torch.float64
++        )
+         return sub_plddt.to(accum_dtype).mean(-1).to(atom_plddt.dtype)
+ 
+     batch_shape = atom_plddt.shape[:-1]
+diff --git a/opendde/utils/environment.py b/opendde/utils/environment.py
+index 8767931..f6c7f98 100644
+--- a/opendde/utils/environment.py
++++ b/opendde/utils/environment.py
+@@ -224,11 +224,16 @@ def select_torch_device(
+ 
+     cuda_available = torch.cuda.is_available()
+     _, mps_available = _probe_mps(torch)
++    npu_available = (
++        bool(torch.npu.is_available()) if hasattr(torch, "npu") else False
++    )
+     if requested_device == "auto":
+         if cuda_available:
+             requested_device = "cuda"
+         elif mps_available:
+             requested_device = "mps"
++        elif npu_available:
++            requested_device = "npu"
+         else:
+             requested_device = "cpu"
+ 
+@@ -256,6 +261,21 @@ def select_torch_device(
+             )
+         return torch.device(f"cuda:{local_rank}")
+ 
++    if requested_device == "npu":
++        if not npu_available:
++            raise RuntimeError(
++                "NPU was requested, but torch.npu.is_available() is false. "
++                "Install torch_npu, source the CANN set_env.sh script, or use "
++                "'--device cpu'."
++            )
++        device_count = torch.npu.device_count()
++        if local_rank < 0 or local_rank >= device_count:
++            raise RuntimeError(
++                f"NPU device index {local_rank} is unavailable; detected "
++                f"{device_count} NPU device(s)."
++            )
++        return torch.device(f"npu:{local_rank}")
++
+     return torch.device("cpu")
+ 
+ 
+diff --git a/opendde/utils/torch_utils.py b/opendde/utils/torch_utils.py
+index d918c6f..6cfa717 100644
+--- a/opendde/utils/torch_utils.py
++++ b/opendde/utils/torch_utils.py
+@@ -17,18 +17,32 @@ def _mps_autocast_available() -> bool:
+         return False
+ 
+ 
++def _npu_autocast_available() -> bool:
++    """Whether an NPU (Ascend torch_npu) autocast state exists to clear."""
++    try:
++        return bool(hasattr(torch, "npu") and torch.npu.is_available())
++    except Exception:
++        return False
++
++
+ @contextmanager
+ def disabled_autocast():
+     """Force FP32 inside the block on every accelerator that can autocast.
+ 
+     Regions that must stay FP32 historically guarded only CUDA autocast. The
+     Apple MPS backend keeps a separate autocast state, so a CUDA-only guard
+-    silently lets BF16 through there.
++    silently lets BF16 through there.  Ascend NPU (torch_npu) likewise keeps a
++    separate autocast state.
+     """
+     with ExitStack() as stack:
+         stack.enter_context(torch.amp.autocast("cuda", enabled=False))
+         if _mps_autocast_available():
+             stack.enter_context(torch.amp.autocast("mps", enabled=False))
++        if _npu_autocast_available():
++            try:
++                stack.enter_context(torch.amp.autocast("npu", enabled=False))
++            except Exception:
++                pass
+         yield
+ 
+ 
+diff --git a/runner/inference.py b/runner/inference.py
+index 8a16291..750da2d 100644
+--- a/runner/inference.py
++++ b/runner/inference.py
+@@ -16,6 +16,15 @@ from os.path import exists as opexists
+ from os.path import join as opjoin
+ from typing import Any, cast
+ 
++# Import RDKit before torch. On Ascend NPU hosts `import torch` auto-loads
++# torch_npu (CANN env), and rdkit's bundled libRDKit*.so crash with SIGSEGV in
++# their static initializers when dlopened after torch_npu (observed on 910C,
++# deterministic). Preloading rdkit first is a no-op on other platforms.
++try:  # soft failure: rdkit loads again later via opendde.data.core.ccd anyway
++    from rdkit.Chem import AllChem as _allchem_preload  # noqa: F401
++except Exception:
++    pass
++
+ import torch
+ import torch.distributed as dist
+ 
+@@ -1388,7 +1397,10 @@ class InferenceRunner(object):
+             "bf16": torch.bfloat16,
+         }[self.configs.dtype]
+ 
+-        if eval_precision == torch.float32 or self.device.type not in {"cuda", "mps"}:
++        if (
++            eval_precision == torch.float32
++            or self.device.type not in {"cuda", "mps", "npu"}
++        ):
+             enable_amp = nullcontext()
+         else:
+             enable_amp = torch.autocast(
