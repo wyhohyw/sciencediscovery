@@ -1107,6 +1107,8 @@ def _paths() -> dict:
 def _child_env() -> dict:
     """The environment for every OpenDDE child: resolved locations, and DEPS_DIR/pylib on PYTHONPATH."""
     env = os.environ.copy()
+    if env.get("OPENDDE_PROTREK_ENDPOINT"):
+        env["PROTREK_ENDPOINT"] = env["OPENDDE_PROTREK_ENDPOINT"]
     paths = _paths()
     env["ESM_MODEL_NAME"] = paths["esm"]
     env["SOLUBLE_MPNN_WEIGHTS"] = paths["soluble_weights"]
@@ -1305,6 +1307,153 @@ def environment_report() -> dict:
         return {"ran": True, "device": "npu", "checks": {}, "error": message[:300]}
 
 
+def artifact_directory(identifier: str) -> Path:
+    """Opaque, content-addressed artifacts inside this runner's session workspace."""
+    if len(identifier) != 64 or any(c not in "0123456789abcdef" for c in identifier):
+        raise ValueError("invalid CDR structure ID")
+    workspace = Path.cwd().resolve()
+    root = (workspace / ".evolve" / "cdr-artifacts").resolve()
+    if not root.is_relative_to(workspace):
+        raise ValueError("CDR artifact directory is outside the session workspace")
+    directory = root / identifier
+    if directory.resolve().parent != root:
+        raise ValueError("CDR structure is outside the artifact directory")
+    return directory
+
+
+def save_structure(candidate: dict, structure: Path, summary: dict, full: dict) -> str:
+    """Retain the complete complex and original confidence before temporary cleanup."""
+    content = structure.read_bytes()
+    manifest = {key: candidate.get(key) for key in (
+        "sequence", "target_sequence", "chain", "target_chain", "cdr_regions", "target_hotspots",
+    )}
+    identifier = hashlib.sha256(content + json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    directory = artifact_directory(identifier)
+    directory.mkdir(parents=True, exist_ok=True)
+    for filename, value in (("manifest.json", manifest), ("summary.json", summary), ("full.json", full)):
+        target = directory / filename
+        if target.is_symlink():
+            raise ValueError("CDR artifact must not be a symbolic link")
+        target.write_text(json.dumps(value), encoding="utf-8")
+    destination = directory / ("complex.cif" if structure.suffix.lower() == ".cif" else "complex.pdb")
+    if destination.is_symlink():
+        raise ValueError("CDR artifact must not be a symbolic link")
+    destination.write_bytes(content)
+    return identifier
+
+
+_ANALYSIS_WORKER = r'''
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, os.environ["OPENDDE_HARNESS_DIR"])
+
+def run(request):
+    name = request["analysis_tool"]
+    config = request
+    candidates = request.get("candidates") or []
+    if name == "analyze_evolution_tree":
+        from opendde_harness.plugin.protein_design.servers.backends.evolution_analysis import analyze_search_history
+        from opendde_harness.plugin.protein_design.servers.backends.foldmason import run_structural_tree
+        structural = run_structural_tree(request["history"], task_output=Path(request["analysis_root"]),
+            cycle=int(request.get("cycle", 0)), binder_chain_ids=[config["chain"]],
+            cdr_regions={config["chain"]: sorted({p for a,b in config["cdr_regions"] for p in range(a-1,b)})},
+            reflection_interval=int(request.get("reflection_interval", 20)), current_parent_id=None, minimize=True)
+        trees = {chain: v["tree_path"] for chain,v in (structural.get("chains") or {}).items() if v.get("tree_path")}
+        alignments = {chain: v["alignment_path"] for chain,v in (structural.get("chains") or {}).items() if v.get("alignment_path")}
+        result = analyze_search_history(request["history"], metric="objective", minimize=True,
+            tree_paths=trees, alignment_paths=alignments)
+        result["structural_analysis"] = structural
+        return {"available": True, "result": result}
+    if name.startswith("protrek_"):
+        from opendde_harness.plugin.protein_design.core.external import protrek_endpoint
+        if protrek_endpoint() is None:
+            return {"available": False, "reason": "ProTrek endpoint is not configured"}
+        from opendde_harness.plugin.protein_design.servers.backends.protrek import GRADIO_AVAILABLE, search_protrek_sequence, search_protrek_structure
+        if not GRADIO_AVAILABLE:
+            return {"available": False, "reason": "ProTrek client is missing from the model environment"}
+        if name == "protrek_sequence_search":
+            key = "sequence" if request["arguments"].get("entity") == "binder" else "target_sequence"
+            return {"available": True, "result": search_protrek_sequence(request[key])}
+        return {"available": True, "results": {c["candidate_id"]: search_protrek_structure(c["structure_path"], chain=config["chain"]) for c in candidates}}
+    if name == "analyze_current_cycle_structure":
+        from opendde_harness.plugin.protein_design.servers.backends.structure_analysis import run_plip_structure_analysis
+        return run_plip_structure_analysis([c["structure_path"] for c in candidates], 0,
+            [c["candidate_id"] for c in candidates], [config["chain"]], [config["target_chain"]],
+            request["output_dir"], timeout=min(60, max(1, int(request["tool_timeout_seconds"] / 3))))
+    if name == "analyze_epitope":
+        from opendde_harness.plugin.protein_design.core.gate import sequence_hotspot_residue_ids
+        from opendde_harness.plugin.protein_design.servers.backends.epitope_analysis import analyze_epitope, load_structure
+        groups = {"CDR" + str(i + 1): set(range(int(a) - 1, int(b))) for i, (a, b) in enumerate(config["cdr_regions"])}
+        return {"available": True, "results": {c["candidate_id"]: analyze_epitope(
+            c["structure_path"], [config["chain"]], [config["target_chain"]],
+            {config["chain"]: groups}, hotspots=sorted(sequence_hotspot_residue_ids(
+                load_structure(c["structure_path"]), {(config["target_chain"], int(p)-1) for p in config["target_hotspots"]},
+                [config["target_chain"]]))
+        ) for c in candidates}}
+    raise ValueError("unknown CDR analysis tool")
+
+try:
+    print(json.dumps(run(json.loads(sys.stdin.read())), default=lambda x: x.item() if hasattr(x, "item") else str(x)), flush=True)
+except Exception as error:
+    print(json.dumps({"available": False, "reason": str(error)[-1500:]}), flush=True)
+'''
+
+
+def analyze_tool(request: dict) -> dict:
+    allowed = {"protrek_sequence_search", "protrek_structure_search", "analyze_epitope",
+               "analyze_current_cycle_structure", "analyze_evolution_tree"}
+    if request.get("analysis_tool") not in allowed:
+        raise ValueError("unknown CDR analysis tool")
+    history_tool = request["analysis_tool"] == "analyze_evolution_tree"
+    selected = request.get("history") if history_tool else request.get("candidates")
+    selected = selected or []
+    if not isinstance(selected, list) or (not history_tool and len(selected) > 3):
+        raise ValueError("analysis accepts at most three candidates")
+    materialized = []
+    for candidate in selected:
+        if history_tool and not candidate.get("structure_id"):
+            materialized.append(candidate)
+            continue
+        directory = artifact_directory(str(candidate.get("structure_id") or ""))
+        manifest_path = directory / "manifest.json"
+        if manifest_path.is_symlink() or manifest_path.resolve().parent != directory.resolve():
+            raise ValueError("invalid CDR artifact manifest")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if candidate.get("sequence") != manifest.get("sequence"):
+            raise ValueError("structure does not belong to the selected candidate")
+        structure = directory / "complex.cif"
+        if not structure.is_file():
+            structure = directory / "complex.pdb"
+        if structure.resolve().parent != directory.resolve() or structure.is_symlink():
+            raise ValueError("invalid CDR structure artifact")
+        materialized.append({**candidate, "structure_path": str(structure)})
+    timeout = min(120.0, max(0.01, float(request.get("tool_timeout_seconds", 120))))
+    with tempfile.TemporaryDirectory(prefix="cdr-analysis-") as work:
+        script = Path(work) / "analysis.py"
+        script.write_text(_ANALYSIS_WORKER, encoding="utf-8")
+        try:
+            payload = {**request, "output_dir": work}
+            if history_tool:
+                payload["history"] = materialized
+                analysis_root = artifact_directory(str(request.get("run_key") or ""))
+                analysis_root.mkdir(parents=True, exist_ok=True)
+                payload["analysis_root"] = str(analysis_root)
+            else:
+                payload["candidates"] = materialized
+            completed = subprocess.run([_model_python(), str(script)],
+                input=json.dumps(payload),
+                capture_output=True, text=True, env=_child_env(), timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return {"available": False, "reason": "analysis exceeded its bounded runtime"}
+    if completed.returncode != 0:
+        return {"available": False, "reason": (completed.stderr or completed.stdout)[-1500:]}
+    lines = completed.stdout.splitlines()
+    result = json.loads(next((line for line in reversed(lines) if line.strip()), "{}"))
+    if not isinstance(result, dict):
+        raise ValueError("analysis returned no object")
+    return result
+
+
 def predict(candidate: dict) -> dict:
     paths = _paths()
     code = paths["fold_code"]
@@ -1333,7 +1482,7 @@ def predict(candidate: dict) -> dict:
             "-i", str(request), "-o", str(output),
             "--cycle", os.environ.get("OPENDDE_CYCLE", "10"),
             "--step", os.environ.get("OPENDDE_STEP", "200"),
-            "--sample", "1", "--seeds", "42",
+            "--sample", "1", "--seeds", str(int(candidate.get("seed", 42))),
             "--device", os.environ.get("OPENDDE_DEVICE", "npu"),
             "--load_checkpoint_path", checkpoint,
             "--use_msa", "false",
@@ -1356,16 +1505,13 @@ def predict(candidate: dict) -> dict:
         # Only the binder chain is needed for SolubleMPNN. Keeping the target
         # here made CRLF2-sized complexes exceed the runner argument limit.
         backbone = pack_backbone(backbone_pdb(atoms, {str(candidate.get("chain") or "D")}))
-        pll = None
-        esm_error = ""
-        try:
-            pll = esm_pll(str(candidate["sequence"]))
-        except Exception as error:
-            esm_error = str(error).splitlines()[-1][:300]
+        structure_id = save_structure(candidate, structures[0], summary, full)
+        # Missing PLL changes the optimization objective. Refuse the candidate;
+        # never mix structure-only and ESM2-weighted losses in one population.
+        pll = esm_pll(str(candidate["sequence"]))
         scored = score_fold(candidate, summary, full, structures[0], esm2_pll=pll)
         scored["backbone_pdb"] = backbone
-        if esm_error:
-            scored["esm2_error"] = esm_error
+        scored["structure_id"] = structure_id
         return scored
 
 
@@ -1376,6 +1522,12 @@ def main() -> None:
         return
     if candidate.get("probe") is True:
         emit(environment_report())
+        return
+    if candidate.get("analysis_tool"):
+        try:
+            emit({"tool_result": analyze_tool(candidate)})
+        except Exception as error:
+            emit({"tool_result": {"available": False, "reason": str(error)[-1500:]}})
         return
     sequence = candidate.get("sequence")
     if not isinstance(sequence, str) or not amino_acid(sequence):

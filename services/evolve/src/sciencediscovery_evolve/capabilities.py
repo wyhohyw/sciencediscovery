@@ -28,7 +28,8 @@ ESM_SKILL = "esm2-guided-mutation"
 MPNN_SKILL = "antibody-inverse-folding"
 
 #: Every candidate is folded, so these checks gate every skill, LLM-proposed ones included.
-FOLD_CHECKS = ("npu", "rdkit", "biotite", "fold_code", "fold_checkpoint")
+FOLD_CHECKS = ("npu", "rdkit", "biotite", "fold_code", "fold_checkpoint",
+               "esm_module", "esm_weights", "harness_modules")
 #: Checks each NPU-proposed skill needs on top of the fold.
 SKILL_CHECKS = {
     ESM_SKILL: ("esm_module", "esm_weights", "harness_modules"),

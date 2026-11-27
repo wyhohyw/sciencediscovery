@@ -67,6 +67,16 @@ class CompletionUsage:
     capped: bool
 
 
+@dataclass(frozen=True)
+class ChatRequest:
+    """One structured turn; credentials and accounting stay on the existing transport."""
+
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]]
+    max_tokens: int
+    timeout: float
+
+
 def completion_for(
     endpoint: str,
     token: str,
@@ -130,10 +140,10 @@ def completion_for(
         raise CompletionUnavailable("this run was not given model access")
 
     def complete(
-        prompt: str,
+        prompt: str | ChatRequest,
         sink: Optional[Callable[[CompletionUsage], None]] = None,
         on_failure: Optional[Callable[[str], None]] = None,
-    ) -> str:
+    ) -> Any:
         report = sink or on_usage
         # Already stopped: do not send the request at all. Every expansion the
         # search still has queued would otherwise fire a real, paid model call
@@ -144,8 +154,8 @@ def completion_for(
         # call runs on a daemon thread so it can be abandoned when the run
         # stops, and a thread-local set over there is invisible here.
         failures: list[str] = []
-        deadline = time.monotonic() + timeout
-        box: list[str] = []
+        deadline = time.monotonic() + (min(timeout, prompt.timeout) if isinstance(prompt, ChatRequest) else timeout)
+        box: list[Any] = []
         worker = threading.Thread(
             target=lambda: box.append(_call(prompt, report, failures, deadline)),
             daemon=True, name="evolve-completion",
@@ -167,15 +177,19 @@ def completion_for(
         return text
 
     def _call(
-        prompt: str,
+        prompt: str | ChatRequest,
         report: Optional[Callable[[CompletionUsage], None]],
         failures: list[str],
         deadline: float,
-    ) -> str:
+    ) -> Any:
+        structured = isinstance(prompt, ChatRequest)
+        ceiling = min(max_tokens, prompt.max_tokens) if structured else max_tokens
         body: dict[str, Any] = {
-            "max_tokens": max_tokens,
-            "messages": [{"content": prompt, "role": "user"}],
+            "max_tokens": ceiling,
+            "messages": prompt.messages if structured else [{"content": prompt, "role": "user"}],
         }
+        if structured and prompt.tools:
+            body["tools"] = prompt.tools
         if temperature is not None:
             body["temperature"] = temperature
         if thinking in {"enabled", "disabled"}:
@@ -246,10 +260,34 @@ def completion_for(
             if valid(total) and valid(completion) and total >= completion:
                 try:
                     report(CompletionUsage(total=int(total), completion=int(completion),
-                                           capped=completion >= max_tokens - 2))
+                                           capped=completion >= ceiling - 2))
                 except Exception:  # Accounting is best effort; retain the already-paid answer.
                     log.warning("completion usage could not be recorded")
+        if structured:
+            choices = body.get("choices") if isinstance(body, dict) else None
+            choice = choices[0] if isinstance(choices, list) and choices else {}
+            message = choice.get("message") if isinstance(choice, dict) else None
+            if not isinstance(message, dict):
+                return ""
+            # Never execute a truncated tool batch. Preserve protocol-specific assistant
+            # fields (e.g. response_items / signatures) for the next round.
+            if choice.get("finish_reason") == "length":
+                return {"_error": "the model turn was truncated", "_usage": body.get("usage") or {}}
+            return {**message, "_usage": body.get("usage") or {}}
         return _first_text(body)
+
+    def chat(
+        messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,
+        max_tokens: int = max_tokens, timeout: float = timeout,
+    ) -> dict[str, Any]:
+        failures: list[str] = []
+        result = complete(ChatRequest(messages, tools, max_tokens, timeout), on_failure=failures.append)
+        if not isinstance(result, dict):
+            raise CompletionUnavailable(failures[-1] if failures else "model turn stopped or returned no assistant message")
+        return result
+
+    # Keep all existing search engines' prompt -> text callable unchanged.
+    complete.chat = chat  # type: ignore[attr-defined]
 
     return complete
 

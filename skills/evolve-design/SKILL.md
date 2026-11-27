@@ -24,9 +24,10 @@ or a tree.
 sequence, not a program. The starting point is JSON with `sequence` (amino acids),
 `cdr_regions` (inclusive 1-based ranges), `chain` (default `D`), `target_sequence`, and
 `target_chain`. Optional `target_hotspots` lists 1-based positions on the target chain.
-`candidates_per_cycle` defaults to 8, the harness batch size. A value below 2 also
-generates 8, because 1 is only the top ESM-2 substitution. `expansions` is how many
-children are scored. Set
+`candidates_per_cycle` defaults to 8; a value of 1 is valid. `expansions` caps the
+number of committed children. `cycles` defaults to `ceil(expansions / candidates_per_cycle)`;
+failed cycles consume a cycle after `cycle_retry_limit` retries (default 2), without
+inventing a scored child. Set
 `algorithm` to `cdr` and `mode` to `npu_job`. `editableFields` is `["sequence"]` so the
 probe can damage that field; the engine itself only writes inside `cdr_regions`.
 `evaluatorSource` is the whole of `scripts/cdr_opendde_evaluator.py` in this skill. The
@@ -48,7 +49,8 @@ colleague's tree digest, or the install fails. Everything installs under `SD_DEP
 `/data1/gs_agent/sciencediscovery-deps`, a directory beside the colleague's OpenDDE tree
 and never inside it. A location resolves to the colleague's copy when it exists, and
 otherwise to the sibling install. A skill whose checks still fail is switched off for the
-run (weight 0) and the log says why. If the fold itself cannot run, or no skill can run,
+run (weight 0) and the log says why. ESM-2 scoring is required for every route, so
+missing ESM-2 or harness modules refuse the whole search. If the fold itself cannot run, or no skill can run,
 the search is refused with those reasons.
 
 One cycle picks one skill. Default `router_selection_strategy` is `agent`:
@@ -71,14 +73,32 @@ ranked substitution. Both model steps are child processes under
 `OPENDDE_PYTHON`, and each exits before the next step. Do not invent ESM or
 MPNN mutations in the chat. The fold is its own child process so rdkit loads before
 OpenDDE. The printed
-`score` is the negation of the VHH confidence loss plus `0.1` times the negated ESM-2
-pseudo-log-likelihood when that likelihood was measured. Higher is better. A missing
-likelihood leaves `esm2` omitted and does not fail the fold. A fold that finishes also
+`loss` is the VHH confidence loss minus `0.1` times the ESM-2 pseudo-log-likelihood;
+`score = -loss`, so higher is better. Missing or non-finite likelihood refuses the
+measurement; a structure-only score must never compete with the full objective. A fold that finishes also
 has to pass the 5 Å gate: more than half of the interface residues are CDR, and, when
 hotspots are given, CDR3 touches at least one. The last `cdr_regions` range is CDR3.
 A failed gate is `ran: true` with `gate_passed: false` and does not enter the population.
 A sequence that is not amino acids, or a fold that fails, is `ran: false` and does not
 enter the population.
+The model proxy runs bounded Analyze, Reflect and Quality role sessions, with pinned
+Harness skill text, system messages and validated structured outputs. Analyze runs once;
+Reflect can call current-cycle PLIP, epitope and run-history tools. Tool failures are
+reported as unavailable evidence. Complete complexes and confidence files are retained
+in the runner session workspace under `.evolve/cdr-artifacts/`; tools select current-run
+candidate IDs rather than arbitrary paths. Optional ProTrek searches use the configured
+`OPENDDE_PROTREK_ENDPOINT` (passed to `PROTREK_ENDPOINT` in the model environment).
+Reflection directives feed the next design. Quality failures retry the uncommitted cycle;
+quality verdicts and population constraints are committed as one batch. Public Harness
+developability evidence remains the documented stub.
+
+The JSON also supports `population_size`, `constrained_min_cdr_distance`,
+`constrained_max_position_reuse_fraction`, `constrained_max_mutation_reuse_fraction`,
+`quality_check_enabled`, `quality_check_threshold`, `parent_selection_strategy`, parent
+fitness temperature settings, `seed`, `cycle_schedule`, `bootstrap_full_redesign_cycles`,
+`stagnation_full_redesign_threshold`, and bounded phase time/token settings. See
+`docs/zh/developer-docs/evolve-cdr.v4.md` in the repository for the versioned contract.
+
 Do not start a resident OpenDDE service. Skip the dataset split and the PUCT/OpenEvolve
 search knobs. The checkpoints still happen: what is better (higher score), the JSON starting
 point, the cost from `get_evolve_budget` (the `cdr` ceiling, not the program-rewrite one),

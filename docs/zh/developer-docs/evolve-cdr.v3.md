@@ -1,5 +1,7 @@
 # CDR 序列搜索 v3
 
+后续阶段 agent 和搜索语义修正见 [v4](evolve-cdr.v4.md)。本页保留为历史设计。
+
 2026-11-25。在 [v2](evolve-cdr.v2.md) 上对齐同事 CRLF2 的搜索策略细节：技能路由、`cdr-full-redesign`、父代均匀混合。折叠公式、5 Å 门、固定长度和「没过门不进种群」与 v2 相同。仍不改 `/data1/gs_agent/opendde`。
 
 ## 相对 v2

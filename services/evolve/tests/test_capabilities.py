@@ -71,12 +71,12 @@ def test_a_complete_host_offers_every_skill():
     assert result.notes == ()
 
 
-def test_missing_esm_weights_turn_off_only_the_esm_skill_with_the_reason():
+def test_missing_esm_weights_refuse_the_shared_objective_with_the_reason():
     report = _with(_all_ok(), "esm_weights", False, "nothing at /weights/esm2/config.json")
 
     result = assess(report)
 
-    assert result.fold_ok is True
+    assert result.fold_ok is False
     assert set(result.unavailable) == {ESM_SKILL}
     assert "esm_weights: nothing at /weights/esm2/config.json" in result.unavailable[ESM_SKILL]
 
@@ -139,13 +139,13 @@ def test_a_missing_rdkit_or_biotite_refuses_the_fold():
 
 def test_preflight_switches_off_an_unavailable_skill_and_logs_why():
     seen, emit = _collector()
-    report = _with(_all_ok(), "esm_weights", False, "nothing at /weights/esm2/config.json")
+    report = _with(_all_ok(), "soluble_weights", False, "nothing at solublempnn.pt")
 
     config = _apply_preflight({"skill_weights": None}, report, True, emit)
 
-    assert config["skill_weights"][ESM_SKILL] == 0.0
-    assert config["skill_weights"][MPNN_SKILL] == DEFAULT_SKILL_WEIGHTS[MPNN_SKILL]
-    assert any("skill esm2-guided-mutation is off" in str(event) for event in seen)
+    assert config["skill_weights"][MPNN_SKILL] == 0.0
+    assert config["skill_weights"][ESM_SKILL] == DEFAULT_SKILL_WEIGHTS[ESM_SKILL]
+    assert any("skill antibody-inverse-folding is off" in str(event) for event in seen)
 
 
 def test_preflight_refuses_when_the_fold_cannot_run():
@@ -159,17 +159,13 @@ def test_preflight_refuses_when_no_skill_can_run_without_the_llm():
     report = _with(_all_ok(), "esm_weights", False, "no esm")
     report = _with(report, "soluble_weights", False, "no soluble")
 
-    with pytest.raises(_Refusal, match="no skill can run on this host"):
+    with pytest.raises(_Refusal, match="cannot fold a candidate"):
         _apply_preflight({"skill_weights": None}, report, False, _collector()[1])
 
 
-def test_the_llm_skills_keep_the_search_alive_when_both_npu_skills_are_off():
+def test_the_llm_cannot_bypass_a_missing_required_esm_objective():
     report = _with(_all_ok(), "esm_weights", False, "no esm")
     report = _with(report, "soluble_weights", False, "no soluble")
 
-    config = _apply_preflight({"skill_weights": None}, report, True, _collector()[1])
-
-    assert config["skill_weights"][POINT_SKILL] == DEFAULT_SKILL_WEIGHTS[POINT_SKILL]
-    assert config["skill_weights"][FULL_SKILL] == DEFAULT_SKILL_WEIGHTS[FULL_SKILL]
-    assert config["skill_weights"][ESM_SKILL] == 0.0
-    assert config["skill_weights"][MPNN_SKILL] == 0.0
+    with pytest.raises(_Refusal, match="cannot fold a candidate: esm_weights"):
+        _apply_preflight({"skill_weights": None}, report, True, _collector()[1])

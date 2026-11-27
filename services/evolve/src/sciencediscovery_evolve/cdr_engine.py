@@ -238,321 +238,275 @@ class CdrEngine:
         ))
 
     def _run_measured(
-        self,
-        spec: RunSpec,
-        emit: Emit,
-        should_stop: Callable[[], bool],
-        config: dict[str, Any],
-        measure: MeasureFn,
-        complete: CompleteFn | None = None,
+        self, spec: RunSpec, emit: Emit, should_stop: Callable[[], bool],
+        config: dict[str, Any], measure: MeasureFn, complete: CompleteFn | None = None,
     ) -> None:
-        """One cycle draws a skill, then folds the batch that skill produced."""
+        """A bounded cycle transaction: generate, fold, quality, then one population update."""
+        from .cdr_phases import CdrPhaseRunner
+        from .cdr_tools import CdrTools
+
         emit(events.search_started(spec.algorithm or self.name, spec.scorecard_hash))
-        rng = random.Random(int(spec.options.get("seed", 42)))
-        seed_payload = _payload(config, config["sequence"], [])
-        seed_reading = measure(seed_payload)
-        if seed_reading.get("runner_lost"):
+        config = {**config, "seed": _number({"seed": spec.options.get("seed", config.get("seed", 42))},
+                                            "seed", 42, 0, 2**32 - 1, integer=True)}
+        rng = random.Random(config["seed"])
+        tools = CdrTools(config, measure)
+        tools.run_key = _digest(spec.search_id)
+        phases = None
+        if complete is not None and callable(getattr(complete, "chat", None)):
+            phases = CdrPhaseRunner(complete.chat, tools, config, should_stop=should_stop, emit=emit)
+            complete = phases
+        try:
+            analysis = _analyze(complete, config) if complete is not None else "none"
+        except Exception as error:
+            emit(events.log("error", f"CDR analyze failed: {error}"))
+            emit(events.search_finished("stopped" if should_stop() else "failed", None, 0))
+            return
+        if should_stop():
+            emit(events.search_finished("stopped", None, 0))
+            return
+        seed_reading = measure(_payload(config, config["sequence"], []))
+        if seed_reading.get("runner_lost") or tools.runner_lost:
             emit(events.log("error", str(seed_reading.get("error") or "runner lost")))
-            emit(events.search_finished(
-                "failed", None, 0, stop_reason="runner_lost", expansions_planned=spec.expansions,
-            ))
+            emit(events.search_finished("failed", None, 0, stop_reason="runner_lost", expansions_planned=spec.expansions))
             return
         seed_score = seed_reading.get("score")
-        seed_ok = bool(seed_reading.get("ok"))
+        seed_measured = _measured(bool(seed_reading.get("ok")), seed_score)
         seed_error = str(seed_reading.get("error") or "")
-        seed_measured = _measured(seed_ok, seed_score if isinstance(seed_score, (int, float)) else None)
         seed_admitted = seed_measured and not seed_error
-        seed = _Member(
-            index=0, sequence=config["sequence"],
-            score=float(seed_score) if seed_measured else None,
-            backbone=seed_reading.get("backbone_pdb") if isinstance(seed_reading.get("backbone_pdb"), str) else None,
-            metrics=seed_reading.get("metrics") or {},
-            gate=seed_error,
-        )
-        emit(events.seeded(
-            0, float(seed_score) if seed_measured else None,
-            code_hash=_digest(seed.sequence),
-            code_chars=len(seed.sequence),
-        ))
+        seed = _Member(index=0, sequence=config["sequence"], score=float(seed_score) if seed_measured else None,
+            backbone=seed_reading.get("backbone_pdb"), metrics=seed_reading.get("metrics") or {}, gate=seed_error)
+        emit(events.seeded(0, seed.score, code_hash=_digest(seed.sequence), code_chars=len(seed.sequence)))
         if seed_measured:
-            emit(events.evaluated(0, float(seed_score), {}, gate_score=float(seed_score)))
+            emit(events.evaluated(0, seed.score, {}, gate_score=seed.score))
         if not seed_admitted:
             emit(events.log("warn", seed_error or "the starting sequence was not scored"))
-
-        # Only sequences that pass the gate are population members. A seed that
-        # fails the gate is the first working parent instead, as in the harness.
-        population: list[_Member] = [seed] if seed_admitted else []
-        seed_regions = _cdr_slices(config["sequence"], config["cdr_regions"])
-        working: _Member | None = seed if seed_measured and not seed_admitted else None
-        tried = {config["sequence"]}
+        population = [seed] if seed_admitted else []
+        reference = _cdr_slices(seed.sequence, config["cdr_regions"]) if seed_admitted else None
+        working = seed if seed_measured and not seed_admitted else None
+        tried = {seed.sequence}
         best = 0 if seed_admitted else None
-        produced = 0
-        node = 0
-        cycle = 0
-        status = "succeeded"
-        reason = "max_iters"
-        # Inverse folding rewrites the CDR. The 1–3 cap stays on the chat path.
-        accepting = dict(config)
-        accepting["mutation_max"] = max(int(config["mutation_max"]), len(config["mutable"]))
-        lost = False
-        outcomes: list[dict[str, Any]] = []
-        tries: list[dict[str, Any]] = []
+        produced, node, physical = 0, 0, 1
+        status, reason = "succeeded", "max_iters"
+        outcomes: list[dict] = []
+        tries: list[dict] = []
+        history = [{"candidate_id": "node0", "parent_id": None, "sequence": seed.sequence,
+            "objective": -seed.score if seed.score is not None else None, "metrics": seed.metrics,
+            "mutations": [], "structure_id": seed_reading.get("structure_id"), "gate": seed.gate,
+            "retained": seed_admitted}]
+        tools.history = history
         reflection = "none"
-        folded_cycle: tuple[int, str, int] | None = None
-        attempt = 0
-        analysis = _analyze(complete, config) if complete is not None else "none"
         streak = 0
-        seen_best: float | None = None
-        cycles = max(1, -(-spec.expansions // _batch(config, spec, 0)))
+        cycles = config.get("cycles") or max(1, -(-spec.expansions // _batch(config, spec, 0)))
+        defaults = dict(config)
+        if any(stage["end_cycle"] >= cycles for stage in config["cycle_schedule"]):
+            raise _Refusal("cycle_schedule end_cycle must be inside the run's cycle budget")
 
-        def record(
-            parent: _Member, reading: dict[str, Any], mutations: list, *,
-            budget=accepting, verdict: bool | None = None,
-        ) -> None:
-            nonlocal node, produced, best, lost, status, reason, working
-            if reading.get("runner_lost"):
-                # The runner never ran this candidate, so it does not spend an expansion.
-                lost = True
-                status, reason = "failed", "runner_lost"
-                emit(events.log("error", str(reading.get("error") or "the runner was lost")))
-                return
-            node += 1
-            produced += 1
-            emit(events.selected(parent.index, [{"nodeIndex": parent.index, "visits": parent.visits}]))
-            if reading.get("empty") or not isinstance(mutations, list):
-                emit(events.expanded(
-                    node, parent.index, parent.depth + 1, None, False,
-                    change_summary="no mutations",
-                    error=str(reading.get("error") or "the model returned no CDR mutations"),
-                ))
-                emit(events.merged(node, False, "no mutations", category="candidate-failed"))
-                return
-            child, summary, error = _apply(parent.sequence, budget, mutations)
-            reported = reading.get("sequence")
-            if child is None or (isinstance(reported, str) and reported != child):
-                emit(events.expanded(
-                    node, parent.index, parent.depth + 1, None, False,
-                    change_summary=summary, error=error or "the folded sequence does not match the mutations",
-                ))
-                emit(events.merged(node, False, error or "rejected", category="constraint-violated"))
-                return
-            tried.add(child)
-            value = reading.get("score")
-            why = str(reading.get("error") or "")
-            admitted = _publish(
-                emit, node, parent.index, parent.depth + 1, summary, _digest(child), len(child),
-                bool(reading.get("ok")), value if isinstance(value, (int, float)) else None, why,
-            )
-            if outcomes and isinstance(value, (int, float)):
-                outcomes[-1]["scores"].append(round(float(value), 4))
-            tries.append({
-                "node": node, "parent": parent.index, "summary": summary,
-                "score": round(float(value), 4) if isinstance(value, (int, float)) else None,
-                "gate": why, "metrics": reading.get("metrics") or {},
-            })
-            candidate = _Member(
-                index=node, sequence=child, score=value, mutations=mutations,
-                backbone=reading.get("backbone_pdb") if isinstance(reading.get("backbone_pdb"), str) else None,
-                depth=parent.depth + 1,
-                metrics=reading.get("metrics") or {},
-                gate=why,
-                summary=summary,
-            )
-            if not admitted and _measured(bool(reading.get("ok")), value if isinstance(value, (int, float)) else None):
-                # Measured but refused by the contact gate: it may still be the working parent.
-                working = _prefer_working(candidate, working)
-            if admitted and verdict is False:
-                admitted = False
-                why = "quality check did not pass"
-            if not admitted:
-                emit(events.merged(node, False, why or "not scored", category="candidate-failed"))
-                return
-            if outcomes:
-                outcomes[-1]["admitted"] += 1
-            population.append(candidate)
-            kept, actions = _retain(population, config, seed_regions)
-            population[:] = [member for member in population if member.index in kept]
-            if node in kept:
-                emit(events.merged(node, True, "entered the population"))
-            else:
-                emit(events.merged(node, False, actions.get(node, "not retained"), category="candidate-failed"))
-            # The best of the survivors, as the harness reads it after each update.
-            best = max(population, key=lambda member: member.score).index if population else None
-
-        while produced < spec.expansions and not lost:
-            if should_stop():
-                status, reason = "stopped", "stopped"
+        for cycle in range(cycles):
+            if produced >= spec.expansions or should_stop():
+                if should_stop():
+                    status, reason = "stopped", "stopped"
                 break
-            top = max((member.score for member in population if member.score is not None), default=None)
-            # A retried cycle never committed, so it does not count as a cycle
-            # without improvement either.
-            if attempt == 0:
-                if outcomes:
-                    streak = 0 if top is not None and (seen_best is None or top > seen_best) else streak + 1
-                seen_best = top
-            if folded_cycle is not None:
-                # As the harness: reflect only when (cycle + 1) % reflection_interval == 0.
-                # Other cycles keep the latest reflection, which the harness also keeps.
-                if complete is not None and (folded_cycle[0] + 1) % config["reflection_interval"] == 0:
-                    reflection = _reflect(complete, folded_cycle[0], folded_cycle[1], tries[folded_cycle[2]:])
-                folded_cycle = None
+            config = _cycle_config(defaults, cycle)
+            config["seed"] = defaults["seed"]
+            tools.config = config
+            tools.cycle = cycle
+            if phases is not None:
+                phases.config = config
             if population:
-                parent = _select(
-                    population,
-                    _temperature(cycle, cycles),
-                    rng,
-                    float(config.get("parent_fitness_uniform_fraction") or DEFAULT_UNIFORM_FRACTION),
-                )
-            else:
-                # Nothing has passed the gate yet. The harness then breeds from the working parent.
-                parent = working if working is not None else seed
-            parent.visits += 1
-            width = _batch(config, spec, produced)
-            skill = _choose_skill(
-                complete,
-                42 + cycle,
-                cycle,
-                bool(parent.backbone),
-                config.get("skill_weights"),
-                chat_ok=complete is not None,
-                strategy=str(config.get("router_selection_strategy") or DEFAULT_ROUTER_STRATEGY),
-                state={
-                    "parent": {"score": parent.score, "sequence": parent.sequence},
-                    "best": top,
-                    "streak": streak,
-                    "outcomes": outcomes,
-                },
-            )
-            outcomes.append({"cycle": cycle, "skill": skill, "scores": [], "admitted": 0})
-            design_state = {
-                "analysis": analysis,
-                "best": top,
-                "streak": streak,
-                "reflection": reflection,
-                "tries": tries,
-                "working": None if working is None else {
-                    "sequence": working.sequence, "score": working.score,
-                    "metrics": working.metrics, "gate": working.gate,
-                },
-                "population": [
-                    {
-                        "node": member.index, "score": member.score,
-                        "depth": member.depth, "summary": member.summary,
-                    }
-                    for member in sorted(
-                        (item for item in population if item.score is not None),
-                        key=lambda item: -item.score,
-                    )
-                ],
-            }
-            folded_cycle = (cycle, skill, len(tries))
-            emit(events.log("info", f"cycle {cycle} drew {skill} on node {parent.index}"))
-            if skill in CHAT_SKILLS and complete is not None:
-                budget = dict(config)
-                if skill == FULL_SKILL:
-                    budget["mutation_min"] = 1
-                    budget["mutation_max"] = max(1, len(config["mutable"]))
-                refused = ""
-                try:
-                    proposals = (
-                        _proposals_full(complete, config, parent, width, design_state)
-                        if skill == FULL_SKILL
-                        else _proposals(complete, config, parent, width, design_state)
-                    )
-                except _Refusal as refusal:
-                    proposals, refused = [], str(refusal)
-                # Fold the whole batch first, then one quality check over it, as the harness
-                # cycle does. Only then are the folds recorded, in proposal order.
-                batch: list[tuple[list, dict[str, Any]]] = []
-                children: set[str] = set()
-                for mutations in proposals:
-                    if produced + len(batch) >= spec.expansions or lost:
-                        break
-                    if batch and should_stop():
-                        status, reason = "stopped", "stopped"
-                        break
-                    child, _summary, _error = _apply(parent.sequence, budget, mutations)
-                    if child is None or child in tried or child in children:
-                        continue
-                    children.add(child)
-                    reading = measure(_payload(config, child, mutations))
-                    reading.setdefault("sequence", child)
-                    batch.append((mutations, reading))
-                    if reading.get("runner_lost"):
-                        break
-                verdicts, quality_error = _quality_verdicts(
-                    complete, analysis, [reading for _m, reading in batch], exempt=skill == FULL_SKILL,
-                )
-                if quality_error:
-                    emit(events.log("warn", f"cycle {cycle} quality check failed: {quality_error}"))
-                for index, (mutations, reading) in enumerate(batch):
-                    record(parent, reading, mutations, budget=budget, verdict=verdicts[index])
-                folded = len(batch)
-                if folded == 0 and not lost:
-                    why = refused or "the model returned no new CDR mutations"
-                    if attempt < CYCLE_RETRY_LIMIT:
-                        # Nothing was folded, so the cycle has not committed. The harness
-                        # retries it from parent selection instead of charging the budget.
-                        attempt += 1
-                        folded_cycle = None
-                        outcomes.pop()
-                        emit(events.log("warn", f"cycle {cycle} retry {attempt}: {why}"))
-                        continue
-                    record(parent, {"empty": True, "error": why}, [], budget=budget)
-                cycle += 1
-                attempt = 0
-                continue
-            attempt = 0
-            payload = _payload(config, parent.sequence, [])
-            payload["propose"] = True
-            payload["skill"] = skill if skill in {ESM_SKILL, MPNN_SKILL} else ESM_SKILL
-            payload["num_sequences"] = width
-            payload["cycle"] = cycle
-            payload["proposal_seed"] = 42 + cycle
-            payload["excluded_sequences"] = sorted(tried)
-            cycle += 1
-            if parent.backbone:
-                payload["parent_backbone_pdb"] = parent.backbone
-            reading = measure(payload)
-            if reading.get("runner_lost"):
-                record(parent, reading, [])
-                continue
-            pending = _pending_folds(reading)
-            if not pending:
-                record(parent, reading if reading.get("empty") else {
-                    "empty": True,
-                    "error": reading.get("error") or "the model returned no CDR mutations",
-                }, [])
-                continue
-            # The job already folded the first sequence; the rest of its batch folds here.
-            reading.setdefault("sequence", pending[0]["sequence"])
-            batch = [(pending[0]["mutations"], reading)]
-            for item in pending[1:]:
-                if produced + len(batch) >= spec.expansions or lost:
-                    break
+                kept, _actions = _retain(population, config, reference or [])
+                population = [m for m in population if m.index in kept]
+            top = max((m.score for m in population), default=None)
+            committed = False
+            for attempt in range(config["cycle_retry_limit"] + 1):
                 if should_stop():
                     status, reason = "stopped", "stopped"
                     break
-                measured = measure(_payload(config, item["sequence"], item["mutations"]))
-                measured.setdefault("sequence", item["sequence"])
-                batch.append((item["mutations"], measured))
-                if measured.get("runner_lost"):
-                    break
-            verdicts, quality_error = _quality_verdicts(
-                complete, analysis, [item for _m, item in batch], exempt=False,
-            )
-            if quality_error:
-                emit(events.log("warn", f"cycle {cycle} quality check failed: {quality_error}"))
-            for index, (mutations, item) in enumerate(batch):
-                record(parent, item, mutations, verdict=verdicts[index])
-        emit(events.search_finished(
-            status, best, produced,
-            stop_reason=reason, expansions_planned=spec.expansions,
-        ))
+                width = _batch(config, spec, produced)
+                parent = working or seed
+                skill = "none"
+                batch: list[tuple[list, dict]] = []
+                try:
+                    if population:
+                        parent = _choose_parent(population, config, cycle, cycles, rng, complete)
+                    parent.visits += 1
+                    skill = _choose_skill(complete, config["seed"], cycle, bool(parent.backbone),
+                        config.get("skill_weights"), chat_ok=complete is not None,
+                        strategy=config["router_selection_strategy"],
+                        state={"parent": {"score": parent.score, "sequence": parent.sequence},
+                               "best": top, "streak": streak, "outcomes": outcomes})
+                    if complete is not None and (cycle < config["bootstrap_full_redesign_cycles"] or
+                            (config["stagnation_full_redesign_threshold"] > 0 and
+                             streak >= config["stagnation_full_redesign_threshold"])):
+                        skill = FULL_SKILL
+                    emit(events.log("info", f"cycle {cycle} drew {skill} on node {parent.index}"))
+                    state = {"analysis": analysis, "best": top, "streak": streak, "reflection": reflection,
+                        "tries": tries, "working": None if working is None else {
+                            "sequence": working.sequence, "score": working.score, "metrics": working.metrics, "gate": working.gate},
+                        "population": [{"node": m.index, "score": m.score, "depth": m.depth, "summary": m.summary}
+                                       for m in sorted(population, key=lambda m: -m.score)]}
+                    budget = dict(config)
+                    if skill != POINT_SKILL:
+                        budget["mutation_max"] = max(1, len(config["mutable"]))
+                    if skill in CHAT_SKILLS and complete is not None:
+                        proposals = (_proposals_full(complete, config, parent, width, state) if skill == FULL_SKILL
+                                     else _proposals(complete, config, parent, width, state))
+                        children: set[str] = set()
+                        for mutations in proposals:
+                            if produced + len(batch) >= spec.expansions or should_stop():
+                                break
+                            child, _summary, _error = _apply(parent.sequence, budget, mutations)
+                            if child is None or child in tried or child in children:
+                                continue
+                            children.add(child)
+                            reading = measure(_payload(config, child, mutations))
+                            physical += 1
+                            reading.setdefault("sequence", child)
+                            batch.append((mutations, reading))
+                            if reading.get("runner_lost"):
+                                break
+                    else:
+                        payload = {**_payload(config, parent.sequence, []), "propose": True, "skill": skill,
+                            "num_sequences": width, "cycle": cycle, "proposal_seed": config["seed"] + cycle,
+                            "excluded_sequences": sorted(tried)}
+                        if parent.backbone:
+                            payload["parent_backbone_pdb"] = parent.backbone
+                        reading = measure(payload)
+                        physical += 1
+                        if reading.get("runner_lost"):
+                            batch = [([], reading)]
+                        else:
+                            pending = _pending_folds(reading)
+                            if pending:
+                                reading.setdefault("sequence", pending[0]["sequence"])
+                                batch = [(pending[0]["mutations"], reading)]
+                                for item in pending[1:width]:
+                                    if should_stop():
+                                        break
+                                    measured = measure(_payload(config, item["sequence"], item["mutations"]))
+                                    physical += 1
+                                    measured.setdefault("sequence", item["sequence"])
+                                    batch.append((item["mutations"], measured))
+                                    if measured.get("runner_lost"):
+                                        break
+                            elif not reading.get("empty") and reading.get("error"):
+                                raise _Refusal(str(reading["error"]))
+                    if should_stop():
+                        status, reason = "stopped", "stopped"
+                        break
+                    if tools.runner_lost or any(r.get("runner_lost") for _m, r in batch):
+                        status, reason = "failed", "runner_lost"
+                        break
+                    if not batch:
+                        raise _Refusal("the model returned no new CDR mutations")
+                    if not any(_measured(bool(r.get("ok")), r.get("score")) for _m, r in batch):
+                        raise _FoldBatchFailed("no candidate in the fold batch was scored")
+                    verdicts, quality_error = _quality_verdicts(complete, analysis, [r for _m, r in batch],
+                        exempt=skill == FULL_SKILL, enabled=config["quality_check_enabled"],
+                        threshold=config["quality_check_threshold"])
+                    if tools.runner_lost:
+                        status, reason = "failed", "runner_lost"
+                        break
+                    if should_stop():
+                        status, reason = "stopped", "stopped"
+                        break
+                    if quality_error:
+                        raise _Refusal("quality check failed: " + quality_error)
+                except Exception as error:
+                    label = f"retry {attempt + 1}" if attempt < config["cycle_retry_limit"] else "failed"
+                    emit(events.log("warn", f"cycle {cycle} {label}: {error}; physical folds={physical}"))
+                    if attempt == config["cycle_retry_limit"]:
+                        emit(events.log("warn", f"cycle {cycle} skipped before population commit"))
+                        if isinstance(error, _FoldBatchFailed) or not config["skip_failed_cycles"]:
+                            status, reason = "failed", "cycle_failed"
+                    continue
+
+                # Commit point: tried/history/population are unchanged until all phases succeeded.
+                admitted: list[_Member] = []
+                rejected: dict[int, str] = {}
+                cycle_history: list[dict] = []
+                for index, (mutations, reading) in enumerate(batch):
+                    node += 1
+                    produced += 1
+                    emit(events.selected(parent.index, [{"nodeIndex": parent.index, "visits": parent.visits}]))
+                    child, summary, error = _apply(parent.sequence, budget, mutations)
+                    if child is None or reading.get("sequence", child) != child:
+                        emit(events.expanded(node, parent.index, parent.depth + 1, None, False,
+                            change_summary=summary, error=error or "folded sequence does not match mutations"))
+                        rejected[node] = error or "folded sequence does not match mutations"
+                        continue
+                    tried.add(child)
+                    value, why = reading.get("score"), str(reading.get("error") or "")
+                    eligible = _publish(emit, node, parent.index, parent.depth + 1, summary,
+                        _digest(child), len(child), bool(reading.get("ok")), value, why)
+                    member = _Member(index=node, sequence=child, score=value,
+                        mutations=mutations, backbone=reading.get("backbone_pdb"), depth=parent.depth + 1,
+                        metrics=reading.get("metrics") or {}, gate=why, summary=summary)
+                    if not eligible and _measured(bool(reading.get("ok")), value):
+                        working = _prefer_working(member, working)
+                    if eligible and verdicts[index] is False:
+                        eligible, why = False, "quality check did not pass"
+                    record = {"node": node, "parent": parent.index, "summary": summary, "score": value,
+                        "candidate_id": f"node{node}", "parent_id": f"node{parent.index}",
+                        "sequence": child, "objective": -value if _measured(bool(reading.get("ok")), value) else None,
+                        "metrics": member.metrics, "mutations": summary.split(), "gate": why,
+                        "quality_passed": verdicts[index], "structure_id": reading.get("structure_id")}
+                    tries.append(record)
+                    cycle_history.append(record)
+                    if eligible:
+                        admitted.append(member)
+                    else:
+                        rejected[node] = why or "not scored"
+                if reference is None and admitted:
+                    reference = _cdr_slices(max(admitted, key=lambda m: m.score).sequence, config["cdr_regions"])
+                merged = [*population, *admitted]
+                kept, actions = _retain(merged, config, reference or [])
+                population = [m for m in merged if m.index in kept]
+                for item in history + cycle_history:
+                    item["retained"] = int(item["candidate_id"][4:]) in kept
+                decisions = {member.index: (member.index in kept, actions[member.index]) for member in admitted}
+                decisions.update({index: (False, why) for index, why in rejected.items()})
+                for index, (accepted, why) in sorted(decisions.items()):
+                    emit(events.merged(index, accepted, why, **({} if accepted else {"category": "candidate-failed"})))
+                best = max(population, key=lambda m: m.score).index if population else None
+                after = max((m.score for m in population), default=None)
+                streak = 0 if after is not None and (top is None or after > top) else streak + 1
+                outcomes.append({"cycle": cycle, "skill": skill,
+                    "scores": [r.get("score") for _m, r in batch if _measured(bool(r.get("ok")), r.get("score"))],
+                    "admitted": len(admitted)})
+                history.extend(cycle_history)
+                tools.current = cycle_history
+                if phases is not None:
+                    phases.context = {"best": next((h for h in history if h["candidate_id"] == f"node{best}"), {}),
+                                      "quality": {h["candidate_id"]: h["quality_passed"] for h in cycle_history}}
+                committed = True
+                if complete is not None and (cycle + 1) % config["reflection_interval"] == 0:
+                    for reflection_attempt in range(config["cycle_retry_limit"] + 1):
+                        if should_stop():
+                            break
+                        try:
+                            reflection = _reflect(complete, cycle, skill, cycle_history)
+                            break
+                        except Exception as error:
+                            emit(events.log("warn", f"cycle {cycle} reflection retry {reflection_attempt}: {error}"))
+                break
+            if status != "succeeded" or tools.runner_lost:
+                if tools.runner_lost:
+                    status, reason = "failed", "runner_lost"
+                break
+            if not committed:
+                streak += 1
+        if should_stop() and status == "succeeded":
+            status, reason = "stopped", "stopped"
+        emit(events.log("info", f"CDR finished: physical folds={physical}, committed candidates={produced}"))
+        emit(events.search_finished(status, best, produced, stop_reason=reason, expansions_planned=spec.expansions))
 
 
 class _Refusal(Exception):
     pass
+
+
+class _FoldBatchFailed(_Refusal):
+    """All physical folds failed; retries exhausted must fail even in skip mode."""
 
 
 def _config(baseline: str) -> dict[str, Any]:
@@ -572,6 +526,8 @@ def _config(baseline: str) -> dict[str, Any]:
     for region in regions:
         if not isinstance(region, list) or len(region) != 2:
             raise _Refusal("each cdr_regions entry is [start, end]")
+        if any(type(position) is not int for position in region):
+            raise _Refusal("CDR positions must be integers")
         start, end = int(region[0]), int(region[1])
         if start < 1 or end > len(sequence) or start > end:
             raise _Refusal("a CDR range falls outside the sequence")
@@ -586,7 +542,7 @@ def _config(baseline: str) -> dict[str, Any]:
     ):
         raise _Refusal("target_hotspots must be 1-based positions on the target sequence")
     chain = str(parsed.get("chain") or "D")
-    return {
+    config = {
         "sequence": sequence,
         "chain": chain,
         "target_sequence": target,
@@ -604,25 +560,152 @@ def _config(baseline: str) -> dict[str, Any]:
         ),
         "reflection_interval": _reflection_interval(parsed.get("reflection_interval")),
     }
+    config["candidates_per_cycle"] = _number(parsed, "candidates_per_cycle", 8, 1, 10000, integer=True)
+    for name, default, lower, upper in (
+        ("population_size", 20, 1, 10000), ("cycle_retry_limit", 2, 0, 5),
+        ("seed", 42, 0, 2**32 - 1), ("phase_token_budget", 65536, 1, 1000000),
+        ("bootstrap_full_redesign_cycles", 0, 0, 100000),
+        ("stagnation_full_redesign_threshold", 0, 0, 100000),
+    ):
+        config[name] = _number(parsed, name, default, lower, upper, integer=True)
+    for name, default, lower, upper in (
+        ("constrained_min_cdr_distance", 0.05, 0, 1),
+        ("constrained_max_position_reuse_fraction", 0.75, 1e-12, 1),
+        ("constrained_max_mutation_reuse_fraction", 0.30, 1e-12, 1),
+        ("quality_check_threshold", 0.7, 0, 1),
+        ("parent_fitness_temperature_start", 1.0, 1e-12, 1000),
+        ("parent_fitness_temperature_end", 0.2, 1e-12, 1000),
+        ("phase_timeout_seconds", 300, 0.01, 3600),
+    ):
+        config[name] = _number(parsed, name, default, lower, upper)
+    for name in ("cycles",):
+        config[name] = _number(parsed, name, None, 1, 100000, integer=True) if name in parsed else None
+    config["parent_fitness_temperature"] = (_number(parsed, "parent_fitness_temperature", None, 1e-12, 1000)
+                                               if parsed.get("parent_fitness_temperature") is not None else None)
+    enabled = parsed.get("quality_check_enabled", True)
+    if not isinstance(enabled, bool):
+        raise _Refusal("quality_check_enabled must be boolean")
+    config["quality_check_enabled"] = enabled
+    if not isinstance(parsed.get("skip_failed_cycles", True), bool):
+        raise _Refusal("skip_failed_cycles must be boolean")
+    config["skip_failed_cycles"] = parsed.get("skip_failed_cycles", True)
+    strategy = parsed.get("parent_selection_strategy", "fitness")
+    if strategy not in {"fitness", "greedy", "uniform", "llm"}:
+        raise _Refusal("parent_selection_strategy must be fitness, greedy, uniform or llm")
+    config["parent_selection_strategy"] = strategy
+    config["cycle_schedule"] = _schedule(parsed.get("cycle_schedule", []), config)
+    config["target_name"] = str(parsed.get("target_name") or "configured target")
+    return config
+
+
+def _number(data: dict, name: str, default: Any, lower: float, upper: float, *, integer=False) -> Any:
+    value = data.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise _Refusal(f"{name} must be a finite number")
+    if integer and not isinstance(value, int):
+        raise _Refusal(f"{name} must be an integer")
+    if not lower <= value <= upper:
+        raise _Refusal(f"{name} must be between {lower} and {upper}")
+    return value
+
+
+def _schedule(stages: Any, config: dict) -> list[dict]:
+    if not isinstance(stages, list):
+        raise _Refusal("cycle_schedule must be a list")
+    result, previous = [], -1
+    allowed = {"start_cycle", "end_cycle", "num_sequences", "population_size", "router_skill_probabilities",
+               "router_selection_strategy", "parent_fitness_temperature"}
+    for raw in stages:
+        if not isinstance(raw, dict) or set(raw) - allowed:
+            raise _Refusal("unsupported cycle_schedule stage fields")
+        stage = dict(raw)
+        start = _number(stage, "start_cycle", None, 0, 100000, integer=True)
+        end = _number(stage, "end_cycle", None, start, 100000, integer=True)
+        if start <= previous or (config.get("cycles") and end >= config["cycles"]):
+            raise _Refusal("cycle_schedule must be ordered, nonoverlapping and inside cycles")
+        if len(stage) <= 2:
+            raise _Refusal("cycle_schedule stage needs an override")
+        for key in ("num_sequences", "population_size"):
+            if key in stage:
+                _number(stage, key, None, 1, 10000, integer=True)
+        if "parent_fitness_temperature" in stage:
+            _number(stage, "parent_fitness_temperature", None, 1e-12, 1000)
+        if stage.get("router_selection_strategy", "agent") not in {"agent", "weighted"}:
+            raise _Refusal("invalid scheduled router strategy")
+        if "router_skill_probabilities" in stage:
+            weights = _skill_weights(stage["router_skill_probabilities"])
+            if not weights or any(not math.isfinite(w) or w < 0 for w in weights.values()) or not any(weights.values()):
+                raise _Refusal("invalid scheduled skill probabilities")
+            stage["router_skill_probabilities"] = weights
+        result.append(stage)
+        previous = end
+    return result
+
+
+def _cycle_config(defaults: dict, cycle: int) -> dict:
+    config = dict(defaults)
+    aliases = {"num_sequences": "candidates_per_cycle", "router_skill_probabilities": "skill_weights"}
+    for stage in defaults.get("cycle_schedule", []):
+        if stage["start_cycle"] <= cycle <= stage["end_cycle"]:
+            for key, value in stage.items():
+                if key not in {"start_cycle", "end_cycle"}:
+                    config[aliases.get(key, key)] = value
+            if "num_sequences" in stage:
+                config["scheduled_batch"] = True
+    return config
+
+
+def _choose_parent(population: list[_Member], config: dict, cycle: int, cycles: int,
+                   rng: random.Random, complete: CompleteFn | None) -> _Member:
+    ordered = sorted(population, key=lambda member: member.score, reverse=True)
+    strategy = config["parent_selection_strategy"]
+    if strategy == "greedy":
+        return ordered[0]
+    if strategy == "uniform":
+        return rng.choice(ordered)
+    if strategy == "llm":
+        if complete is None:
+            raise _Refusal("LLM parent selection needs model access")
+        table = [{"parent_id": f"node{m.index}", "score": m.score, "sequence": m.sequence} for m in ordered]
+        if callable(getattr(complete, "parent_selection", None)):
+            picked = complete.parent_selection(table)
+        else:
+            text = complete("Select a current population parent. Return JSON {\"parent_id\":\"nodeN\"}.\n" + json.dumps(table))
+            picked = json.loads(text[text.find("{"):text.rfind("}") + 1]).get("parent_id")
+        for member in ordered:
+            if picked == f"node{member.index}":
+                return member
+        raise _Refusal("the model selected an unknown parent")
+    temperature = config.get("parent_fitness_temperature")
+    if temperature is None:
+        progress = min(1.0, cycle / max(1, cycles - 1))
+        start, end = config["parent_fitness_temperature_start"], config["parent_fitness_temperature_end"]
+        temperature = start * (end / start) ** progress
+    return _select(ordered, temperature, rng, config["parent_fitness_uniform_fraction"])
 
 
 def _skill_weights(raw: Any) -> dict[str, float] | None:
-    if not isinstance(raw, dict):
+    if raw is None:
         return None
+    if not isinstance(raw, dict):
+        raise _Refusal("skill_weights must be an object")
+    if set(raw) - set(DEFAULT_SKILL_WEIGHTS):
+        raise _Refusal("skill_weights contains an unsupported primary skill")
     weights: dict[str, float] = {}
     for key in (POINT_SKILL, FULL_SKILL, ESM_SKILL, MPNN_SKILL):
         if key not in raw:
             continue
-        try:
-            weights[key] = float(raw[key])
-        except (TypeError, ValueError):
-            continue
-    return weights or None
+        weights[key] = _number(raw, key, 0, 0, 1e12)
+    if not weights or not any(weights.values()):
+        raise _Refusal("skill_weights must enable at least one primary skill")
+    return weights
 
 
 def _router_strategy(raw: Any) -> str:
     value = str(raw or DEFAULT_ROUTER_STRATEGY).strip().lower()
-    return value if value in {"agent", "weighted"} else DEFAULT_ROUTER_STRATEGY
+    if value not in {"agent", "weighted"}:
+        raise _Refusal("router_selection_strategy must be agent or weighted")
+    return value
 
 
 def _uniform_fraction(raw: Any) -> float:
@@ -790,7 +873,7 @@ def _pending_folds(reading: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _measured(ok: bool, value: float | None) -> bool:
-    return bool(ok) and isinstance(value, (int, float)) and math.isfinite(float(value))
+    return bool(ok) and not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value))
 
 
 def _publish(
@@ -818,18 +901,17 @@ def _publish(
 def _batch(config: dict[str, Any], spec: RunSpec, produced: int) -> int:
     """Sequences one generation call asks for.
 
-    The harness default is 8. A requested width below 2 is that default,
-    because 1 is only the top ESM-2 substitution and the next cycle repeats it.
+    A requested width of one is valid, as in the Harness contract.
     """
-    requested = spec.options.get("candidatesPerCycle", config["candidates_per_cycle"])
+    requested = config["candidates_per_cycle"] if config.get("scheduled_batch") else spec.options.get("candidatesPerCycle", config["candidates_per_cycle"])
     try:
         size = int(requested)
     except (TypeError, ValueError):
         size = 8
-    if size < 2:
-        size = 8
+    if size < 1:
+        size = 1
     remaining = spec.expansions - produced
-    return max(1, min(size, 16, remaining))
+    return max(1, min(size, remaining))
 
 
 def _payload(config: dict[str, Any], sequence: str, mutations: list[list[Any]]) -> dict[str, Any]:
@@ -841,6 +923,7 @@ def _payload(config: dict[str, Any], sequence: str, mutations: list[list[Any]]) 
         "target_chain": config["target_chain"],
         "target_hotspots": config["target_hotspots"],
         "target_sequence": config["target_sequence"],
+        "seed": config.get("seed", 42),
     }
 
 
@@ -912,6 +995,7 @@ def _measure_reading(
         "mutations": artifact.get("mutations") if artifact else None,
         "sequence": artifact.get("sequence") if artifact else None,
         "backbone_pdb": artifact.get("backbone_pdb") if artifact else None,
+        "structure_id": artifact.get("structure_id") if artifact else None,
         # The design prompt needs the evidence behind the score, the way the
         # harness hands the agent its metric context and gate feedback.
         "metrics": {name: artifact.get(name) for name in REPORTED_METRICS if artifact and name in artifact},
@@ -1029,6 +1113,8 @@ def _npu_measure(spec: RunSpec, should_stop: Callable[[], bool]) -> MeasureFn:
                 "empty": True,
                 "error": str(artifact.get("error") or "the model returned no CDR mutations"),
             }
+        if payload.get("analysis_tool"):
+            return {"tool_result": artifact.get("tool_result")} if isinstance(artifact, dict) else {"error": "analysis artifact missing"}
         valid, metrics, error = interpret_npu_job(job, artifact, metric_key=metric)
         return _measure_reading(artifact, valid, metrics, error)
 
@@ -1113,6 +1199,8 @@ def _evidence(
 
 def _analyze(complete: CompleteFn, config: dict[str, Any]) -> str:
     """One opening read of the CDR map, the harness analyze phase."""
+    if callable(getattr(complete, "analyze", None)):
+        return complete.analyze(config)
     groups = "; ".join(f"{start}-{end}" for start, end in config["cdr_regions"])
     prompt = "\n".join([
         "Return plain text under 120 words. Do not name or discuss the protein.",
@@ -1138,6 +1226,8 @@ def _reflect(complete: CompleteFn, cycle: int, skill: str, results: list[dict[st
     """Summarise the cycle that just folded, the harness reflect phase."""
     if not results:
         return "none"
+    if callable(getattr(complete, "reflect", None)):
+        return complete.reflect(cycle, skill, results)
     lines = [
         "Return plain text under 80 words. Do not name or discuss the protein.",
         f"Cycle {cycle} used skill `{skill}`. These edits were folded:",
@@ -1161,11 +1251,7 @@ def _proposals(
     state: dict[str, Any] | None = None,
 ) -> list[list[list[Any]]]:
     positions = ", ".join(str(pos) for pos in sorted(config["mutable"]))
-    how_many = (
-        "Exactly one substitution"
-        if count == 1
-        else f"{count} candidates, each with {config['mutation_min']} to {config['mutation_max']} substitutions"
-    )
+    how_many = f"{count} candidates, each with {config['mutation_min']} to {config['mutation_max']} substitutions"
     prompt = "\n".join([
         "Return JSON only. Do not name or discuss the protein.",
         f"Chain {config['chain']}. {how_many}, encoded as [chain, 1-based position, new amino acid].",
@@ -1237,6 +1323,9 @@ def _proposals_full(
             if len(item) != 3:
                 valid = False
                 break
+            if type(item[1]) is not int:
+                valid = False
+                break
             chain, pos, amino = str(item[0]), int(item[1]), str(item[2])
             key = (chain, pos)
             if key in covered or key not in expected or amino not in AMINO_ACIDS:
@@ -1265,6 +1354,8 @@ def _apply(
     for mutation in mutations:
         if len(mutation) != 3:
             return None, "bad mutation", "a mutation is [chain, position, amino acid]"
+        if type(mutation[1]) is not int:
+            return None, "bad position", "a mutation position must be an integer"
         chain, pos, amino = str(mutation[0]), int(mutation[1]), str(mutation[2])
         if chain != config["chain"]:
             return None, f"{chain}{pos}", "the mutation names a different chain"
@@ -1468,18 +1559,18 @@ def _quality_verdicts(
     readings: list[dict[str, Any]],
     *,
     exempt: bool,
+    enabled: bool = True,
+    threshold: float = QUALITY_THRESHOLD,
 ) -> tuple[list[bool | None], str]:
     """One batch quality check over the folds that passed the gate with ipTM at the threshold.
 
     Returns a verdict per reading: ``None`` when the check does not apply, otherwise
     whether the model let the candidate into the population. A candidate is admitted
-    only when its ``pass_check`` is true. If the check itself fails (model error or
-    no results object), nothing from that batch is admitted. The harness instead
-    retries the cycle, which would fold the batch again; that difference is kept
-    and documented.
+    only when its ``pass_check`` is true. A phase failure returns an error so the
+    engine retries the uncommitted cycle, including its folds, as the Harness does.
     """
     verdicts: list[bool | None] = [None] * len(readings)
-    if complete is None or exempt:
+    if complete is None or exempt or not enabled:
         return verdicts, ""
     eligible: dict[str, int] = {}
     summaries: list[dict[str, Any]] = []
@@ -1488,7 +1579,7 @@ def _quality_verdicts(
         iptm = metrics.get("iptm")
         if not reading.get("ok") or reading.get("error"):
             continue
-        if not isinstance(iptm, (int, float)) or float(iptm) < QUALITY_THRESHOLD:
+        if not isinstance(iptm, (int, float)) or float(iptm) < threshold:
             continue
         key = f"c{index}"
         eligible[key] = index
@@ -1508,12 +1599,20 @@ def _quality_verdicts(
         .replace("{candidates}", _context_json(summaries)),
     ])
     try:
-        text = complete(prompt)
+        if callable(getattr(complete, "quality", None)):
+            complete.tools.quality_candidates = summaries
+            text = complete.quality(prompt)
+        else:
+            text = complete(prompt)
         start, end = text.find("{"), text.rfind("}")
         parsed = json.loads(text[start:end + 1] if start >= 0 and end > start else text)
         results = parsed.get("results") if isinstance(parsed, dict) else None
         if not isinstance(results, dict):
             raise ValueError("the quality check returned no results object")
+        if set(results) != set(eligible):
+            raise ValueError("the quality check must return each supplied candidate ID exactly once")
+        if any(not isinstance(item, dict) or type(item.get("pass_check")) is not bool for item in results.values()):
+            raise ValueError("quality pass_check must be a boolean for every candidate")
     except Exception as error:  # the model call or its JSON failed; nothing from this batch is admitted
         for index in eligible.values():
             verdicts[index] = False
@@ -1532,7 +1631,7 @@ def _select(
     uniform_fraction: float = DEFAULT_UNIFORM_FRACTION,
 ) -> _Member:
     scored = [member for member in population if member.score is not None]
-    pool = scored or population
+    pool = sorted(scored or population, key=lambda member: member.score if member.score is not None else -math.inf, reverse=True)
     if len(pool) == 1:
         return pool[0]
     finite = [member.score for member in pool if member.score is not None and math.isfinite(member.score)]

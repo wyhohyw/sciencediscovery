@@ -61,6 +61,10 @@ def spec(**overrides) -> RunSpec:
         baseline_code=baseline(),
     )
     values.update(overrides)
+    # Historical fixtures budget individual candidates, so give cycles explicitly.
+    starting = json.loads(values["baseline_code"])
+    starting.setdefault("cycles", values["expansions"])
+    values["baseline_code"] = json.dumps(starting)
     return RunSpec(**values)
 
 
@@ -237,7 +241,7 @@ def test_a_measured_fold_keeps_the_rest_of_the_batch():
     assert reading["portfolio"] == [{"sequence": "AYDE", "mutations": [["D", 2, "Y"]]}]
 
 
-def test_a_width_of_one_asks_for_the_harness_batch():
+def test_a_width_of_one_is_respected_as_in_the_harness_contract():
     seen = []
 
     def measure(payload):
@@ -262,7 +266,7 @@ def test_a_width_of_one_asks_for_the_harness_batch():
         lambda: False,
     )
     proposes = [item for item in seen if item.get("propose") is True]
-    assert proposes[0]["num_sequences"] == 3
+    assert proposes[0]["num_sequences"] == 1
 
 
 def test_chat_point_mutation_folds_without_an_npu_propose():
@@ -630,7 +634,7 @@ def test_a_refused_design_retries_the_cycle_instead_of_spending_an_expansion():
     assert len(retries) == 2
 
 
-def test_a_cycle_that_keeps_refusing_finally_spends_one_expansion():
+def test_a_cycle_that_keeps_refusing_is_skipped_without_inventing_an_expansion():
     def measure(payload):
         return {"ok": True, "score": -1.0, "error": "", "sequence": payload["sequence"]}
 
@@ -648,10 +652,9 @@ def test_a_cycle_that_keeps_refusing_finally_spends_one_expansion():
         lambda: False,
     )
     expanded = [event for event in events if event["type"] == "expanded"]
-    assert len(expanded) == 2, "two cycles each charge one expansion after their retries"
-    assert all(event["valid"] is False for event in expanded)
+    assert expanded == [], "a failed design did not fold a candidate"
     retries = [event for event in events if event["type"] == "log" and "retry" in event["message"]]
-    assert len(retries) == 4, "two retries per charged cycle"
+    assert len(retries) == 4, "two retries per skipped cycle"
 
 
 def test_a_measurement_keeps_the_metrics_behind_its_score():
@@ -884,10 +887,9 @@ def _reflections_in_four_cycles(extra: dict) -> int:
 
 
 def test_reflection_follows_the_harness_interval_and_defaults_to_twenty():
-    # Folded cycles 0..3. A reflection runs at the start of the next cycle,
-    # so interval 1 reflects after cycles 0, 1 and 2; interval 2 only after cycle 1.
-    assert _reflections_in_four_cycles({"reflection_interval": 1}) == 3
-    assert _reflections_in_four_cycles({"reflection_interval": 2}) == 1
+    # Reflect after each scheduled committed cycle, including the final cycle.
+    assert _reflections_in_four_cycles({"reflection_interval": 1}) == 4
+    assert _reflections_in_four_cycles({"reflection_interval": 2}) == 2
     assert _reflections_in_four_cycles({}) == 0
 
 
