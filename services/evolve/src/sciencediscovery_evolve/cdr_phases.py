@@ -228,7 +228,7 @@ class CdrPhaseRunner:
         return json.dumps(self.run("design", prompt))
 
     def parent_selection(self, population: list[dict]) -> str:
-        return str(self.run("parent_selection", "Select a current population parent:\n" +
+        return str(self.run("parent_selection", "Select a current population parent. Higher score is better (score = -loss):\n" +
                            json.dumps(population), ParentOutput)["parent_selection"]["selected_parent_name"])
 
     def __call__(self, prompt: str) -> str:

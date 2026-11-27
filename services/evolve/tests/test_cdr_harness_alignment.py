@@ -448,3 +448,33 @@ def test_CDR4_002_production_quality_role_uses_stub_evidence_and_commits_the_bat
     assert out[-1]["candidates"] == 2
     assert receipts == [{"summary": {"c0": {"available": False}, "c1": {"available": False}},
                          "results": {"c0": {"available": False}, "c1": {"available": False}}}]
+
+
+def test_CDR4_003_evolution_tool_receives_chain_local_cdr_history_and_skill_labels():
+    histories = []
+    def chat(messages, definitions, **kwargs):
+        system = messages[0]["content"]
+        if "You are an antibody engineering analyst" in system:
+            result = {"downstream_header": "configured CDR"}
+        elif "You are the Antibody Reflection Agent" in system:
+            if messages[-1]["role"] != "tool":
+                return {"tool_calls": [tool_call("analyze_evolution_tree")]}
+            result = reflection_fixture()
+        else:
+            result = {"mutations": [[["D", 2, "W"]], [["D", 3, "F"]]]}
+        return {"content": json.dumps(result)}
+    def measure(payload):
+        if payload.get("analysis_tool"):
+            histories.append(copy.deepcopy(payload["history"]))
+            return {"tool_result": {"available": True}}
+        return reading(payload)
+    complete = lambda p: pytest.fail("text-only model path")
+    complete.chat = chat
+    cdr.CdrEngine(complete=complete, measure=measure).run(spec(baseline_code=baseline(
+        reflection_interval=1)), lambda e: None, lambda: False)
+    assert len(histories) == 1
+    assert histories[0][0]["chains"] == {"D": "ACDE"}
+    child = histories[0][1]
+    assert child["chains"] == {"D": "AWDE"}
+    assert child["cycle"] == 0 and child["skill_id"] == cdr.POINT_SKILL
+    assert child["parent_id"] == "node0"

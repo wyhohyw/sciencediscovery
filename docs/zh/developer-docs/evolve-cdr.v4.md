@@ -29,3 +29,5 @@
 - 修改文档的链接检查和 wheel 资产检查通过：角色提示、完整反思 schema、技能 JSON 及出处声明均进入 wheel。
 - 本地原 evolve 侧车确认 `running=0` 后经既有 launcher 重新初始化为 `ready`；API `/health` 为 `liveness=ok`。未创建烟测项目/会话，未使用共享 NPU 重新折叠。
 - 分阶段消息/工具回合、完整结构跨执行保留、坐标投影和失败场景使用离线夹具验证；本记录不声称完成真实 ProTrek/PLIP/FoldMason 服务或 NPU 端到端实验。
+- 最后适配审查补齐演化候选的 `chains`、`cycle`、`skill_id`，让 FoldMason 的代表结构选择按配置 CDR 比较；父代选择提示显式说明 score 越高越好。最终定向回归为 118/118 通过。
+- 完整项目测试未全绿：桌面 `evolve-ui.test.tsx` 的算法数量仍断言 2，但本分支已有 3（该文件及产品 TS 源码未修改，单独复现相同失败）；executor 的 Docker 集成测试因没有 `docker` 可执行文件失败。额外的按包串行测试也报告了未改动 API 配置集成用例的超时。本次不把其他模块的基线/环境失败改成跳过或通过。

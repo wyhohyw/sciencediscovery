@@ -13,9 +13,10 @@
 
 """CDR sequence search: a population of fixed-length binders, not a program tree.
 
-One expansion is one NPU execution. That execution scans the parent with ESM-2,
-and when the parent fold left a backbone it also runs SolubleMPNN, then folds
-the chosen child and adds the ESM-2 pseudo-log-likelihood to the same loss.
+One committed child consumes one expansion. Each cycle selects a generation
+route, folds its batch and runs quality checks before updating the population
+once. Retries and role tools are separate executions, bounded by their own
+cycle and phase limits. Every production score includes ESM-2 PLL.
 Python still refuses a framework edit. A fold that measured a score keeps that
 number on the same events PUCT plots, including when the 5 Å gate refuses it;
 the refusal keeps it out of the population.
@@ -100,7 +101,7 @@ class _Member:
 
 
 class CdrEngine:
-    """Select a parent, point-mutate its CDRs, score the child, keep what passes."""
+    """Generate CDR batches, measure and quality-check them, then retain constrained elites."""
 
     name = "cdr"
     #: The candidate is a sequence handed to the fixed NPU program. This engine
@@ -290,6 +291,7 @@ class CdrEngine:
         outcomes: list[dict] = []
         tries: list[dict] = []
         history = [{"candidate_id": "node0", "parent_id": None, "sequence": seed.sequence,
+            "chains": {config["chain"]: seed.sequence}, "cycle": -1, "skill_id": "initial",
             "objective": -seed.score if seed.score is not None else None, "metrics": seed.metrics,
             "mutations": [], "structure_id": seed_reading.get("structure_id"), "gate": seed.gate,
             "retained": seed_admitted}]
@@ -447,6 +449,7 @@ class CdrEngine:
                         eligible, why = False, "quality check did not pass"
                     record = {"node": node, "parent": parent.index, "summary": summary, "score": value,
                         "candidate_id": f"node{node}", "parent_id": f"node{parent.index}",
+                        "chains": {config["chain"]: child}, "cycle": cycle, "skill_id": skill,
                         "sequence": child, "objective": -value if _measured(bool(reading.get("ok")), value) else None,
                         "metrics": member.metrics, "mutations": summary.split(), "gate": why,
                         "quality_passed": verdicts[index], "structure_id": reading.get("structure_id")}

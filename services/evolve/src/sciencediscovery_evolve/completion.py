@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A ``prompt -> text`` completion, routed through the control plane.
+"""Text completions and structured chat turns, routed through the control plane.
+
+The existing callable remains ``prompt -> text``. Its ``chat`` entry point
+shares the same credentials, retry/stop gates and accounting while preserving
+role history, function calls and provider-specific assistant fields.
 
 **Why not `agentdescent.agents.openai_compatible`.** It builds the same request
 and normalises the same reply — including the `content: null` a reasoning model
