@@ -179,8 +179,10 @@ class CdrPhaseRunner:
                         raise PhaseError(f"{name}: {error}") from error
                     result = {"available": False, "reason": str(error)}
                 calls_used += 1
+                unavailable = isinstance(result, dict) and result.get("available") is False
+                reason = f" ({str(result.get('reason') or '')[:300]})" if unavailable else ""
                 self.emit({"type": "log", "level": "info", "message": f"{role} tool {name}: " +
-                    ("unavailable" if isinstance(result, dict) and result.get("available") is False else "completed")})
+                    ("unavailable" + reason if unavailable else "completed")})
                 messages.append({"role": "tool", "tool_call_id": call["id"],
                                  "content": json.dumps(result, ensure_ascii=False, default=str)})
         raise PhaseError(f"{role} did not complete")

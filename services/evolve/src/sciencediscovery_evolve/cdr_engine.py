@@ -1126,7 +1126,10 @@ def _npu_measure(spec: RunSpec, should_stop: Callable[[], bool]) -> MeasureFn:
                 "error": str(artifact.get("error") or "the model returned no CDR mutations"),
             }
         if payload.get("analysis_tool"):
-            return {"tool_result": artifact.get("tool_result")} if isinstance(artifact, dict) else {"error": "analysis artifact missing"}
+            if isinstance(artifact, dict):
+                return {"tool_result": artifact.get("tool_result")}
+            detail = str(job.get("detail") or "no output from the runner")
+            return {"error": f"analysis job {job.get('status') or 'unknown'} returned no artifact: {detail}"}
         valid, metrics, error = interpret_npu_job(job, artifact, metric_key=metric)
         return _measure_reading(artifact, valid, metrics, error)
 

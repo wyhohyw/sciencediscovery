@@ -361,6 +361,16 @@ def test_CDR4_003_tool_sequence_coordinates_are_projected_without_changing_struc
     assert result["contacts"][0] == {"sequence_position": 1, "residue_id": 101, "distance": 4.5}
 
 
+def test_CDR4_003_an_analysis_job_without_artifact_is_unavailable_evidence_not_a_dead_search():
+    """Observed live: a protrek analysis job returned no artifact and ended the whole search."""
+    tools = CdrTools(cdr._config(baseline()),
+                     lambda p: {"error": "analysis job failed returned no artifact: runner detail"})
+    result = tools.execute("protrek_sequence_search", {})
+    assert result["available"] is False
+    assert "returned no artifact" in result["reason"]
+    assert tools.runner_lost is False
+
+
 def test_CDR4_002_phase_token_budget_prevents_tool_execution():
     tools = CdrTools(cdr._config(baseline()), lambda p: pytest.fail("overspent phase executed tool"))
     phase = CdrPhaseRunner(lambda *a, **kw: {"_usage": {"total_tokens": 10},

@@ -131,7 +131,9 @@ class CdrTools:
             raise RuntimeError(str(result.get("error") or "runner lost during analysis"))
         value = result.get("tool_result")
         if not isinstance(value, dict):
-            raise RuntimeError(str(result.get("error") or "analysis returned no tool result"))
+            # An analysis job that produced no evidence is an unavailable tool, not a dead search:
+            # the model sees the explicit reason and the Harness-style evidence rule still holds.
+            return {"available": False, "reason": str(result.get("error") or "analysis returned no tool result")[:1500]}
         # Raw confidence matrices remain on the runner; only bounded analytical evidence is sent to the model.
         if len(json.dumps(value, default=str)) > 100000:
             raise RuntimeError("analysis result exceeded its evidence limit")
