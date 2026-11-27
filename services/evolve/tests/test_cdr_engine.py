@@ -605,6 +605,39 @@ def test_a_chat_cycle_after_a_proposed_batch_reflects_on_the_batch():
     assert "D2CW -> score -1.2" in reflections[0]
 
 
+def test_exhausted_reflection_is_non_fatal_and_leaves_an_explicit_record():
+    """Harness parity: reflection failing after its retries does not fail the run."""
+    skills = iter([POINT_SKILL] * 5)
+    attempts = []
+
+    def measure(payload):
+        return {
+            "ok": True, "score": -1.1, "error": "",
+            "sequence": payload["sequence"], "mutations": payload["mutations"],
+        }
+
+    def complete(prompt: str) -> str:
+        if prompt.startswith("Return plain text under 80 words"):
+            attempts.append(prompt)
+            raise RuntimeError("model unavailable")
+        if prompt.startswith("Return plain text"):
+            return "the loop tip drives contact"
+        if "ROUTER-ALLOWED" in prompt:
+            return json.dumps({"skill_id": next(skills), "selection_reason": "go"})
+        return json.dumps({"mutations": [[["D", 3, "F"]], [["D", 1, "Y"]]]})
+
+    events = []
+    CdrEngine(measure=measure, complete=complete).run(
+        spec(expansions=2, baseline_code=json.dumps({**json.loads(baseline()), "reflection_interval": 1})),
+        events.append,
+        lambda: False,
+    )
+    assert events[-1]["status"] == "succeeded"
+    assert len(attempts) == 3, "cycle_retry_limit 2 means three reflection attempts"
+    messages = [event["message"] for event in events if event.get("type") == "log"]
+    assert any("reflection failed after 3 attempts" in message for message in messages)
+
+
 def test_a_refused_design_retries_the_cycle_instead_of_spending_an_expansion():
     answers = iter(["not json", "still not json", json.dumps({"mutations": [[["D", 2, "W"]]]})])
 

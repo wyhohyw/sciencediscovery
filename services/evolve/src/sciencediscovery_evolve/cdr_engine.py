@@ -483,14 +483,23 @@ class CdrEngine:
                                       "quality": {h["candidate_id"]: h["quality_passed"] for h in cycle_history}}
                 committed = True
                 if complete is not None and (cycle + 1) % config["reflection_interval"] == 0:
+                    # Harness parity: exhausted reflection is non-fatal, keeps the previous
+                    # reflection in effect, and leaves an explicit failure record.
+                    reflected, last_error = False, ""
                     for reflection_attempt in range(config["cycle_retry_limit"] + 1):
                         if should_stop():
                             break
                         try:
                             reflection = _reflect(complete, cycle, skill, cycle_history)
+                            reflected = True
                             break
                         except Exception as error:
-                            emit(events.log("warn", f"cycle {cycle} reflection retry {reflection_attempt}: {error}"))
+                            last_error = str(error) or type(error).__name__
+                            emit(events.log("warn", f"cycle {cycle} reflection retry {reflection_attempt}: {last_error}"))
+                    if not reflected and not should_stop():
+                        emit(events.log("warn",
+                            f"cycle {cycle} reflection failed after {config['cycle_retry_limit'] + 1} attempts; "
+                            f"the previous reflection stays in effect: {last_error}"))
                 break
             if status != "succeeded" or tools.runner_lost:
                 if tools.runner_lost:
