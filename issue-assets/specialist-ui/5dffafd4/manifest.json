@@ -1,0 +1,24 @@
+{
+  "source": "5dffafd44bfb0221c56ef2f12a5032f1365b97e8",
+  "renderer": "Desktop Vite in Chromium",
+  "viewport": {
+    "width": 1920,
+    "height": 1600
+  },
+  "deviceScaleFactor": 1,
+  "backend": "Local Playwright API fixtures with one saved failed built-in and one healthy skill",
+  "specialist": "evidence-specialist",
+  "failedSkill": "idea-tree-team",
+  "frames": [
+    {
+      "locale": "zh-CN",
+      "file": "05-edit-failed-skill-zh-CN.png",
+      "sha256": "d34c1d5b8f17de8843df2da2a0d74ef67a928b216fe76695cf46a36199943b7e"
+    },
+    {
+      "locale": "en",
+      "file": "05-edit-failed-skill-en.png",
+      "sha256": "f54938ff2f469ab67ea4a20e15af147a683185c9d801928d1562c3996405e3af"
+    }
+  ]
+}
