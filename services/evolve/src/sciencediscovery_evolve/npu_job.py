@@ -229,8 +229,15 @@ class RunnerNpuClient:
         should_stop: Optional[Callable[[], bool]] = None,
         *,
         on_stage: Optional[Callable[[str], None]] = None,
+        device_slot: int | None = None,
     ) -> Tuple[dict[str, Any], Optional[dict[str, Any]]]:
+        if should_stop is not None and should_stop():
+            return {"status": "cancelled"}, None
         body = dict(self.execution)
+        if device_slot is not None:
+            if self.transport != "api":
+                raise NpuJobError("CDR device slots require the API runner proxy")
+            body["cdrDeviceSlot"] = device_slot
         body["code"] = compact_program(program_with_candidate(str(self.execution.get("code") or ""), code))
         execution_id = f"evolve-{uuid.uuid4().hex}"
         body["executionId"] = execution_id
@@ -283,7 +290,21 @@ class RunnerNpuClient:
                     job["detail"] = detail
                 return job, None
             stdout = str((record.get("result") or {}).get("stdout") or "")
-            return {"status": "completed", "execution_id": execution_id}, _artifact(stdout)
+            artifact = _artifact(stdout)
+            if device_slot is not None and artifact and artifact.get("structure_id"):
+                publication = self._send("POST", self._execution_path(execution_id, "publish"),
+                                         json.dumps({"structureId": artifact["structure_id"]}))[1]
+                if not isinstance(publication, dict) or publication.get("published") is not True:
+                    raise NpuJobError("CDR artifact publication was not confirmed")
+            return {"status": "completed", "execution_id": execution_id}, artifact
+
+    def cdr_capacity(self) -> int:
+        """Freeze the proxy-owned card layout; the sidecar only sees its size."""
+        result = self._send("GET", "/capacity", None)[1]
+        workers = result.get("workers") if isinstance(result, dict) else None
+        if type(workers) is not int or not 1 <= workers <= 64:
+            raise NpuJobError("the runner proxy returned an invalid CDR capacity")
+        return workers
 
     def _stages(
         self,

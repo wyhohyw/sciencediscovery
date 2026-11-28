@@ -39,6 +39,7 @@ from typing import Any, Callable, Optional
 
 from . import events
 from .capabilities import ESM_SKILL, MPNN_SKILL, assess
+from .cdr_folds import fold_batch
 from .engine import RunSpec
 from .events import Emit
 from .logging_config import get_logger
@@ -250,6 +251,8 @@ class CdrEngine:
         config = {**config, "seed": _number({"seed": spec.options.get("seed", config.get("seed", 42))},
                                             "seed", 42, 0, 2**32 - 1, integer=True)}
         rng = random.Random(config["seed"])
+        fold_workers = min(spec.workers, getattr(measure, "parallel_limit", spec.workers))
+        emit(events.log("info", f"CDR fold workers: {fold_workers} (requested {spec.workers})"))
         tools = CdrTools(config, measure)
         # The evaluator names its per-run artifact directory with a bare 64-hex
         # digest, so the prefixed `sha256:` form is rejected as an invalid ID.
@@ -351,49 +354,49 @@ class CdrEngine:
                     budget = dict(config)
                     if skill != POINT_SKILL:
                         budget["mutation_max"] = max(1, len(config["mutable"]))
+                    to_fold: list[dict] = []
                     if skill in CHAT_SKILLS and complete is not None:
                         proposals = (_proposals_full(complete, config, parent, width, state) if skill == FULL_SKILL
                                      else _proposals(complete, config, parent, width, state))
                         children: set[str] = set()
                         for mutations in proposals:
-                            if produced + len(batch) >= spec.expansions or should_stop():
+                            if produced + len(to_fold) >= spec.expansions or should_stop():
                                 break
                             child, _summary, _error = _apply(parent.sequence, budget, mutations)
                             if child is None or child in tried or child in children:
                                 continue
                             children.add(child)
-                            reading = measure(_payload(config, child, mutations))
-                            physical += 1
-                            reading.setdefault("sequence", child)
-                            batch.append((mutations, reading))
-                            if reading.get("runner_lost"):
-                                break
+                            to_fold.append(_payload(config, child, mutations))
                     else:
                         payload = {**_payload(config, parent.sequence, []), "propose": True, "skill": skill,
                             "num_sequences": width, "cycle": cycle, "proposal_seed": config["seed"] + cycle,
                             "excluded_sequences": sorted(tried)}
+                        if fold_workers > 1:
+                            payload["generation_only"] = True
                         if parent.backbone:
                             payload["parent_backbone_pdb"] = parent.backbone
                         reading = measure(payload)
-                        physical += 1
+                        if not reading.get("generated"):
+                            physical += 1
                         if reading.get("runner_lost"):
                             batch = [([], reading)]
                         else:
                             pending = _pending_folds(reading)
                             if pending:
-                                reading.setdefault("sequence", pending[0]["sequence"])
-                                batch = [(pending[0]["mutations"], reading)]
-                                for item in pending[1:width]:
-                                    if should_stop():
-                                        break
-                                    measured = measure(_payload(config, item["sequence"], item["mutations"]))
-                                    physical += 1
-                                    measured.setdefault("sequence", item["sequence"])
-                                    batch.append((item["mutations"], measured))
-                                    if measured.get("runner_lost"):
-                                        break
+                                if not reading.get("generated"):
+                                    reading.setdefault("sequence", pending[0]["sequence"])
+                                    batch = [(pending[0]["mutations"], reading)]
+                                remaining = pending[:width] if reading.get("generated") else pending[1:width]
+                                to_fold = [_payload(config, item["sequence"], item["mutations"]) for item in remaining]
                             elif not reading.get("empty") and reading.get("error"):
                                 raise _Refusal(str(reading["error"]))
+                    folded = fold_batch(to_fold, measure, fold_workers, should_stop)
+                    physical += folded.attempts
+                    batch.extend(folded.results)
+                    if any(reading.get("runner_lost") for _mutations, reading in batch):
+                        tools.runner_lost = True
+                    if folded.error is not None and not tools.runner_lost and not should_stop():
+                        raise folded.error
                     if should_stop():
                         status, reason = "stopped", "stopped"
                         break
@@ -589,7 +592,10 @@ def _config(baseline: str) -> dict[str, Any]:
         ("quality_check_threshold", 0.7, 0, 1),
         ("parent_fitness_temperature_start", 1.0, 1e-12, 1000),
         ("parent_fitness_temperature_end", 0.2, 1e-12, 1000),
-        ("phase_timeout_seconds", 300, 0.01, 3600),
+        # The harness bounds a phase by tool iterations alone. Here every tool call is
+        # a remote job whose process start dominates, so the wall clock has to cover the
+        # calls the turn limit already allows.
+        ("phase_timeout_seconds", 900, 0.01, 3600),
     ):
         config[name] = _number(parsed, name, default, lower, upper)
     for name in ("cycles",):
@@ -868,12 +874,12 @@ def _choose_skill(
 
 
 def _pending_folds(reading: dict[str, Any]) -> list[dict[str, Any]]:
-    """The sequence this job already folded, then the rest of that same batch."""
+    """The generated batch, or an already-folded first sequence and its siblings."""
     mutations = reading.get("mutations")
     sequence = reading.get("sequence")
-    if not isinstance(mutations, list) or not isinstance(sequence, str):
+    if not reading.get("generated") and (not isinstance(mutations, list) or not isinstance(sequence, str)):
         return []
-    pending = [{"sequence": sequence, "mutations": mutations}]
+    pending = [] if reading.get("generated") else [{"sequence": sequence, "mutations": mutations}]
     portfolio = reading.get("portfolio")
     if isinstance(portfolio, list):
         for item in portfolio:
@@ -1033,7 +1039,7 @@ def _measure_reading(
 
 def _runner_absent(error: Exception) -> bool:
     text = str(error)
-    return text.startswith("runner ") and ("not connected" in text or "failed:" in text)
+    return text.startswith("runner ") and ("not connected" in text or "failed:" in text or "CDR placement changed" in text)
 
 
 def _pause(seconds: float, should_stop: Callable[[], bool]) -> bool:
@@ -1099,34 +1105,45 @@ def _npu_measure(spec: RunSpec, should_stop: Callable[[], bool]) -> MeasureFn:
 
     try:
         client = npu_client_from_spec(spec.options, spec.candidate_timeout_seconds)
+        proxy = getattr(client, "transport", "runner") == "api"
+        parallel_limit = client.cdr_capacity() if proxy else 1
     except NpuJobError as error:
         raise _Refusal(str(error)) from error
     criteria = list(spec.scorecard.get("criteria") or [])
     metric = str(criteria[0].get("id") or "score") if criteria else "score"
 
     def measure(payload: dict[str, Any]) -> dict[str, Any]:
-        if should_stop():
+        batch_stop = payload.get("_batch_stop", lambda: False)
+        stopped = lambda: should_stop() or batch_stop()
+        if stopped():
             return {"ok": False, "error": "the search was stopped"}
-        code = json.dumps(payload, sort_keys=True)
+        code = json.dumps({key: value for key, value in payload.items() if key not in {"_device_slot", "_batch_stop"}}, sort_keys=True)
+        kwargs = {"device_slot": payload.get("_device_slot", 0)} if proxy and not payload.get("analysis_tool") else {}
         for wait in (*RUNNER_RETRY_WAITS, None):
             try:
-                job, artifact = client.run(code, should_stop)
+                job, artifact = client.run(code, stopped, **kwargs)
                 break
             except NpuJobError as error:
+                if "CDR placement changed" in str(error):
+                    return {"ok": False, "error": str(error), "runner_lost": True}
                 if not _runner_absent(error):
                     return {"ok": False, "error": str(error)}
                 # A refused submission never reached the runner, so trying again cannot
                 # put a second fold on the card. A lost status read might have run it.
-                if wait is None or "POST /shell-executions" not in str(error):
+                if wait is None or not str(error).startswith("runner POST /shell-executions "):
                     return {"ok": False, "error": str(error), "runner_lost": True}
-                if not _pause(wait, should_stop):
+                if not _pause(wait, stopped):
                     return {"ok": False, "error": "the search was stopped"}
+        if job.get("status") == "unknown":
+            return {"ok": False, "runner_lost": True, "error": "runner execution did not reach a verified terminal state"}
         if artifact and artifact.get("proposal") == "empty":
             return {
                 "ok": False,
                 "empty": True,
                 "error": str(artifact.get("error") or "the model returned no CDR mutations"),
             }
+        if job.get("status") == "completed" and artifact and artifact.get("proposal") == "generated" and artifact.get("device") == "npu":
+            return {"generated": True, "portfolio": artifact.get("portfolio"), "skill": artifact.get("skill")}
         if payload.get("analysis_tool"):
             if isinstance(artifact, dict):
                 return {"tool_result": artifact.get("tool_result")}
@@ -1135,6 +1152,7 @@ def _npu_measure(spec: RunSpec, should_stop: Callable[[], bool]) -> MeasureFn:
         valid, metrics, error = interpret_npu_job(job, artifact, metric_key=metric)
         return _measure_reading(artifact, valid, metrics, error)
 
+    measure.parallel_limit = parallel_limit
     return measure
 
 

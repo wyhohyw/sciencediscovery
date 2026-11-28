@@ -120,7 +120,7 @@ class CdrPhaseRunner:
                                 {"role": "user", "content": prompt}]
         definitions = self.tools.definitions(profile.allowed)
         remaining = int(self.config.get("phase_token_budget", 65536))
-        deadline = time.monotonic() + float(self.config.get("phase_timeout_seconds", 300))
+        deadline = time.monotonic() + float(self.config.get("phase_timeout_seconds", 900))
         tree_calls = 0
         calls_used = 0
         for turn in range(profile.turns + 1):

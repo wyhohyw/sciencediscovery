@@ -1120,6 +1120,11 @@ def _child_env() -> dict:
         plip = os.path.join(os.path.dirname(_model_python()), "plip")
         if os.path.isfile(plip):
             env["PLIP_COMMAND"] = plip
+    # Every weight this job loads is a local path. The Hub calls gradio_client and
+    # transformers make anyway only add latency, and a sandbox that denies them
+    # marks the whole execution failed even when the tool result is complete.
+    for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_HUB_DISABLE_TELEMETRY"):
+        env.setdefault(name, "1")
     pylib = os.path.join(DEPS_DIR, "pylib")
     if os.path.isdir(pylib):
         env["PYTHONPATH"] = pylib + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
@@ -1615,6 +1620,10 @@ def main() -> None:
                 })
                 return
             child, mutations, _summary = batch[0]
+            if candidate.get("generation_only") is True:
+                emit({"device": "npu", "proposal": "generated", "ran": False, "skill": skill_used,
+                      "portfolio": [{"sequence": item[0], "mutations": item[1]} for item in batch]})
+                return
             folding = dict(candidate)
             folding["sequence"] = child
             folding["mutations"] = mutations

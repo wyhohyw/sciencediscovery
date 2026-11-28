@@ -35,6 +35,25 @@ def load_evaluator():
     return module
 
 
+def test_CDR6_005_generation_only_returns_all_candidates_without_folding(monkeypatch):
+    module = load_evaluator()
+    emitted = []
+    candidate = {"sequence": "ACDE", "target_sequence": "GG", "chain": "D", "target_chain": "A",
+        "cdr_regions": [[1, 3]], "propose": True, "generation_only": True, "num_sequences": 2,
+        "skill": module.ESM_SKILL}
+    monkeypatch.setitem(module.__dict__, "_EVOLVE_CANDIDATE", candidate)
+    monkeypatch.setattr(module, "emit", emitted.append)
+    monkeypatch.setattr(module, "esm_scan", lambda sequence: [])
+    monkeypatch.setattr(module, "design_skill", lambda *args, **kwargs: module.ESM_SKILL)
+    monkeypatch.setattr(module, "cycle_batch", lambda *args: (module.ESM_SKILL, [
+        ("AWDE", [["D", 2, "W"]], "D:C2W"), ("ACFE", [["D", 3, "F"]], "D:D3F")]))
+    monkeypatch.setattr(module, "predict", lambda *_: pytest.fail("generation job folded a candidate"))
+    module.main()
+    assert len(emitted) == 1 and emitted[0]["proposal"] == "generated"
+    assert emitted[0]["ran"] is False and "score" not in emitted[0]
+    assert [item["sequence"] for item in emitted[0]["portfolio"]] == ["AWDE", "ACFE"]
+
+
 def atom(serial: int, chain: str, number: int, x: float) -> str:
     return (
         f"ATOM  {serial:5d}  CA  ALA {chain}{number:4d}    "

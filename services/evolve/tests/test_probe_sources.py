@@ -52,6 +52,17 @@ def test_plip_command_defaults_to_the_model_venv_entry_script(tmp_path, monkeypa
     assert evaluator._child_env()["PLIP_COMMAND"] == "/custom/plip"
 
 
+def test_children_run_offline_so_a_denied_hub_call_cannot_fail_a_complete_job(monkeypatch):
+    evaluator = _evaluator()
+    for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_HUB_DISABLE_TELEMETRY"):
+        monkeypatch.delenv(name, raising=False)
+    env = evaluator._child_env()
+    assert [env[name] for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_HUB_DISABLE_TELEMETRY")] == ["1"] * 3
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+    assert evaluator._child_env()["HF_HUB_OFFLINE"] == "0"
+
+
 def test_every_check_the_capabilities_read_is_reported_by_the_probe():
     evaluator = _evaluator()
     needed = set(FOLD_CHECKS) | {name for names in SKILL_CHECKS.values() for name in names}
