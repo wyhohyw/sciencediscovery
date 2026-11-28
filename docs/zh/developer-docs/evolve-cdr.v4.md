@@ -1,5 +1,7 @@
 # CDR 序列搜索 v4
 
+长程序与完整搜索历史的 runner 传输修正见 [v5](evolve-cdr.v5.md)。本页保留为历史设计。
+
 2026-11-27。在 [v3](evolve-cdr.v3.md) 上落实用户确认的阶段 agent 方案，并修正源码对照发现的行为差异。参考 OpenDDE-Harness `fdab4f0ade76db41a300f1bab4c931540dc7a557` 及 v3 已锁定的 Ascend 补丁。v3 保留为历史设计；起点相同不能证明所有候选的目标函数、搜索轨迹或最终结果等价。
 
 ## 边界

@@ -111,23 +111,20 @@ def interpret_npu_job(
     return True, {"job_status": "completed", "device": "npu", metric_key: score, "score": score}, ""
 
 
-# Linux refuses any single argument over 128 KiB. The Runner ships the whole
-# program as one base64 argument to `python3 -c`, and the CDR evaluator alone
-# is about 122 KB once encoded, so an analysis job that also carries the search
-# history crossed the limit ("Argument list too long"). A program whose encoding
-# would exceed this budget therefore travels compressed inside a small bootstrap.
-_ARGUMENT_BUDGET_BYTES = 96 * 1024
+# Compress larger programs to reduce transport volume. The API streams source
+# through stdin; compression alone cannot guarantee a bounded command argument.
+_COMPRESSION_THRESHOLD_BYTES = 96 * 1024
 
 
-def as_shell_argument(program: str) -> str:
-    """Return a program the Runner can pass as one command argument.
+def compact_program(program: str) -> str:
+    """Optionally compress source before submitting it to the Runner proxy.
 
     Small programs are returned unchanged. A large one is zlib-compressed and
     wrapped in a bootstrap that executes it with ``__name__ == "__main__"``, so
     the evaluator's entry-point guard still runs it.
     """
     source = program.encode("utf-8")
-    if len(base64.b64encode(source)) <= _ARGUMENT_BUDGET_BYTES:
+    if len(base64.b64encode(source)) <= _COMPRESSION_THRESHOLD_BYTES:
         return program
     blob = base64.b64encode(zlib.compress(source, 9)).decode("ascii")
     return ("import base64, zlib\n"
@@ -234,7 +231,7 @@ class RunnerNpuClient:
         on_stage: Optional[Callable[[str], None]] = None,
     ) -> Tuple[dict[str, Any], Optional[dict[str, Any]]]:
         body = dict(self.execution)
-        body["code"] = as_shell_argument(program_with_candidate(str(self.execution.get("code") or ""), code))
+        body["code"] = compact_program(program_with_candidate(str(self.execution.get("code") or ""), code))
         execution_id = f"evolve-{uuid.uuid4().hex}"
         body["executionId"] = execution_id
         raw = json.dumps(body, separators=(",", ":"), sort_keys=True)

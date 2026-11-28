@@ -15,7 +15,10 @@
 import { createTest } from "../../../../test/support/tagged/compat.mjs";
 const { test } = createTest(import.meta.url, { tags: ["category:ut", "os:linux", "arch:amd64", "arch:arm64"] });
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { deflateSync } from "node:zlib";
 
 import type { PermissionEpoch, ShellExecutionRequest } from "@sciencediscovery/schema";
 
@@ -123,10 +126,67 @@ test("a score uses the session's cards and a fresh shell, not the sidecar's devi
   assert.equal(submitted.kernelMode, "ephemeral");
   assert.match(submitted.code, /^python3 -c /);
   assert.equal(
-    Buffer.from(submitted.code.match(/b64decode\("([^"]+)"\)/)![1]!, "base64").toString("utf8"),
+    Buffer.from(submitted.code.split("\n")[1]!, "base64").toString("utf8"),
     "print(_EVOLVE_CANDIDATE)\n",
   );
   assert.equal(shellForFixedProgram("print(1)\n").includes("print(1)"), false);
+});
+
+test("CDR5-003 compressed full history exceeding the argv limit executes intact through the proxy", async () => {
+  const alphabet = "ACDEFGHIKLMNPQRSTVWY";
+  const history = Array.from({ length: 2_000 }, (_, index) => {
+    const sequence = "A".repeat(90) + Array.from(randomBytes(30), (byte) => alphabet[byte % alphabet.length]).join("");
+    return {
+      candidate_id: `node${index + 1}`, parent_id: "node0", cycle: Math.floor(index / 8),
+      skill_id: "cdr-full-redesign", chains: { D: sequence }, sequence,
+      objective: index / 2_000, structure_id: randomBytes(32).toString("hex"),
+      metrics: { iptm: index / 2_000, esm2: -index / 1_000 }, retained: false,
+    };
+  });
+  const note = "引号 ' \"、换行\n、反斜杠 \\、$(exit 23)、`exit 24`、🧬";
+  const candidate = JSON.stringify({ analysis_tool: "analyze_evolution_tree", history, note });
+  const source = [
+    "from __future__ import annotations",
+    "import hashlib, json",
+    `candidate_json = ${JSON.stringify(candidate)}`,
+    "_EVOLVE_CANDIDATE = json.loads(candidate_json)",
+    "def annotated(value: UndefinedType): pass",
+    'if __name__ == "__main__":',
+    '    print(json.dumps({"count": len(_EVOLVE_CANDIDATE["history"]), "digest": hashlib.sha256(candidate_json.encode()).hexdigest(), "note": _EVOLVE_CANDIDATE["note"], "annotation": annotated.__annotations__["value"]}))',
+  ].join("\n");
+  // The evolve sidecar may already have compressed the program. Its compressed
+  // bytes still exceed one Linux argument after the API's base64 encoding.
+  const compressed = deflateSync(Buffer.from(source)).toString("base64");
+  const program = `import base64, zlib\nexec(compile(zlib.decompress(base64.b64decode("${compressed}")), '<evolve-program>', 'exec'))\n`;
+  assert.ok(Buffer.byteLength(Buffer.from(program).toString("base64")) > 128 * 1024);
+  const context = deps();
+  const token = context.grants.issue("run-long", "session", 30);
+  const response = capture();
+  await handleEvolveRunner(
+    requestOf("POST", `Bearer ${token}`, { code: program, executionId: "evolve-long" }),
+    response, new URL("http://api/internal/evolve-runner/run-long/shell-executions"), context,
+  );
+  assert.equal(response.status, 202);
+  const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-euo", "pipefail", "-s"], {
+    input: context.started[0]!.code, encoding: "utf8", timeout: 10_000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    count: history.length, digest: createHash("sha256").update(candidate).digest("hex"),
+    note, annotation: "UndefinedType",
+  });
+});
+
+test("CDR5-003 streamed programs preserve stdout, stderr and failure exit status", () => {
+  const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-euo", "pipefail", "-s"], {
+    input: shellForFixedProgram('import sys\nprint("output")\nprint("failure", file=sys.stderr)\nsys.exit(7)\n'),
+    encoding: "utf8", timeout: 10_000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 7);
+  assert.equal(result.stdout, "output\n");
+  assert.equal(result.stderr, "failure\n");
 });
 
 test("no ticked card refuses the score", async () => {

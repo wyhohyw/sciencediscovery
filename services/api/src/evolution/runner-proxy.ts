@@ -101,7 +101,12 @@ export function connectedRunner(
 /** Shell that runs the fixed Python program. The candidate is already bound in the source. */
 export function shellForFixedProgram(pythonSource: string): string {
   const encoded = Buffer.from(pythonSource, "utf8").toString("base64");
-  return `python3 -c 'import base64; exec(base64.b64decode("${encoded}"))'\n`;
+  // The Runner streams this shell over stdin. Keep Python's -c argument fixed
+  // too: even compressed candidate histories can exceed Linux's argv limit.
+  // An underscore cannot occur in standard base64, so the quoted delimiter
+  // cannot collide with the source or expand candidate text as shell syntax.
+  return "python3 -c 'import base64, sys; exec(compile(base64.b64decode(sys.stdin.buffer.read()), \"<evolve-program>\", \"exec\"))' <<'SCIENCEDISCOVERY_EVOLVE_SOURCE'\n"
+    + encoded + "\nSCIENCEDISCOVERY_EVOLVE_SOURCE\n";
 }
 
 function bearer(request: IncomingMessage): string | undefined {

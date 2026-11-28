@@ -611,28 +611,28 @@ def test_json_values_remain_data_when_the_fixed_program_executes():
     assert values["result"] == candidate
 
 
-def test_a_program_over_the_argument_limit_travels_compressed_and_still_runs():
+def test_a_large_program_travels_compressed_and_still_runs():
     import base64
 
-    from sciencediscovery_evolve.npu_job import as_shell_argument
+    from sciencediscovery_evolve.npu_job import compact_program
 
     # Shaped like the CDR evaluator: real source, far larger than one 128 KiB argument once encoded.
     filler = "".join(f"value_{index} = {index * 7919 % 100003}\n" for index in range(12000))
     program = program_with_candidate(filler + "result = _EVOLVE_CANDIDATE['lr'] * 2\n", '{"lr": 0.25}')
     assert len(base64.b64encode(program.encode("utf-8"))) > 128 * 1024
 
-    argument = as_shell_argument(program)
-    assert len(base64.b64encode(argument.encode("utf-8"))) < 128 * 1024
+    compact = compact_program(program)
+    assert len(compact.encode("utf-8")) < len(program.encode("utf-8"))
     values = {"__name__": "__main__"}
-    exec(argument, values)
+    exec(compact, values)
     assert values["result"] == 0.5
 
 
 def test_a_small_program_is_sent_unchanged():
-    from sciencediscovery_evolve.npu_job import as_shell_argument
+    from sciencediscovery_evolve.npu_job import compact_program
 
     program = program_with_candidate("result = _EVOLVE_CANDIDATE", '{"lr": 0.2}')
-    assert as_shell_argument(program) == program
+    assert compact_program(program) == program
 
 
 def test_failed_measurement_is_shared_by_shards_but_retried_next_attempt():
