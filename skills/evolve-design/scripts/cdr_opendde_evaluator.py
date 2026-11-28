@@ -1114,6 +1114,12 @@ def _child_env() -> dict:
     env["SOLUBLE_MPNN_WEIGHTS"] = paths["soluble_weights"]
     env["LIGANDMPNN_DIR"] = paths["ligand"]
     env["OPENDDE_HARNESS_DIR"] = paths["harness"]
+    # The harness plip_runner looks for PLIP_COMMAND, plipcmd.py or plipcmd on PATH; the model venv only
+    # ships the `plip` entry script (same main as plip.plipcmd), so point at it unless configured.
+    if not env.get("PLIP_COMMAND"):
+        plip = os.path.join(os.path.dirname(_model_python()), "plip")
+        if os.path.isfile(plip):
+            env["PLIP_COMMAND"] = plip
     pylib = os.path.join(DEPS_DIR, "pylib")
     if os.path.isdir(pylib):
         env["PYTHONPATH"] = pylib + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")

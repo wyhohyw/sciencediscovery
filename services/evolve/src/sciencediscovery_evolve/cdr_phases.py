@@ -180,7 +180,9 @@ class CdrPhaseRunner:
                     result = {"available": False, "reason": str(error)}
                 calls_used += 1
                 unavailable = isinstance(result, dict) and result.get("available") is False
-                reason = f" ({str(result.get('reason') or '')[:300]})" if unavailable else ""
+                # Harness backends report failure text as `reason` (ours) or `result` (PLIP); show either.
+                detail = str((result.get("reason") or result.get("result") or "")) if unavailable else ""
+                reason = f" ({detail[:300]})" if detail else ""
                 self.emit({"type": "log", "level": "info", "message": f"{role} tool {name}: " +
                     ("unavailable" + reason if unavailable else "completed")})
                 messages.append({"role": "tool", "tool_call_id": call["id"],

@@ -37,6 +37,21 @@ def _evaluator():
     return module
 
 
+def test_plip_command_defaults_to_the_model_venv_entry_script(tmp_path, monkeypatch):
+    # The harness plip_runner only finds PLIP via PLIP_COMMAND / plipcmd on PATH; the venv ships `plip`.
+    evaluator = _evaluator()
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("", encoding="utf-8")
+    (venv_bin / "plip").write_text("", encoding="utf-8")
+    monkeypatch.setenv("OPENDDE_PYTHON", str(venv_bin / "python"))
+    monkeypatch.delenv("PLIP_COMMAND", raising=False)
+    assert evaluator._child_env()["PLIP_COMMAND"] == str(venv_bin / "plip")
+
+    monkeypatch.setenv("PLIP_COMMAND", "/custom/plip")
+    assert evaluator._child_env()["PLIP_COMMAND"] == "/custom/plip"
+
+
 def test_every_check_the_capabilities_read_is_reported_by_the_probe():
     evaluator = _evaluator()
     needed = set(FOLD_CHECKS) | {name for names in SKILL_CHECKS.values() for name in names}
