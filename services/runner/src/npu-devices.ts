@@ -49,23 +49,33 @@ import { procMountArguments, type SandboxProcMode } from "@sciencediscovery/sand
 
 const execFileAsync = promisify(execFile);
 
-/** Host management nodes every Ascend workload needs alongside its cards. */
 /**
- * Driver nodes every sandbox must see.
- *
- * On 910C, `npu-smi` fails with "get board type failed, ret -9005" unless
- * every `/dev/davinci*` node is present, not only the card the run selected.
- * The selected card is still bound on its own, remapped from zero. The rest
- * stay at their host numbers so the driver can enumerate them.
+ * Driver nodes every sandbox must see alongside its cards. A workload needs
+ * nothing else: measured on the 16-chip 910 host, `torch_npu` initialises and
+ * computes with only these three plus its own card, and reports exactly the
+ * cards the run was granted.
  */
 export const NPU_MANAGEMENT_DEVICES = [
   "/dev/davinci_manager",
   "/dev/devmm_svm",
   "/dev/hisi_hdc",
-  "/dev/davinci1", "/dev/davinci2", "/dev/davinci3", "/dev/davinci4",
-  "/dev/davinci5", "/dev/davinci6", "/dev/davinci7", "/dev/davinci8",
-  "/dev/davinci9", "/dev/davinci10", "/dev/davinci11", "/dev/davinci12",
-  "/dev/davinci13", "/dev/davinci14", "/dev/davinci15",
+] as const;
+
+/**
+ * Extra nodes the probe needs, and only the probe.
+ *
+ * On 910C, `npu-smi` fails with "get board type failed, ret -9005" unless every
+ * `/dev/davinci*` node is present, not only the card being probed — no narrower
+ * query avoids it. A workload has no such need, so these stay out of the real
+ * launch: handing one sandbox a card another one is computing on makes the
+ * driver refuse both with "Different containers share the same device", which
+ * is what used to break every selection beyond a single card 0.
+ */
+export const NPU_PROBE_ENUMERATION_DEVICES = [
+  "/dev/davinci0", "/dev/davinci1", "/dev/davinci2", "/dev/davinci3",
+  "/dev/davinci4", "/dev/davinci5", "/dev/davinci6", "/dev/davinci7",
+  "/dev/davinci8", "/dev/davinci9", "/dev/davinci10", "/dev/davinci11",
+  "/dev/davinci12", "/dev/davinci13", "/dev/davinci14", "/dev/davinci15",
 ] as const;
 
 /** Candidate `npu-smi` locations; 910B images ship it in one of these. */
@@ -332,10 +342,20 @@ export function npuDeviceBindArguments(
   const mapping = npuDeviceMapping(selection);
   if (mapping.length === 0) return [];
   const args: string[] = [];
+  // A node the selection already placed must not be offered again by the
+  // enumeration list. Binding a selected card at both its host path and its
+  // remapped one makes the driver refuse the sandbox with "Different
+  // containers share the same device", and binding an unselected card over a
+  // remapped path would hand the sandbox a card it was never granted. Only
+  // card 0 escaped the first case, because it remaps onto itself.
+  const claimed = new Set<string>();
   for (const { hostIndex, sandboxIndex } of mapping) {
+    claimed.add(npuDevicePath(hostIndex));
+    claimed.add(npuDevicePath(sandboxIndex));
     args.push("--dev-bind", npuDevicePath(hostIndex), npuDevicePath(sandboxIndex));
   }
   for (const device of availableManagementDevices) {
+    if (claimed.has(device)) continue;
     args.push("--dev-bind", device, device);
   }
   return args;
@@ -349,6 +369,51 @@ export async function availableNpuManagementDevices(): Promise<string[]> {
   }
   return present;
 }
+
+/**
+ * The nodes one probe sandbox may bind.
+ *
+ * The DCMI probe needs the card it is probing and nothing else, so it can run
+ * while other cards are busy. The `npu-smi` fallback cannot: it enumerates the
+ * whole machine or refuses, so it also binds every card node, and it can only
+ * be trusted on an otherwise idle machine.
+ */
+export async function availableNpuProbeDevices(tools: NpuHostTools): Promise<string[]> {
+  const present = await availableNpuManagementDevices();
+  if (tools.pythonPath) return present;
+  for (const device of NPU_PROBE_ENUMERATION_DEVICES) {
+    if (await exists(device)) present.push(device);
+  }
+  return present;
+}
+
+/**
+ * Open the probed card through the driver's own interface and nothing else.
+ *
+ * `dcmi_init` is the call that opens the character device, so its return code
+ * answers the only question the probe asks. Measured on the 16-chip 910 host:
+ * -8005 when no card is bound, -8020 when another container already holds the
+ * card, 0 with one card listed when it is free. Unlike `npu-smi info` this
+ * needs no view of the other cards, which is what lets several probes and
+ * several running executions share a machine.
+ */
+const NPU_SANDBOX_DCMI_PROBE_SCRIPT = `
+import ctypes, sys
+
+lib = ctypes.CDLL("${ASCEND_ROOT}/driver/lib64/driver/libdcmi.so")
+code = lib.dcmi_init()
+if code != 0:
+    raise SystemExit(
+        f"the driver refused to open this card (dcmi_init returned {code}); "
+        "another container may be holding it")
+count = ctypes.c_int(0)
+cards = (ctypes.c_int * 64)()
+code = lib.dcmi_get_card_num_list(ctypes.byref(count), cards, 64)
+if code != 0:
+    raise SystemExit(f"the driver did not list this card (dcmi_get_card_num_list returned {code})")
+if count.value < 1:
+    raise SystemExit("the driver reports no card inside the sandbox")
+`;
 
 /**
  * The throwaway sandbox used to answer "can this one card be opened here?".
@@ -380,24 +445,28 @@ export function npuSandboxProbeArguments(options: {
     "--clearenv",
     "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin",
     "--setenv", "LD_LIBRARY_PATH", npuSandboxEnvironment(context).LD_LIBRARY_PATH,
-    context.npuSmiPath ?? "npu-smi",
-    "info",
+    ...(context.pythonPath
+      ? [context.pythonPath, "-c", NPU_SANDBOX_DCMI_PROBE_SCRIPT]
+      : [context.npuSmiPath ?? "npu-smi", "info"]),
   ];
 }
 
 /**
- * `npu-smi info` doubles as the probe binary: it is present on every Ascend
- * host, needs no interpreter, and exercises the same driver enumeration a
- * framework would. Exit 0 means the card opened; anything else means it did
- * not, and its first meaningful line explains why.
+ * Exit 0 means the card opened; anything else means it did not, and its first
+ * meaningful line explains why.
+ *
+ * The host's Python opens the card through DCMI, the same library the driver's
+ * own tools use. `npu-smi info` is the fallback for a machine without one: it
+ * answers the same question, but only by enumerating every card, so it needs
+ * the whole machine to itself.
  */
 export async function probeNpuDeviceInSandbox(options: {
   context: NpuProbeContext;
   hostIndex: number;
   managementDevices: readonly string[];
 }): Promise<{ usable: boolean; reason?: string }> {
-  if (!options.context.npuSmiPath) {
-    return { reason: "npu-smi is not installed on this machine.", usable: false };
+  if (!options.context.pythonPath && !options.context.npuSmiPath) {
+    return { reason: "neither a host Python nor npu-smi is installed on this machine.", usable: false };
   }
   if (!await exists(npuDevicePath(options.hostIndex))) {
     return { reason: `${npuDevicePath(options.hostIndex)} does not exist on this machine.`, usable: false };
@@ -671,19 +740,31 @@ async function readNpuSmiDevices(npuSmiPath: string): Promise<NpuDeviceStatus[]>
   });
 }
 
-/** Probe each listed card in its own throwaway sandbox, concurrently. */
+/**
+ * Probe each listed card in its own throwaway sandbox.
+ *
+ * The DCMI probe binds only the card it is probing, so a machine with many
+ * cards can probe them at once. The `npu-smi` fallback binds every card node
+ * to enumerate at all, which means two of those probes each hold the other's
+ * card and the driver refuses both — so that path goes one card at a time.
+ */
 async function probeListedDevices(devices: NpuDeviceStatus[], context: NpuProbeContext): Promise<void> {
-  const managementDevices = await availableNpuManagementDevices();
-  await Promise.all(devices.map(async (device) => {
+  const managementDevices = await availableNpuProbeDevices(context);
+  const probe = async (device: NpuDeviceStatus): Promise<void> => {
     if (!SUPPORTED_CHIP_PATTERN.test(device.chipName)) {
       device.sandboxUsable = false;
       device.sandboxUnusableReason = `Only Ascend 910 series chips are supported; this one reports "${device.chipName}".`;
       return;
     }
-    const probe = await probeNpuDeviceInSandbox({ context, hostIndex: device.hostIndex, managementDevices });
-    device.sandboxUsable = probe.usable;
-    if (probe.reason) device.sandboxUnusableReason = probe.reason;
-  }));
+    const result = await probeNpuDeviceInSandbox({ context, hostIndex: device.hostIndex, managementDevices });
+    device.sandboxUsable = result.usable;
+    if (result.reason) device.sandboxUnusableReason = result.reason;
+  };
+  if (context.pythonPath) {
+    await Promise.all(devices.map(probe));
+    return;
+  }
+  for (const device of devices) await probe(device);
 }
 
 /**

@@ -259,6 +259,29 @@ describe("device binds and sandbox numbering", () => {
     assert.deepEqual(npuDeviceBindArguments([4, 4], []), ["--dev-bind", "/dev/davinci4", "/dev/davinci0"]);
   });
 
+  test("never offers a selected card a second time through the enumeration list", () => {
+    // Measured on the 16-chip 910 host: card 1 bound at both /dev/davinci0 and
+    // /dev/davinci1 exits 172 with "Different containers share the same device",
+    // and the same card passes once the duplicate is dropped.
+    const args = npuDeviceBindArguments([1], ["/dev/davinci_manager", "/dev/davinci1", "/dev/davinci2"]);
+    assert.deepEqual(args, [
+      "--dev-bind", "/dev/davinci1", "/dev/davinci0",
+      "--dev-bind", "/dev/davinci_manager", "/dev/davinci_manager",
+      "--dev-bind", "/dev/davinci2", "/dev/davinci2",
+    ]);
+  });
+
+  test("never lets the enumeration list overwrite a card's remapped node", () => {
+    // /dev/davinci1 carries selected card 3 here; binding host card 1 over it
+    // would hand the sandbox a card the run was never granted.
+    const args = npuDeviceBindArguments([2, 3], ["/dev/davinci1", "/dev/davinci4"]);
+    assert.deepEqual(args, [
+      "--dev-bind", "/dev/davinci2", "/dev/davinci0",
+      "--dev-bind", "/dev/davinci3", "/dev/davinci1",
+      "--dev-bind", "/dev/davinci4", "/dev/davinci4",
+    ]);
+  });
+
   test("emits nothing at all when no card was selected", () => {
     assert.deepEqual(npuDeviceBindArguments([], ["/dev/davinci_manager"]), []);
   });
@@ -309,8 +332,23 @@ describe("sandbox probe argv", () => {
     assert.ok(!args.includes("--disable-userns"));
   });
 
-  test("runs npu-smi as the probe so no interpreter is required", () => {
+  test("runs npu-smi as the probe when the machine has no Python", () => {
     assert.deepEqual(probeArgs.slice(-2), ["/usr/local/bin/npu-smi", "info"]);
+  });
+
+  test("opens the card through DCMI when the machine has a Python", () => {
+    // Measured on the 16-chip 910 host: dcmi_init answers -8020 for a card
+    // another container holds and 0 for a free one, without needing to see any
+    // other card — which npu-smi cannot do.
+    const args = npuSandboxProbeArguments({
+      context: { ...CONTEXT, pythonPath: "/usr/bin/python3" },
+      hostIndex: 6,
+      managementDevices: ["/dev/davinci_manager"],
+    });
+    assert.equal(args.at(-3), "/usr/bin/python3");
+    assert.equal(args.at(-2), "-c");
+    assert.match(String(args.at(-1)), /dcmi_init/u);
+    assert.ok(!args.includes("/dev/davinci1"), "the DCMI probe must bind no card but its own");
   });
 
   test("carries the driver library path the loader needs", () => {
@@ -345,6 +383,17 @@ describe("sandbox environment", () => {
 describe("prepareSandboxNpu", () => {
   test("stays out of the launch entirely when nothing was selected", async () => {
     assert.equal(await prepareSandboxNpu([], CONTEXT), undefined);
+  });
+
+  test("hands an execution its own cards and no others", async () => {
+    // A foreign card node in the launch makes the driver refuse two concurrent
+    // executions with "Different containers share the same device", which is
+    // what kept every multi-card search on one worker.
+    const npu = await prepareSandboxNpu([5, 4], CONTEXT);
+    const bound = (npu?.bindArgs ?? [])
+      .map((argument, index, all) => (all[index - 1] === "--dev-bind" ? argument : undefined))
+      .filter((argument): argument is string => /^\/dev\/davinci\d+$/u.test(argument ?? ""));
+    assert.deepEqual(bound, ["/dev/davinci4", "/dev/davinci5"]);
   });
 
   test("reports how the selected cards appear inside the sandbox", async () => {
