@@ -412,6 +412,23 @@ def test_CDR4_002_wrong_role_tools_are_not_dispatched():
         phase.run("analyze", "test", AnalyzeOutput)
 
 
+def test_CDR4_002_a_rejected_tool_call_is_answered_instead_of_ending_the_phase():
+    # Every harness tool answers a bad call with its error text. An analyze phase
+    # that asked for structures with an empty candidate_ids list used to take the
+    # whole search down with the validation error.
+    answers = []
+    def chat(messages, definitions, **kwargs):
+        if messages[-1]["role"] == "tool":
+            answers.append(json.loads(messages[-1]["content"]))
+            return {"content": '{"downstream_header":"recovered"}'}
+        return {"tool_calls": [tool_call("protrek_structure_search", {"candidate_ids": []})]}
+    tools = CdrTools(cdr._config(baseline()), lambda p: pytest.fail("a rejected call must not reach the backend"))
+    phase = CdrPhaseRunner(chat, tools, tools.config, should_stop=lambda: False, emit=lambda e: None)
+    assert phase.run("analyze", "test", AnalyzeOutput)["downstream_header"] == "recovered"
+    assert answers[0]["available"] is False
+    assert "candidate_ids" in answers[0]["reason"]
+
+
 def test_CDR4_002_a_tool_loop_stops_at_the_harness_role_limit():
     dispatched, turns = [], []
     tools = CdrTools(cdr._config(baseline()), lambda p: dispatched.append(p) or {"tool_result": {"available": False}})

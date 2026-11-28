@@ -64,7 +64,6 @@ class Profile:
     skills: tuple[str, ...]
     allowed: tuple[str, ...]
     turns: int
-    errors_fatal: bool = True
 
 
 PROFILES = {
@@ -73,7 +72,7 @@ PROFILES = {
         ("protrek_sequence_search", "protrek_structure_search"), 4),
     "reflect": Profile(prompts.REFLECT_SYSTEM_PROMPT,
         ("evolutionary-analysis", "epitope-analysis", "structure-analysis"),
-        ("analyze_current_cycle_structure", "analyze_evolution_tree", "analyze_epitope"), 6, False),
+        ("analyze_current_cycle_structure", "analyze_evolution_tree", "analyze_epitope"), 6),
     "quality": Profile(prompts.QUALITY_CHECK_SYSTEM_PROMPT,
         ("developability-filter",), ("check_antibody_developability",), 3),
     "design": Profile(prompts.DESIGN_SYSTEM_PROMPT,
@@ -183,9 +182,11 @@ class CdrPhaseRunner:
                     raise PhaseError("phase stopped before executing tools")
                 function = call.get("function") or {}
                 name = function.get("name")
+                # A tool outside the phase's registry is this engine's own wiring
+                # fault, not something the model can answer differently.
+                if name not in profile.allowed:
+                    raise PhaseError(f"tool is not allowed in {role}: {name}")
                 try:
-                    if name not in profile.allowed:
-                        raise PhaseError(f"tool is not allowed in {role}: {name}")
                     if name == "analyze_evolution_tree":
                         tree_calls += 1
                         if tree_calls > 1:
@@ -195,8 +196,10 @@ class CdrPhaseRunner:
                         raise PhaseError("tool arguments must be an object")
                     result = self.tools.execute(name, args, timeout=max(0.01, deadline - time.monotonic()))
                 except Exception as error:
-                    if profile.errors_fatal:
-                        raise PhaseError(f"{name}: {error}") from error
+                    # Every harness tool answers a bad call with its error text and
+                    # lets the agent try again; none of them ends the task. A phase
+                    # that died on one rejected argument list threw away the whole
+                    # search, which is what an empty candidate_ids list once did.
                     result = {"available": False, "reason": str(error)}
                 calls_used += 1
                 unavailable = isinstance(result, dict) and result.get("available") is False
