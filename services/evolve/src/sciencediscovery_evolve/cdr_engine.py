@@ -251,7 +251,9 @@ class CdrEngine:
                                             "seed", 42, 0, 2**32 - 1, integer=True)}
         rng = random.Random(config["seed"])
         tools = CdrTools(config, measure)
-        tools.run_key = _digest(spec.search_id)
+        # The evaluator names its per-run artifact directory with a bare 64-hex
+        # digest, so the prefixed `sha256:` form is rejected as an invalid ID.
+        tools.run_key = _digest(spec.search_id).split(":", 1)[1]
         phases = None
         if complete is not None and callable(getattr(complete, "chat", None)):
             phases = CdrPhaseRunner(complete.chat, tools, config, should_stop=should_stop, emit=emit)

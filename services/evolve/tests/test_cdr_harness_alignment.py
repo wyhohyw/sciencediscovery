@@ -8,6 +8,7 @@ import copy
 import io
 import json
 import random
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -462,6 +463,7 @@ def test_CDR4_002_production_quality_role_uses_stub_evidence_and_commits_the_bat
 
 def test_CDR4_003_evolution_tool_receives_chain_local_cdr_history_and_skill_labels():
     histories = []
+    run_keys = []
     def chat(messages, definitions, **kwargs):
         system = messages[0]["content"]
         if "You are an antibody engineering analyst" in system:
@@ -476,6 +478,7 @@ def test_CDR4_003_evolution_tool_receives_chain_local_cdr_history_and_skill_labe
     def measure(payload):
         if payload.get("analysis_tool"):
             histories.append(copy.deepcopy(payload["history"]))
+            run_keys.append(payload["run_key"])
             return {"tool_result": {"available": True}}
         return reading(payload)
     complete = lambda p: pytest.fail("text-only model path")
@@ -483,6 +486,8 @@ def test_CDR4_003_evolution_tool_receives_chain_local_cdr_history_and_skill_labe
     cdr.CdrEngine(complete=complete, measure=measure).run(spec(baseline_code=baseline(
         reflection_interval=1)), lambda e: None, lambda: False)
     assert len(histories) == 1
+    # The evaluator names the analysis directory with this value and accepts only a bare 64-hex digest.
+    assert len(run_keys) == 1 and re.fullmatch(r"[0-9a-f]{64}", run_keys[0])
     assert histories[0][0]["chains"] == {"D": "ACDE"}
     child = histories[0][1]
     assert child["chains"] == {"D": "AWDE"}
