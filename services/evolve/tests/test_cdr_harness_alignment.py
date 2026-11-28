@@ -488,3 +488,21 @@ def test_CDR4_003_evolution_tool_receives_chain_local_cdr_history_and_skill_labe
     assert child["chains"] == {"D": "AWDE"}
     assert child["cycle"] == 0 and child["skill_id"] == cdr.POINT_SKILL
     assert child["parent_id"] == "node0"
+
+
+def test_CDR4_004_design_accepts_the_harness_candidates_shape_the_model_returns():
+    """The design contract makes the model answer with candidates[].mutations, not the host's top-level array.
+
+    Before this was accepted, every such answer was refused as 'no mutations list' and the cycle was skipped.
+    """
+    parent = SimpleNamespace(sequence="ACDEFG", score=-2.0, metrics={}, gate="")
+    config = {"chain": "D", "mutable": {2, 3}, "mutation_min": 1, "mutation_max": 3,
+              "target_chain": "A", "target_sequence": "MKV", "target_hotspots": [1]}
+    host = json.dumps({"mutations": [[["D", 2, "W"]], [["D", 3, "Y"]]]})
+    harness = json.dumps({"skill_id": cdr.POINT_SKILL, "selection_reason": "x",
+                          "candidates": [{"mutations": [["D", 2, "W"]]}, {"mutations": [["D", 3, "Y"]]}]})
+    expected = [[["D", 2, "W"]], [["D", 3, "Y"]]]
+    assert cdr._proposals(lambda prompt: host, config, parent, 2) == expected
+    assert cdr._proposals(lambda prompt: harness, config, parent, 2) == expected
+    with pytest.raises(cdr._Refusal, match="no mutations list"):
+        cdr._proposals(lambda prompt: json.dumps({"unrelated": 1}), config, parent, 2)

@@ -1261,6 +1261,24 @@ def _reflect(complete: CompleteFn, cycle: int, skill: str, results: list[dict[st
         return "none"
 
 
+def _mutation_groups(parsed: Any) -> list | None:
+    """Mutation groups from either design shape the model may return.
+
+    The host request asks for a top-level ``mutations`` array, but the harness
+    design contract the model follows returns ``candidates[].mutations``. Both
+    carry the same groups, so accept either instead of skipping the cycle.
+    """
+    if not isinstance(parsed, dict):
+        return None
+    if isinstance(parsed.get("mutations"), list):
+        return parsed["mutations"]
+    candidates = parsed.get("candidates")
+    if isinstance(candidates, list):
+        return [item["mutations"] for item in candidates
+                if isinstance(item, dict) and isinstance(item.get("mutations"), list)]
+    return None
+
+
 def _proposals(
     complete: CompleteFn, config: dict[str, Any], parent: _Member, count: int,
     state: dict[str, Any] | None = None,
@@ -1286,7 +1304,7 @@ def _proposals(
         parsed = json.loads(text[start:end + 1] if start >= 0 and end > start else text)
     except json.JSONDecodeError as error:
         raise _Refusal("the model did not return JSON") from error
-    groups = parsed.get("mutations") if isinstance(parsed, dict) else None
+    groups = _mutation_groups(parsed)
     if not isinstance(groups, list):
         raise _Refusal("the model JSON has no mutations list")
     proposals: list[list[list[Any]]] = []
@@ -1323,7 +1341,7 @@ def _proposals_full(
         parsed = json.loads(text[start:end + 1] if start >= 0 and end > start else text)
     except json.JSONDecodeError as error:
         raise _Refusal("the model did not return JSON") from error
-    groups = parsed.get("mutations") if isinstance(parsed, dict) else None
+    groups = _mutation_groups(parsed)
     if not isinstance(groups, list):
         raise _Refusal("the model JSON has no mutations list")
     expected = {(config["chain"], pos) for pos in ordered}
