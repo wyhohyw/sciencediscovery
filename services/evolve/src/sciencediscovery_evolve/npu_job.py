@@ -23,10 +23,12 @@ without an NPU result, is invalid and carries no numeric score.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import threading
+import zlib
 import time
 import urllib.error
 import urllib.request
@@ -107,6 +109,29 @@ def interpret_npu_job(
         return False, {"job_status": "fault"}, f"{metric_key} missing"
     score = float(value)
     return True, {"job_status": "completed", "device": "npu", metric_key: score, "score": score}, ""
+
+
+# Linux refuses any single argument over 128 KiB. The Runner ships the whole
+# program as one base64 argument to `python3 -c`, and the CDR evaluator alone
+# is about 122 KB once encoded, so an analysis job that also carries the search
+# history crossed the limit ("Argument list too long"). A program whose encoding
+# would exceed this budget therefore travels compressed inside a small bootstrap.
+_ARGUMENT_BUDGET_BYTES = 96 * 1024
+
+
+def as_shell_argument(program: str) -> str:
+    """Return a program the Runner can pass as one command argument.
+
+    Small programs are returned unchanged. A large one is zlib-compressed and
+    wrapped in a bootstrap that executes it with ``__name__ == "__main__"``, so
+    the evaluator's entry-point guard still runs it.
+    """
+    source = program.encode("utf-8")
+    if len(base64.b64encode(source)) <= _ARGUMENT_BUDGET_BYTES:
+        return program
+    blob = base64.b64encode(zlib.compress(source, 9)).decode("ascii")
+    return ("import base64, zlib\n"
+            f"exec(compile(zlib.decompress(base64.b64decode({blob!r})), '<evolve-program>', 'exec'))\n")
 
 
 def program_with_candidate(fixed: str, candidate: str) -> str:
@@ -209,7 +234,7 @@ class RunnerNpuClient:
         on_stage: Optional[Callable[[str], None]] = None,
     ) -> Tuple[dict[str, Any], Optional[dict[str, Any]]]:
         body = dict(self.execution)
-        body["code"] = program_with_candidate(str(self.execution.get("code") or ""), code)
+        body["code"] = as_shell_argument(program_with_candidate(str(self.execution.get("code") or ""), code))
         execution_id = f"evolve-{uuid.uuid4().hex}"
         body["executionId"] = execution_id
         raw = json.dumps(body, separators=(",", ":"), sort_keys=True)
