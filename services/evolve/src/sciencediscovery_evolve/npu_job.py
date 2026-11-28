@@ -373,7 +373,15 @@ class RunnerNpuClient:
             raise NpuJobError(f"runner {method} {path} failed: {error.reason}") from error
         if not payload:
             return status, {}
-        loaded = json.loads(payload)
+        try:
+            loaded = json.loads(payload)
+        except json.JSONDecodeError as error:
+            # A body that is not JSON is a transport fault like any other status the
+            # proxy refuses with. Raising NpuJobError keeps it inside the retry and
+            # reporting paths instead of killing the run with a decoder traceback.
+            raise NpuJobError(
+                f"runner {method} {path} returned {status} with a body that is not JSON: {payload[:300]!r}"
+            ) from error
         return status, loaded
 
 

@@ -381,6 +381,29 @@ def test_CDR4_002_phase_token_budget_prevents_tool_execution():
         phase.run("reflect", "test", AnalyzeOutput)
 
 
+def test_CDR4_002_a_prose_answer_is_asked_once_more_before_the_phase_fails():
+    """Observed live: analyze answered in prose after a ProTrek result and ended the search."""
+    prompts_seen = []
+    answers = iter(["ProTrek shows three homologs worth keeping.", '{"downstream_header":"recovered"}'])
+
+    def chat(messages, definitions, **kwargs):
+        prompts_seen.append(messages[-1]["content"])
+        return {"content": next(answers)}
+
+    tools = CdrTools(cdr._config(baseline()), lambda p: pytest.fail("no tool is needed here"))
+    phase = CdrPhaseRunner(chat, tools, tools.config, should_stop=lambda: False, emit=lambda e: None)
+    assert phase.run("analyze", "test", AnalyzeOutput)["downstream_header"] == "recovered"
+    assert "JSON object the schema describes" in prompts_seen[1]
+
+
+def test_CDR4_002_a_phase_that_never_answers_in_json_still_fails_with_the_text():
+    tools = CdrTools(cdr._config(baseline()), lambda p: pytest.fail("no tool is needed here"))
+    phase = CdrPhaseRunner(lambda *a, **kw: {"content": "still prose"}, tools, tools.config,
+        should_stop=lambda: False, emit=lambda e: None)
+    with pytest.raises(PhaseError, match="still prose"):
+        phase.run("analyze", "test", AnalyzeOutput)
+
+
 def test_CDR4_002_wrong_role_tools_are_not_dispatched():
     tools = CdrTools(cdr._config(baseline()), lambda p: pytest.fail("wrong-role tool dispatched"))
     phase = CdrPhaseRunner(lambda *a, **kw: {"tool_calls": [tool_call("analyze_evolution_tree")]},

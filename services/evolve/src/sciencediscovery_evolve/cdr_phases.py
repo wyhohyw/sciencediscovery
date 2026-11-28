@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from importlib.resources import files
 from typing import Any, Callable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 
 from . import cdr_harness_prompts as prompts
 from .cdr_harness_reflection import ReflectOutput
@@ -84,7 +84,12 @@ PROFILES = {
 
 def json_object(text: str) -> dict[str, Any]:
     start, end = text.find("{"), text.rfind("}")
-    value = json.loads(text[start:end + 1] if start >= 0 and end > start else text)
+    try:
+        value = json.loads(text[start:end + 1] if start >= 0 and end > start else text)
+    except json.JSONDecodeError as error:
+        # The decoder's own message names a column of text the log never shows, so a
+        # phase that answered in prose reads as a bare "Expecting value" on the run.
+        raise PhaseError(f"the phase answer is not JSON ({error}): {text[:300]!r}") from error
     if not isinstance(value, dict):
         raise PhaseError("the phase must return a JSON object")
     return value
@@ -123,7 +128,9 @@ class CdrPhaseRunner:
         deadline = time.monotonic() + float(self.config.get("phase_timeout_seconds", 900))
         tree_calls = 0
         calls_used = 0
-        for turn in range(profile.turns + 1):
+        resynthesised = False
+        turn = 0
+        while turn <= profile.turns:
             if self.should_stop():
                 raise PhaseError("the search was stopped")
             if remaining <= 0 or time.monotonic() >= deadline:
@@ -145,9 +152,22 @@ class CdrPhaseRunner:
             assistant["role"] = "assistant"
             calls = assistant.get("tool_calls") or []
             if not calls:
-                result = json_object(str(content))
-                if schema is not None:
-                    result = schema.model_validate(result).model_dump(mode="json")
+                try:
+                    result = json_object(str(content))
+                    if schema is not None:
+                        result = schema.model_validate(result).model_dump(mode="json")
+                except (PhaseError, ValidationError) as error:
+                    # The harness agent loop synthesises a final answer rather than
+                    # failing the task on one unusable turn. Ask once more, without
+                    # tools and without spending a tool turn, then give up.
+                    if resynthesised:
+                        raise PhaseError(f"{role}: {error}") from error
+                    resynthesised = True
+                    messages.append(assistant)
+                    messages.append({"role": "user", "content":
+                        "That answer was not usable. Reply with the JSON object the schema describes "
+                        "and nothing else: no prose, no markdown fence, no tool call."})
+                    continue
                 self.emit({"type": "log", "level": "info", "message": f"{role} phase completed ({calls_used} tool calls)"})
                 return result
             if turn >= profile.turns or not isinstance(calls, list):
@@ -187,6 +207,7 @@ class CdrPhaseRunner:
                     ("unavailable" + reason if unavailable else "completed")})
                 messages.append({"role": "tool", "tool_call_id": call["id"],
                                  "content": json.dumps(result, ensure_ascii=False, default=str)})
+            turn += 1
         raise PhaseError(f"{role} did not complete")
 
     def analyze(self, config: dict) -> str:
