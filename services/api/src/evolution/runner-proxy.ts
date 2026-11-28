@@ -29,8 +29,10 @@ import type { ExecutionOwner, PermissionEpoch, ShellExecutionRequest } from "@sc
 import { readJson } from "../http/body.js";
 import { sendError, sendJson } from "../http/response.js";
 import { remoteWorkspaceKey } from "../remote-runner.js";
+import { CdrWorkers, CdrWorkerError, type CdrWorkerClient } from "./cdr-workers.js";
 
 interface RunnerGrant {
+  workers?: CdrWorkers;
   executions: Map<string, string>;
   runId: string;
   sessionId: string;
@@ -49,7 +51,9 @@ export class RunnerGrantRegistry {
   }
 
   revoke(runId: string): void {
+    const grant = this.grants.get(runId);
     this.grants.delete(runId);
+    void grant?.workers?.close().catch(error => console.warn("CDR worker cleanup:", error instanceof Error ? error.message : "failed"));
   }
 
   resolve(runId: string, presented: string | undefined): RunnerGrant | undefined {
@@ -72,7 +76,7 @@ export interface EvolveRunnerSession {
   workspacePath(sessionId: string): string;
 }
 
-export interface EvolveRunnerCaller {
+export interface EvolveRunnerCaller extends CdrWorkerClient {
   cancelShellExecution(id: string, owner: ExecutionOwner): Promise<unknown>;
   getShellExecution(id: string, owner: ExecutionOwner): Promise<unknown>;
   shellExecutionLogs(id: string, owner: ExecutionOwner, cursor?: number): Promise<unknown>;
@@ -169,13 +173,15 @@ export async function handleEvolveRunner(
   deps: EvolveRunnerDeps,
 ): Promise<boolean> {
   const match = url.pathname.match(
-    /^\/internal\/evolve-runner\/([^/]+)\/shell-executions(?:\/([^/]+)(?:\/(logs|cancel))?)?$/,
+    /^\/internal\/evolve-runner\/([^/]+)\/shell-executions(?:\/([^/]+)(?:\/(logs|cancel|publish))?)?$/,
   );
-  if (!match) return false;
-  const runId = decodeURIComponent(match[1]!);
-  const executionId = match[2] ? decodeURIComponent(match[2]) : undefined;
-  const logs = match[3] === "logs";
-  const cancel = match[3] === "cancel";
+  const capacity = url.pathname.match(/^\/internal\/evolve-runner\/([^/]+)\/capacity$/);
+  if (!match && !capacity) return false;
+  const runId = decodeURIComponent((match ?? capacity)![1]!);
+  const executionId = match?.[2] ? decodeURIComponent(match[2]) : undefined;
+  const logs = match?.[3] === "logs";
+  const cancel = match?.[3] === "cancel";
+  const publish = match?.[3] === "publish";
   const grant = deps.grants.resolve(runId, bearer(request));
   if (!grant) {
     sendError(response, 401, "Unauthorized");
@@ -187,8 +193,20 @@ export async function handleEvolveRunner(
     return true;
   }
   try {
+    if (capacity && request.method === "GET") {
+      const where = placement(deps, grant);
+      if ("error" in where) throw new CdrWorkerError(where.error);
+      grant.workers ??= new CdrWorkers(runId, where, deps.runnerClient(where.runnerId));
+      grant.workers.assertCurrent(where);
+      sendJson(response, 200, { workers: grant.workers.capacity });
+      return true;
+    }
+    if (capacity) { sendError(response, 405, "CDR capacity requires GET"); return true; }
     if (!executionId && request.method === "POST") {
-      const body = await readJson<{ code?: unknown; executionId?: unknown }>(request);
+      const body = await readJson<{ code?: unknown; executionId?: unknown; cdrDeviceSlot?: unknown }>(request);
+      if (deps.grants.resolve(runId, bearer(request)) !== grant) {
+        sendError(response, 401, "The run token was revoked before submission"); return true;
+      }
       if (typeof body.code !== "string" || !body.code.trim() || typeof body.executionId !== "string" || !body.executionId) {
         sendError(response, 400, "an NPU execution needs code and a new execution id");
         return true;
@@ -199,10 +217,16 @@ export async function handleEvolveRunner(
       }
       const where = placement(deps, grant);
       if ("error" in where) {
-        sendError(response, 409, where.error);
+        sendError(response, 409, grant.workers ? `CDR placement changed: ${where.error}` : where.error);
         return true;
       }
       const caller = deps.runnerClient(where.runnerId);
+      let target = { cards: where.cards, workspaceKey: where.workspaceKey };
+      grant.workers?.assertCurrent(where);
+      if (body.cdrDeviceSlot !== undefined) {
+        grant.workers ??= new CdrWorkers(runId, where, caller);
+        target = grant.workers.bind(body.executionId, body.cdrDeviceSlot);
+      }
       // Bind before sending: a lost response does not prove the runner never
       // accepted the job. Keep its status/cancel route even after an error.
       grant.executions.set(body.executionId, where.runnerId);
@@ -212,33 +236,46 @@ export async function handleEvolveRunner(
         executionId: body.executionId,
         executionTimeoutMs: Math.max(1, grant.timeoutSeconds) * 1000,
         kernelMode: "ephemeral",
-        npuDevices: where.cards,
+        npuDevices: target.cards,
         permissionEpoch: where.epoch,
-        runnerWorkspaceKey: where.workspaceKey,
+        runnerWorkspaceKey: target.workspaceKey,
         workspaceRoot: where.workspaceRoot,
       });
       sendJson(response, 202, submitted);
       return true;
     }
-    if (executionId && ((!cancel && request.method === "GET") || (cancel && request.method === "POST"))) {
+    if (executionId && ((!(cancel || publish) && request.method === "GET") || ((cancel || publish) && request.method === "POST"))) {
       const runnerId = grant.executions.get(executionId);
       if (!runnerId) {
         sendError(response, 404, "this execution does not belong to this run");
         return true;
       }
       const caller = deps.runnerClient(runnerId);
-      if (cancel) sendJson(response, 202, await caller.cancelShellExecution(executionId, owner));
+      if (publish) {
+        const body = await readJson<{ structureId?: unknown }>(request);
+        if (!grant.workers) throw new CdrWorkerError("This execution has no CDR worker artifacts");
+        await grant.workers.publish(executionId, body.structureId, owner);
+        sendJson(response, 200, { published: true });
+      } else if (cancel) {
+        const state = await caller.cancelShellExecution(executionId, owner);
+        grant.workers?.observe(executionId, state);
+        sendJson(response, 202, state);
+      }
       else if (logs) {
         const cursor = Number(url.searchParams.get("cursor") ?? "0");
         sendJson(response, 200, await caller.shellExecutionLogs(
           executionId, owner, Number.isFinite(cursor) && cursor > 0 ? cursor : 0,
         ));
-      } else sendJson(response, 200, await caller.getShellExecution(executionId, owner));
+      } else {
+        const state = await caller.getShellExecution(executionId, owner);
+        grant.workers?.observe(executionId, state);
+        sendJson(response, 200, state);
+      }
       return true;
     }
     sendError(response, 404, "Not found");
   } catch (error) {
-    sendError(response, 502, error instanceof Error ? error.message : "the runner call failed");
+    sendError(response, error instanceof CdrWorkerError ? 409 : 502, error instanceof Error ? error.message : "the runner call failed");
   }
   return true;
 }

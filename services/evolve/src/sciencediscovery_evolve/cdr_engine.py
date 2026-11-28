@@ -1130,7 +1130,9 @@ def _npu_measure(spec: RunSpec, should_stop: Callable[[], bool]) -> MeasureFn:
                     return {"ok": False, "error": str(error)}
                 # A refused submission never reached the runner, so trying again cannot
                 # put a second fold on the card. A lost status read might have run it.
-                if wait is None or not str(error).startswith("runner POST /shell-executions "):
+                # Only the proxy's pre-dispatch 409 refusal is safe to retry.
+                # A lost POST response may already have launched the fold.
+                if wait is None or not str(error).startswith("runner POST /shell-executions returned 409:"):
                     return {"ok": False, "error": str(error), "runner_lost": True}
                 if not _pause(wait, stopped):
                     return {"ok": False, "error": "the search was stopped"}

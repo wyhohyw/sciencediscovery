@@ -225,14 +225,15 @@ def test_CDR6_004_runner_loss_wins_over_a_cancelled_peers_exception_without_retr
     assert out[-1]["stopReason"] == "runner_lost" and out[-1]["candidates"] == 0
 
 
-def test_CDR6_003_publication_transport_failure_never_replays_an_already_completed_fold(monkeypatch):
+@pytest.mark.parametrize("failed_path", ["/shell-executions", "/shell-executions/evolve-one/publish?sessionId=session"])
+def test_CDR6_003_ambiguous_submission_or_publication_failure_never_replays_a_fold(monkeypatch, failed_path):
     calls = []
     class Client:
         transport = "api"
         def cdr_capacity(self): return 2
         def run(self, *args, **kwargs):
             calls.append(True)
-            raise npu_job.NpuJobError("runner POST /shell-executions/evolve-one/publish?sessionId=session failed: reset")
+            raise npu_job.NpuJobError(f"runner POST {failed_path} failed: reset")
     monkeypatch.setattr(npu_job, "npu_client_from_spec", lambda *args: Client())
     monkeypatch.setattr(cdr, "_pause", lambda *args: pytest.fail("publication failure replayed a physical fold"))
     result = cdr._npu_measure(spec(), lambda: False)({"sequence": "AWDE"})

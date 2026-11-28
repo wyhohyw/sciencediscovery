@@ -141,6 +141,36 @@ test("background admission does not block observers; one workspace queues, anoth
   try { assert.ok(refs.roots().some((entry) => entry.digest === ref.digest)); } finally { refs.close(); }
 });
 
+test("CDR6-002 overlapping NPU cards queue across Workspaces while disjoint cards execute", async context => {
+  const { manager, workspace, root } = await fixture(context);
+  let release!: () => void;
+  const latch = new Promise<void>(done => { release = done; });
+  const workspaces = ["second", "third", "fourth"].map(name => resolve(root, name));
+  await Promise.all(workspaces.map(path => mkdir(path)));
+  const order: string[] = [];
+  try {
+    manager.start({ ...request(workspace, "card-zero"), npuDevices: [0] }, async () => {
+      order.push("first"); await latch; return result("card-zero");
+    });
+    await until(() => manager.get("card-zero", owner).state === "running");
+    manager.start({ ...request(workspaces[0]!, "shared"), npuDevices: [0, 2] }, async () => {
+      assert.equal(manager.get("card-zero", owner).state, "completed");
+      order.push("shared"); return result("shared");
+    });
+    manager.start({ ...request(workspaces[1]!, "disjoint"), npuDevices: [3] }, async () => result("disjoint"));
+    manager.start({ ...request(workspaces[2]!, "after-multicard"), npuDevices: [2] }, async () => {
+      assert.ok(manager.get("shared", owner).version);
+      order.push("after"); return result("after-multicard");
+    });
+    await until(() => manager.get("disjoint", owner).state === "completed");
+    assert.equal(manager.get("shared", owner).state, "queued");
+    assert.equal(manager.get("after-multicard", owner).state, "queued");
+    release();
+    await until(() => manager.get("after-multicard", owner).state === "completed");
+    assert.deepEqual(order, ["first", "shared", "after"]);
+  } finally { release(); }
+});
+
 test("cancel waits for process join; queued cancellation never starts or replays a command", async (context) => {
   const { manager, workspace } = await fixture(context);
   let joined = false;

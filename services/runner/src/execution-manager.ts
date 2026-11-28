@@ -57,6 +57,7 @@ export class ExecutionManager {
   private readonly runnerBootId = randomUUID();
   private readonly controllers = new Map<string, AbortController>();
   private readonly queues = new Map<string, Promise<void>>();
+  private readonly deviceQueues = new Map<number, Promise<void>>();
   private readonly failedWorkspaces = new Set<string>();
   private readonly uncertainWorkspaces = new Set<string>();
   private readonly uncertainDevices = new Set<number>();
@@ -220,7 +221,12 @@ export class ExecutionManager {
     }
     const controller = new AbortController();
     this.controllers.set(execution.id, controller);
-    const previous = this.queues.get(key) ?? Promise.resolve();
+    // Independent Workspaces may compute concurrently, but overlapping NPU
+    // selections must wait across sessions/runs as well. Every dependency is
+    // an earlier submission, so multi-card jobs cannot create a lock cycle.
+    const devices = [...new Set(npuDevices)];
+    const previous = Promise.all([this.queues.get(key) ?? Promise.resolve(),
+      ...devices.map(device => this.deviceQueues.get(device) ?? Promise.resolve())]);
     const work = previous.then(async () => {
       if (preflight) {
         try {
@@ -399,10 +405,12 @@ export class ExecutionManager {
     }).finally(() => {
       this.controllers.delete(execution.id);
       if (this.queues.get(key) === work) this.queues.delete(key);
+      for (const device of devices) if (this.deviceQueues.get(device) === work) this.deviceQueues.delete(device);
     });
     // Avoid unhandled rejections from storage failure; subsequent jobs must not overtake a failed commit.
     void work.catch(() => undefined);
     this.queues.set(key, work);
+    for (const device of devices) this.deviceQueues.set(device, work);
     return { execution: structuredClone(execution), accepted: true };
   }
 

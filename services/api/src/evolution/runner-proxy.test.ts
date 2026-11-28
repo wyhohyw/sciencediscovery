@@ -78,6 +78,10 @@ function deps(overrides: Partial<EvolveRunnerDeps> = {}): EvolveRunnerDeps & { s
         started.push(request);
         return { state: "queued" };
       },
+      snapshotRemoteWorkspace: async () => { throw new Error("no structure fixture"); },
+      streamWorkspaceSnapshot: async () => { throw new Error("no structure fixture"); },
+      uploadWorkspaceSnapshotFile: async () => {},
+      deleteRemoteWorkspace: async () => {},
     }),
     sessions: {
       effectiveRunnerIds: () => ["local", "lab"],
@@ -187,6 +191,98 @@ test("CDR5-003 streamed programs preserve stdout, stderr and failure exit status
   assert.equal(result.status, 7);
   assert.equal(result.stdout, "output\n");
   assert.equal(result.stderr, "failure\n");
+});
+
+test("CDR6-002 capacity and slots use only selected cards and independent worker roots", async () => {
+  const context = deps(), token = context.grants.issue("cdr-run", "session", 30);
+  const capacity = capture();
+  await handleEvolveRunner(requestOf("GET", `Bearer ${token}`), capacity,
+    new URL("http://api/internal/evolve-runner/cdr-run/capacity"), context);
+  assert.equal(capacity.status, 200);
+  assert.deepEqual(capacity.payload, { workers: 2 });
+  for (const slot of [0, 1]) {
+    const response = capture();
+    await handleEvolveRunner(requestOf("POST", `Bearer ${token}`, {
+      code: "print(1)", executionId: `fold-${slot}`, cdrDeviceSlot: slot, npuDevices: [9],
+    }), response, new URL("http://api/internal/evolve-runner/cdr-run/shell-executions"), context);
+    assert.equal(response.status, 202);
+  }
+  assert.deepEqual(context.started.map(job => job.npuDevices), [[0], [2]]);
+  assert.notEqual(context.started[0]!.runnerWorkspaceKey, context.started[1]!.runnerWorkspaceKey);
+  assert.ok(context.started.every(job => job.runnerWorkspaceKey!.startsWith("evolve-workers/")));
+  context.sessions.npuDeviceSelection = () => [1];
+  const changed = capture();
+  await handleEvolveRunner(requestOf("POST", `Bearer ${token}`, {
+    code: "print(1)", executionId: "new-fold", cdrDeviceSlot: 0,
+  }), changed, new URL("http://api/internal/evolve-runner/cdr-run/shell-executions"), context);
+  assert.equal(changed.status, 409);
+  assert.match(JSON.stringify(changed.payload), /CDR placement changed/);
+  const analysis = capture();
+  await handleEvolveRunner(requestOf("POST", `Bearer ${token}`, {
+    code: "print(1)", executionId: "late-analysis",
+  }), analysis, new URL("http://api/internal/evolve-runner/cdr-run/shell-executions"), context);
+  assert.equal(analysis.status, 409);
+  const status = capture();
+  await handleEvolveRunner(requestOf("GET", `Bearer ${token}`), status,
+    new URL("http://api/internal/evolve-runner/cdr-run/shell-executions/fold-0"), context);
+  assert.equal(status.status, 200);
+  for (const slot of [-1, 2, 0.5, "0", true]) {
+    context.sessions.npuDeviceSelection = () => [0, 2];
+    const bad = capture();
+    await handleEvolveRunner(requestOf("POST", `Bearer ${token}`, {
+      code: "print(1)", executionId: `bad-${String(slot)}`, cdrDeviceSlot: slot,
+    }), bad, new URL("http://api/internal/evolve-runner/cdr-run/shell-executions"), context);
+    assert.equal(bad.status, 409);
+  }
+  assert.equal(context.started.length, 2);
+  context.grants.revoke("cdr-run");
+});
+
+test("CDR6-003 publish is bound to the owned worker and copies only to the frozen primary", async () => {
+  const context = deps(), token = context.grants.issue("run-1", "session", 30);
+  const client = context.runnerClient("lab"), copied: string[] = [];
+  const structureId = "a".repeat(64), prefix = `.evolve/cdr-artifacts/${structureId}/`;
+  context.runnerClient = () => ({ ...client,
+    snapshotRemoteWorkspace: async workspace => ({ id: "snapshot", workspace, capturedAt: "now",
+      files: ["manifest.json", "summary.json", "full.json", "complex.cif"].map(name => ({
+        path: prefix + name, size: 0, sha256: createHash("sha256").digest("hex"), executable: 0,
+      })) }),
+    streamWorkspaceSnapshot: async () => (async function* () {})(),
+    uploadWorkspaceSnapshotFile: async (workspace, path) => {
+      assert.equal(workspace, "project/session/runners/ns"); copied.push(path);
+    },
+  });
+  const started = capture();
+  await handleEvolveRunner(requestOf("POST", `Bearer ${token}`, {
+    code: "print(1)", executionId: "evolve-one", cdrDeviceSlot: 0,
+  }), started, endpoint("run-1"), context);
+  assert.equal(started.status, 202);
+  // Even after the live selection changes, publication follows the accepted job.
+  context.sessions.effectiveRunnerIds = () => ["other"];
+  const publication = capture();
+  await handleEvolveRunner(requestOf("POST", `Bearer ${token}`, { structureId }), publication,
+    new URL("http://api/internal/evolve-runner/run-1/shell-executions/evolve-one/publish"), context);
+  assert.equal(publication.status, 200);
+  assert.equal(copied.length, 4);
+  const otherToken = context.grants.issue("run-2", "session", 30), denied = capture();
+  await handleEvolveRunner(requestOf("POST", `Bearer ${otherToken}`, { structureId }), denied,
+    new URL("http://api/internal/evolve-runner/run-2/shell-executions/evolve-one/publish"), context);
+  assert.equal(denied.status, 404);
+  assert.equal(copied.length, 4);
+  context.grants.revoke("run-1");
+});
+
+test("CDR6-004 a token revoked while reading the body cannot dispatch a late worker", async () => {
+  const context = deps(), token = context.grants.issue("run-1", "session", 30);
+  const request = requestOf("POST", `Bearer ${token}`);
+  request[Symbol.asyncIterator] = async function* (): AsyncGenerator<Buffer, undefined> {
+    context.grants.revoke("run-1");
+    yield Buffer.from(JSON.stringify({ code: "print(1)", executionId: "late", cdrDeviceSlot: 0 }));
+    return undefined;
+  };
+  const response = capture();
+  await handleEvolveRunner(request, response, endpoint("run-1"), context);
+  assert.equal(response.status, 401); assert.equal(context.started.length, 0);
 });
 
 test("no ticked card refuses the score", async () => {
