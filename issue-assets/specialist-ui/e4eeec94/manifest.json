@@ -1,0 +1,99 @@
+{
+  "source": "e4eeec94bbec12d008ab7b876bb450e124a000c8",
+  "renderer": "Desktop Vite in Chromium",
+  "deviceScaleFactor": 1,
+  "backend": "Isolated local Playwright API fixtures",
+  "checkedHintColour": "rgb(102, 102, 102)",
+  "frames": [
+    {
+      "locale": "zh-CN",
+      "file": "02-create-zh-CN.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1440
+      },
+      "sha256": "3e0ecae8cbd6d430cd59b2f3e7fb109205473f29df28bfeb153be787e25feac5"
+    },
+    {
+      "locale": "zh-CN",
+      "file": "03-detail-zh-CN.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "sha256": "77e6ef224ec70dd01553c385989dab8efe14fce24467e7390fcad2a4815d759a"
+    },
+    {
+      "locale": "zh-CN",
+      "file": "04-edit-zh-CN.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1440
+      },
+      "sha256": "b6c0ce476918ab7e985bf8150137f6c67ce8adc60d23459681563e43baf1201e"
+    },
+    {
+      "locale": "zh-CN",
+      "file": "01-catalog-zh-CN.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "sha256": "8beaf1519dd52bfba847f83656996723bc5ad4b118ac32a04b7814c0bda687ff"
+    },
+    {
+      "locale": "zh-CN",
+      "file": "05-edit-failed-skill-zh-CN.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1600
+      },
+      "sha256": "28fa539d10d56686bf597a4f7f8e2aa9881c9664a91c180c2472c5e91603acc6"
+    },
+    {
+      "locale": "en",
+      "file": "02-create-en.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1440
+      },
+      "sha256": "fa8958ece4974d4d77b7fc9f3db7b64c63b266975533ef5079de500d90441c1f"
+    },
+    {
+      "locale": "en",
+      "file": "03-detail-en.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "sha256": "8c60402edfdd2ff950674f025e8c9364664e7b1982a47a5e519bdd6c5f70c32c"
+    },
+    {
+      "locale": "en",
+      "file": "04-edit-en.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1440
+      },
+      "sha256": "f65febefc5c3709d3e854d0755eed080b29b9eba81110226cc46e94616520e84"
+    },
+    {
+      "locale": "en",
+      "file": "01-catalog-en.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "sha256": "57de39fda0bb852e9458453aea3abdfa02971450e0a3c41c428568e94803c95e"
+    },
+    {
+      "locale": "en",
+      "file": "05-edit-failed-skill-en.png",
+      "viewport": {
+        "width": 1920,
+        "height": 1600
+      },
+      "sha256": "755a503db0a8e13b52c6b320e1c16a5a2afb821666e89cf0f29c165cee1b6df3"
+    }
+  ]
+}
